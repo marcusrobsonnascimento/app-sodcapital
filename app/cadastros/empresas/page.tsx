@@ -107,18 +107,21 @@ export default function EmpresasPage() {
     switch (type) {
       case 'success':
         return {
-          backgroundColor: '#10b981',
-          icon: CheckCircle
+          borderColor: '#10b981',
+          icon: CheckCircle,
+          iconColor: '#10b981'
         }
       case 'warning':
         return {
-          backgroundColor: '#f59e0b',
-          icon: AlertTriangle
+          borderColor: '#f59e0b',
+          icon: AlertTriangle,
+          iconColor: '#f59e0b'
         }
       case 'error':
         return {
-          backgroundColor: '#ef4444',
-          icon: XCircle
+          borderColor: '#ef4444',
+          icon: XCircle,
+          iconColor: '#ef4444'
         }
     }
   }
@@ -167,6 +170,17 @@ export default function EmpresasPage() {
     } catch (err) {
       console.error('Erro ao salvar empresa:', err)
       showToast('Erro ao salvar empresa', 'error')
+    }
+  }
+
+  const onSubmitError = (errors: any) => {
+    // Show toast for first error found
+    if (errors.cnpj) {
+      showToast(errors.cnpj.message, 'warning')
+    } else if (errors.razao_social) {
+      showToast(errors.razao_social.message, 'warning')
+    } else if (errors.nome) {
+      showToast(errors.nome.message, 'warning')
     }
   }
 
@@ -644,7 +658,7 @@ export default function EmpresasPage() {
               {editingId ? 'Editar Empresa' : 'Nova Empresa'}
             </h2>
 
-            <form onSubmit={handleSubmit(onSubmit)} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            <form onSubmit={handleSubmit(onSubmit, onSubmitError)} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
               {/* CNPJ */}
               <div>
                 <label style={{
@@ -686,15 +700,6 @@ export default function EmpresasPage() {
                     handleCNPJBlur(e.target.value)
                   }}
                 />
-                {errors.cnpj && (
-                  <p style={{
-                    fontSize: '13px',
-                    color: '#dc2626',
-                    marginTop: '6px'
-                  }}>
-                    {errors.cnpj.message}
-                  </p>
-                )}
               </div>
 
               {/* Razão Social */}
@@ -736,15 +741,6 @@ export default function EmpresasPage() {
                     e.currentTarget.style.boxShadow = 'none'
                   }}
                 />
-                {errors.razao_social && (
-                  <p style={{
-                    fontSize: '13px',
-                    color: '#dc2626',
-                    marginTop: '6px'
-                  }}>
-                    {errors.razao_social.message}
-                  </p>
-                )}
               </div>
 
               {/* Apelido (Nome) */}
@@ -786,15 +782,6 @@ export default function EmpresasPage() {
                     e.currentTarget.style.boxShadow = 'none'
                   }}
                 />
-                {errors.nome && (
-                  <p style={{
-                    fontSize: '13px',
-                    color: '#dc2626',
-                    marginTop: '6px'
-                  }}>
-                    {errors.nome.message}
-                  </p>
-                )}
               </div>
 
               {/* Ativo */}
@@ -887,16 +874,16 @@ export default function EmpresasPage() {
         pointerEvents: 'none'
       }}>
         {toasts.map((toast) => {
-          const { backgroundColor, icon: Icon } = getToastStyles(toast.type)
+          const { borderColor, icon: Icon, iconColor } = getToastStyles(toast.type)
           return (
             <div
               key={toast.id}
               style={{
-                backgroundColor,
-                color: 'white',
+                backgroundColor: 'white',
+                borderTop: `4px solid ${borderColor}`,
                 padding: '16px 20px',
                 borderRadius: '12px',
-                boxShadow: '0 10px 25px rgba(0, 0, 0, 0.2)',
+                boxShadow: '0 10px 25px rgba(0, 0, 0, 0.15)',
                 display: 'flex',
                 alignItems: 'center',
                 gap: '12px',
@@ -904,11 +891,12 @@ export default function EmpresasPage() {
                 animation: 'scaleIn 0.3s ease-out'
               }}
             >
-              <Icon style={{ width: '24px', height: '24px', flexShrink: 0 }} />
+              <Icon style={{ width: '24px', height: '24px', flexShrink: 0, color: iconColor }} />
               <span style={{
                 fontSize: '14px',
                 fontWeight: '500',
-                flex: 1
+                flex: 1,
+                color: '#374151'
               }}>
                 {toast.message}
               </span>
