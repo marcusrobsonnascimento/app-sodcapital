@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
-import { formatCurrency, formatPercent } from '@/lib/utils'
+import { formatCurrency, formatPercent, formatDate } from '@/lib/utils'
 import {
   TrendingUp,
   TrendingDown,
@@ -10,12 +10,31 @@ import {
   Wallet,
   ArrowUpCircle,
   ArrowDownCircle,
-  Clock
+  Clock,
+  AlertCircle
 } from 'lucide-react'
+import {
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  PieChart,
+  Pie,
+  Cell,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer
+} from 'recharts'
 
 export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const [plData, setPlData] = useState<any>(null)
+  const [fluxoData, setFluxoData] = useState<any[]>([])
+  const [dreData, setDreData] = useState<any[]>([])
+  const [error, setError] = useState('')
 
   useEffect(() => {
     loadDashboardData()
@@ -24,16 +43,46 @@ export default function DashboardPage() {
   const loadDashboardData = async () => {
     try {
       // Buscar dados do painel de PL
-      const { data, error } = await supabase
+      const { data: plInfo, error: plError } = await supabase
         .from('vw_pl_painel')
         .select('*')
         .limit(1)
         .single()
 
-      if (error) throw error
-      setPlData(data)
-    } catch (err) {
+      if (plError && plError.code !== 'PGRST116') {
+        console.error('Erro PL:', plError)
+      }
+
+      setPlData(plInfo || {})
+
+      // Buscar fluxo previsto (últimos 180 dias)
+      const { data: fluxo, error: fluxoError } = await supabase
+        .from('vw_fluxo_previsto')
+        .select('*')
+        .order('data_prevista', { ascending: true })
+        .limit(180)
+
+      if (fluxoError) {
+        console.error('Erro Fluxo:', fluxoError)
+      }
+
+      setFluxoData(fluxo || [])
+
+      // Buscar DRE YTD
+      const { data: dre, error: dreError } = await supabase
+        .from('vw_dre_ytd')
+        .select('*')
+        .order('tipo', { ascending: true })
+
+      if (dreError) {
+        console.error('Erro DRE:', dreError)
+      }
+
+      setDreData(dre || [])
+
+    } catch (err: any) {
       console.error('Erro ao carregar dashboard:', err)
+      setError('Erro ao carregar dados do dashboard')
     } finally {
       setLoading(false)
     }
@@ -46,6 +95,32 @@ export default function DashboardPage() {
       </div>
     )
   }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="bg-red-50 border border-red-200 rounded-lg p-6 flex items-center gap-3">
+          <AlertCircle className="h-6 w-6 text-red-600" />
+          <div>
+            <h3 className="font-semibold text-red-900">Erro ao carregar dashboard</h3>
+            <p className="text-sm text-red-700 mt-1">{error}</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Preparar dados para gráficos
+  const fluxoChartData = fluxoData.slice(0, 180).map(item => ({
+    data: formatDate(item.data_prevista),
+    valor: item.valor || 0,
+    tipo: item.tipo
+  }))
+
+  const dreChartData = dreData.slice(0, 10).map(item => ({
+    categoria: item.categoria || item.grupo || item.tipo || 'Outros',
+    valor: Math.abs(item.valor_ytd || 0)
+  }))
 
   return (
     <div className="space-y-6">
@@ -117,20 +192,35 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Gráficos - Placeholder */}
+      {/* Gráficos */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Curva de Liquidez */}
         <div className="bg-white rounded-2xl shadow-sm p-6 border border-border">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Curva de Liquidez (180 dias)</h3>
-          <div className="h-64 flex items-center justify-center text-gray">
-            <p>Gráfico será implementado com Recharts</p>
-          </div>
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={fluxoChartData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="data" fontSize={12} />
+              <YAxis fontSize={12} />
+              <Tooltip formatter={(value: any) => formatCurrency(value)} />
+              <Legend />
+              <Line type="monotone" dataKey="valor" stroke="#1555D6" strokeWidth={2} name="Saldo Projetado" />
+            </LineChart>
+          </ResponsiveContainer>
         </div>
 
+        {/* DRE YTD */}
         <div className="bg-white rounded-2xl shadow-sm p-6 border border-border">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">DRE YTD</h3>
-          <div className="h-64 flex items-center justify-center text-gray">
-            <p>Gráfico será implementado com Recharts</p>
-          </div>
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">DRE YTD - Top 10 Categorias</h3>
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={dreChartData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="categoria" fontSize={12} angle={-45} textAnchor="end" height={80} />
+              <YAxis fontSize={12} />
+              <Tooltip formatter={(value: any) => formatCurrency(value)} />
+              <Bar dataKey="valor" fill="#1555D6" name="Valor YTD" />
+            </BarChart>
+          </ResponsiveContainer>
         </div>
       </div>
 
