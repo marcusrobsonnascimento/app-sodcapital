@@ -13,6 +13,7 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [logoError, setLogoError] = useState(false)
 
   const handleLogin = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -62,17 +63,35 @@ export default function LoginPage() {
       >
         {/* Logo e Título */}
         <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-          <h1 
-            style={{
-              fontSize: '2rem',
-              fontWeight: '700',
-              color: '#1555D6',
-              marginBottom: '0.5rem',
-              letterSpacing: '0.5px'
-            }}
-          >
-            SODCAPITAL
-          </h1>
+          {/* Logo - tenta carregar imagem, se falhar usa texto */}
+          {!logoError ? (
+            <div style={{ marginBottom: '1rem' }}>
+              <img 
+                src="/sodcapital-logo.png" 
+                alt="SodCapital"
+                onError={() => setLogoError(true)}
+                style={{
+                  height: '60px',
+                  width: 'auto',
+                  margin: '0 auto',
+                  display: 'block'
+                }}
+              />
+            </div>
+          ) : (
+            <h1 
+              style={{
+                fontSize: '2rem',
+                fontWeight: '700',
+                color: '#1555D6',
+                marginBottom: '0.5rem',
+                letterSpacing: '0.5px'
+              }}
+            >
+              SODCAPITAL
+            </h1>
+          )}
+          
           <p 
             style={{
               fontSize: '0.95rem',
