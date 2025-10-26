@@ -3,10 +3,19 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 import { formatDate } from '@/lib/utils'
-import { Plus, Pencil, Trash2, Search, Calendar, Building2, FolderKanban } from 'lucide-react'
+import { Plus, Pencil, Trash2, Search, Calendar, Building2, FolderKanban, CheckCircle, AlertTriangle, XCircle } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
+
+// Toast notification system
+type ToastType = 'success' | 'warning' | 'error'
+
+interface Toast {
+  id: number
+  message: string
+  type: ToastType
+}
 
 // Função para validar CNPJ
 const validarCNPJ = (cnpj: string): boolean => {
@@ -71,6 +80,8 @@ export default function EmpresasPage() {
   const [showModal, setShowModal] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
+  const [toasts, setToasts] = useState<Toast[]>([])
+  const [toastIdCounter, setToastIdCounter] = useState(0)
 
   const { register, handleSubmit, reset, formState: { errors }, setValue } = useForm<EmpresaForm>({
     resolver: zodResolver(empresaSchema),
@@ -78,6 +89,39 @@ export default function EmpresasPage() {
       ativo: true
     }
   })
+
+  // Toast functions
+  const showToast = (message: string, type: ToastType) => {
+    const id = toastIdCounter
+    setToastIdCounter(prev => prev + 1)
+    
+    const newToast: Toast = { id, message, type }
+    setToasts(prev => [...prev, newToast])
+    
+    setTimeout(() => {
+      setToasts(prev => prev.filter(toast => toast.id !== id))
+    }, 3000)
+  }
+
+  const getToastStyles = (type: ToastType) => {
+    switch (type) {
+      case 'success':
+        return {
+          backgroundColor: '#10b981',
+          icon: CheckCircle
+        }
+      case 'warning':
+        return {
+          backgroundColor: '#f59e0b',
+          icon: AlertTriangle
+        }
+      case 'error':
+        return {
+          backgroundColor: '#ef4444',
+          icon: XCircle
+        }
+    }
+  }
 
   useEffect(() => {
     loadEmpresas()
@@ -108,19 +152,35 @@ export default function EmpresasPage() {
           .eq('id', editingId)
 
         if (error) throw error
+        showToast('Empresa atualizada com sucesso!', 'success')
       } else {
         const { error } = await supabase
           .from('empresas')
           .insert([data])
 
         if (error) throw error
+        showToast('Empresa criada com sucesso!', 'success')
       }
 
       loadEmpresas()
       closeModal()
     } catch (err) {
       console.error('Erro ao salvar empresa:', err)
-      alert('Erro ao salvar empresa')
+      showToast('Erro ao salvar empresa', 'error')
+    }
+  }
+
+  const handleCNPJBlur = (value: string) => {
+    if (value && value.length > 0) {
+      const isValid = validarCNPJ(value)
+      if (!isValid) {
+        showToast('CNPJ Inválido', 'warning')
+        // Focus back on CNPJ field after toast
+        setTimeout(() => {
+          const cnpjInput = document.querySelector('input[name="cnpj"]') as HTMLInputElement
+          if (cnpjInput) cnpjInput.focus()
+        }, 100)
+      }
     }
   }
 
@@ -145,10 +205,11 @@ export default function EmpresasPage() {
         .eq('id', id)
 
       if (error) throw error
+      showToast('Empresa excluída com sucesso!', 'success')
       loadEmpresas()
     } catch (err) {
       console.error('Erro ao excluir empresa:', err)
-      alert('Erro ao excluir empresa')
+      showToast('Erro ao excluir empresa', 'error')
     }
   }
 
@@ -622,6 +683,7 @@ export default function EmpresasPage() {
                   onBlur={(e) => {
                     e.currentTarget.style.borderColor = errors.cnpj ? '#dc2626' : '#e5e7eb'
                     e.currentTarget.style.boxShadow = 'none'
+                    handleCNPJBlur(e.target.value)
                   }}
                 />
                 {errors.cnpj && (
@@ -812,9 +874,62 @@ export default function EmpresasPage() {
         </div>
       )}
 
+      {/* Toast Notifications */}
+      <div style={{
+        position: 'fixed',
+        top: '50%',
+        left: '50%',
+        transform: 'translate(-50%, -50%)',
+        zIndex: 9999,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '12px',
+        pointerEvents: 'none'
+      }}>
+        {toasts.map((toast) => {
+          const { backgroundColor, icon: Icon } = getToastStyles(toast.type)
+          return (
+            <div
+              key={toast.id}
+              style={{
+                backgroundColor,
+                color: 'white',
+                padding: '16px 20px',
+                borderRadius: '12px',
+                boxShadow: '0 10px 25px rgba(0, 0, 0, 0.2)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px',
+                minWidth: '300px',
+                animation: 'scaleIn 0.3s ease-out'
+              }}
+            >
+              <Icon style={{ width: '24px', height: '24px', flexShrink: 0 }} />
+              <span style={{
+                fontSize: '14px',
+                fontWeight: '500',
+                flex: 1
+              }}>
+                {toast.message}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+
       <style>{`
         @keyframes spin {
           to { transform: rotate(360deg); }
+        }
+        @keyframes scaleIn {
+          from {
+            transform: scale(0.8);
+            opacity: 0;
+          }
+          to {
+            transform: scale(1);
+            opacity: 1;
+          }
         }
       `}</style>
     </div>
