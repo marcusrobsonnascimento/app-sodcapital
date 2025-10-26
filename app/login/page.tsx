@@ -38,13 +38,11 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-900 via-primary to-primary-900 p-4">
-      <div className="w-full max-w-md">
-        <div className="bg-white rounded-2xl shadow-2xl p-8">
-          {/* Logo */}
-          <div className="text-center mb-8">
-            <h1 className="text-3xl font-bold text-primary">SodCapital</h1>
-            <p className="text-gray mt-2">ERP Financeiro</p>
+    <div className="min-h-screen flex items-center justify-center p-4" style={{
+      background: 'linear-gradient(135deg, #0B2A6B 0%, #1555D6 50%, #0B2A6B 100%)'
+    }}>
+      <div className="w-full max-w-md">\n        <div className="bg-white rounded-2xl shadow-2xl p-8">\n          {/* Logo */}\n          <div className="text-center mb-8">\n            <h1 className="text-3xl font-bold" style={{ color: '#1555D6' }}>SodCapital</h1>
+            <p className="mt-2" style={{ color: '#6E7485' }}>ERP Financeiro</p>
           </div>
 
           {/* Formulário */}
