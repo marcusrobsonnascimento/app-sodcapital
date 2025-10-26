@@ -2,9 +2,9 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { supabase } from '@/lib/supabaseClient'
-import { Eye, EyeOff, Lock, Mail } from 'lucide-react'
 import Link from 'next/link'
+import { supabase } from '@/lib/supabaseClient'
+import { Eye, EyeOff } from 'lucide-react'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -14,8 +14,8 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault()
+  const handleLogin = async (event: React.FormEvent) => {
+    event.preventDefault()
     setError('')
     setLoading(true)
 
@@ -25,7 +25,9 @@ export default function LoginPage() {
         password
       })
 
-      if (signInError) throw signInError
+      if (signInError) {
+        throw signInError
+      }
 
       if (data.user) {
         router.push('/')
@@ -38,87 +40,261 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4" style={{
-      background: 'linear-gradient(135deg, #0B2A6B 0%, #1555D6 50%, #0B2A6B 100%)'
-    }}>
-      <div className="w-full max-w-md">\n        <div className="bg-white rounded-2xl shadow-2xl p-8">\n          {/* Logo */}\n          <div className="text-center mb-8">\n            <h1 className="text-3xl font-bold" style={{ color: '#1555D6' }}>SodCapital</h1>
-            <p className="mt-2" style={{ color: '#6E7485' }}>ERP Financeiro</p>
-          </div>
-
-          {/* Formulário */}
-          <form onSubmit={handleLogin} className="space-y-6">
-            {error && (
-              <div className="bg-danger/10 border border-danger text-danger px-4 py-3 rounded-lg text-sm">
-                {error}
-              </div>
-            )}
-
-            {/* Email */}
-            <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
-                E-mail
-              </label>
-              <div className="relative">
-                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray" />
-                <input
-                  id="email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full pl-10 pr-4 py-3 border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-ring"
-                  placeholder="seu@email.com"
-                  required
-                />
-              </div>
-            </div>
-
-            {/* Senha */}
-            <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-2">
-                Senha
-              </label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray" />
-                <input
-                  id="password"
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full pl-10 pr-12 py-3 border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-ring"
-                  placeholder="••••••••"
-                  required
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray hover:text-gray-700 transition"
-                >
-                  {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
-                </button>
-              </div>
-            </div>
-
-            {/* Esqueci minha senha */}
-            <div className="text-right">
-              <Link href="/reset" className="text-sm text-primary hover:text-primary-900 transition">
-                Esqueci minha senha
-              </Link>
-            </div>
-
-            {/* Botão Login */}
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full bg-primary hover:bg-primary-900 text-white font-medium py-3 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {loading ? 'Entrando...' : 'Entrar'}
-            </button>
-          </form>
+    <div 
+      style={{
+        minHeight: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#f3f4f6',
+        padding: '2rem'
+      }}
+    >
+      <div 
+        style={{
+          width: '100%',
+          maxWidth: '480px',
+          backgroundColor: '#ffffff',
+          borderRadius: '16px',
+          boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+          padding: '3rem 2.5rem',
+        }}
+      >
+        {/* Logo e Título */}
+        <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
+          <h1 
+            style={{
+              fontSize: '2rem',
+              fontWeight: '700',
+              color: '#1555D6',
+              marginBottom: '0.5rem',
+              letterSpacing: '0.5px'
+            }}
+          >
+            SODCAPITAL
+          </h1>
+          <p 
+            style={{
+              fontSize: '0.95rem',
+              color: '#6b7280',
+              fontWeight: '400'
+            }}
+          >
+            Sistema de Gestão Financeira
+          </p>
         </div>
 
+        {/* Formulário */}
+        <form onSubmit={handleLogin}>
+          {/* Mensagem de Erro */}
+          {error && (
+            <div 
+              style={{
+                backgroundColor: '#fef2f2',
+                border: '1px solid #fecaca',
+                borderRadius: '8px',
+                padding: '0.75rem 1rem',
+                marginBottom: '1.5rem'
+              }}
+            >
+              <p style={{ fontSize: '0.875rem', color: '#dc2626', margin: 0, textAlign: 'center' }}>
+                {error}
+              </p>
+            </div>
+          )}
+
+          {/* Campo E-mail */}
+          <div style={{ marginBottom: '1.25rem' }}>
+            <label 
+              htmlFor="email"
+              style={{
+                display: 'block',
+                fontSize: '0.875rem',
+                fontWeight: '600',
+                color: '#374151',
+                marginBottom: '0.5rem'
+              }}
+            >
+              E-mail
+            </label>
+            <input
+              id="email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="seu@email.com"
+              required
+              style={{
+                width: '100%',
+                padding: '0.75rem 1rem',
+                fontSize: '0.95rem',
+                border: '1px solid #d1d5db',
+                borderRadius: '8px',
+                backgroundColor: '#ffffff',
+                color: '#111827',
+                outline: 'none',
+                transition: 'all 0.2s',
+                boxSizing: 'border-box'
+              }}
+              onFocus={(e) => {
+                e.target.style.borderColor = '#1555D6'
+                e.target.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+              }}
+              onBlur={(e) => {
+                e.target.style.borderColor = '#d1d5db'
+                e.target.style.boxShadow = 'none'
+              }}
+            />
+          </div>
+
+          {/* Campo Senha */}
+          <div style={{ marginBottom: '1rem' }}>
+            <label 
+              htmlFor="password"
+              style={{
+                display: 'block',
+                fontSize: '0.875rem',
+                fontWeight: '600',
+                color: '#374151',
+                marginBottom: '0.5rem'
+              }}
+            >
+              Senha
+            </label>
+            <div style={{ position: 'relative' }}>
+              <input
+                id="password"
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                required
+                style={{
+                  width: '100%',
+                  padding: '0.75rem 1rem',
+                  paddingRight: '3rem',
+                  fontSize: '0.95rem',
+                  border: '1px solid #d1d5db',
+                  borderRadius: '8px',
+                  backgroundColor: '#ffffff',
+                  color: '#111827',
+                  outline: 'none',
+                  transition: 'all 0.2s',
+                  boxSizing: 'border-box'
+                }}
+                onFocus={(e) => {
+                  e.target.style.borderColor = '#1555D6'
+                  e.target.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                }}
+                onBlur={(e) => {
+                  e.target.style.borderColor = '#d1d5db'
+                  e.target.style.boxShadow = 'none'
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                style={{
+                  position: 'absolute',
+                  right: '0.75rem',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: '#9ca3af',
+                  padding: '0.25rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}
+              >
+                {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+              </button>
+            </div>
+          </div>
+
+          {/* Link Esqueceu Senha */}
+          <div style={{ textAlign: 'right', marginBottom: '1.5rem' }}>
+            <Link
+              href="/reset"
+              style={{
+                fontSize: '0.875rem',
+                color: '#1555D6',
+                textDecoration: 'none',
+                fontWeight: '500'
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.color = '#0B2A6B'}
+              onMouseLeave={(e) => e.currentTarget.style.color = '#1555D6'}
+            >
+              Esqueceu sua senha?
+            </Link>
+          </div>
+
+          {/* Botão Entrar */}
+          <button
+            type="submit"
+            disabled={loading}
+            style={{
+              width: '100%',
+              padding: '0.875rem 1.5rem',
+              fontSize: '0.95rem',
+              fontWeight: '600',
+              color: '#ffffff',
+              backgroundColor: loading ? '#93c5fd' : '#1555D6',
+              border: 'none',
+              borderRadius: '8px',
+              cursor: loading ? 'not-allowed' : 'pointer',
+              transition: 'all 0.2s',
+              marginBottom: '1.5rem'
+            }}
+            onMouseEnter={(e) => {
+              if (!loading) {
+                e.currentTarget.style.backgroundColor = '#0B2A6B'
+                e.currentTarget.style.transform = 'translateY(-1px)'
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (!loading) {
+                e.currentTarget.style.backgroundColor = '#1555D6'
+                e.currentTarget.style.transform = 'translateY(0)'
+              }
+            }}
+          >
+            {loading ? 'Entrando...' : 'Entrar'}
+          </button>
+
+          {/* Box de Exemplo */}
+          <div 
+            style={{
+              backgroundColor: '#f9fafb',
+              border: '1px solid #e5e7eb',
+              borderRadius: '8px',
+              padding: '1rem',
+            }}
+          >
+            <p style={{ fontSize: '0.8rem', color: '#6b7280', margin: '0 0 0.5rem 0', fontWeight: '600' }}>
+              Exemplo:
+            </p>
+            <p style={{ fontSize: '0.8rem', color: '#6b7280', margin: '0.25rem 0' }}>
+              E-mail: <span style={{ fontWeight: '500' }}>seu@email.com</span>
+            </p>
+            <p style={{ fontSize: '0.8rem', color: '#6b7280', margin: '0.25rem 0' }}>
+              Senha: <span style={{ fontWeight: '500' }}>admin123</span>
+            </p>
+          </div>
+        </form>
+
         {/* Footer */}
-        <p className="text-center text-white/80 text-sm mt-6">
-          © 2025 SodCapital. Todos os direitos reservados.
+        <p 
+          style={{
+            marginTop: '2rem',
+            textAlign: 'center',
+            fontSize: '0.75rem',
+            color: '#9ca3af'
+          }}
+        >
+          © {new Date().getFullYear()} SodCapital. Todos os direitos reservados.
         </p>
       </div>
     </div>
