@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 import { formatDate } from '@/lib/utils'
-import { Plus, Pencil, Trash2, Search, Calendar, Building2, FolderKanban, CheckCircle, AlertTriangle, XCircle } from 'lucide-react'
+import { Plus, Pencil, Trash2, Search, CheckCircle, AlertTriangle, XCircle } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
@@ -61,11 +61,11 @@ const empresaSchema = z.object({
       (val) => validarCNPJ(val),
       { message: 'CNPJ inválido' }
     ),
-  razao_social: z.string()
+  nome: z.string()
     .min(1, 'Razão Social é obrigatória')
     .max(40, 'Razão Social deve ter no máximo 40 caracteres')
     .transform(val => val.toUpperCase()),
-  nome: z.string()
+  segmento: z.string()
     .min(1, 'Apelido é obrigatório')
     .max(20, 'Apelido deve ter no máximo 20 caracteres')
     .transform(val => val.toUpperCase()),
@@ -82,6 +82,9 @@ export default function EmpresasPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [toasts, setToasts] = useState<Toast[]>([])
   const [toastIdCounter, setToastIdCounter] = useState(0)
+  const [cnpjValue, setCnpjValue] = useState('')
+  const [nomeValue, setNomeValue] = useState('')
+  const [segmentoValue, setSegmentoValue] = useState('')
 
   const { register, handleSubmit, reset, formState: { errors }, setValue } = useForm<EmpresaForm>({
     resolver: zodResolver(empresaSchema),
@@ -113,9 +116,9 @@ export default function EmpresasPage() {
         }
       case 'warning':
         return {
-          borderColor: '#f59e0b',
+          borderColor: '#eab308',
           icon: AlertTriangle,
-          iconColor: '#f59e0b'
+          iconColor: '#eab308'
         }
       case 'error':
         return {
@@ -154,22 +157,41 @@ export default function EmpresasPage() {
           .update(data)
           .eq('id', editingId)
 
-        if (error) throw error
+        if (error) {
+          console.error('Erro detalhado ao atualizar:', error)
+          
+          // Check for duplicate name constraint violation
+          if (error.code === '23505' && error.message.includes('empresas_org_id_nome_key')) {
+            throw new Error('Já existe uma empresa com essa Razão Social')
+          }
+          
+          throw new Error(`Erro ao atualizar empresa: ${error.message}`)
+        }
         showToast('Empresa atualizada com sucesso!', 'success')
       } else {
         const { error } = await supabase
           .from('empresas')
           .insert([data])
 
-        if (error) throw error
+        if (error) {
+          console.error('Erro detalhado ao criar:', error)
+          
+          // Check for duplicate name constraint violation
+          if (error.code === '23505' && error.message.includes('empresas_org_id_nome_key')) {
+            throw new Error('Já existe uma empresa com essa Razão Social')
+          }
+          
+          throw new Error(`Erro ao criar empresa: ${error.message}`)
+        }
         showToast('Empresa criada com sucesso!', 'success')
       }
 
       loadEmpresas()
       closeModal()
-    } catch (err) {
+    } catch (err: any) {
       console.error('Erro ao salvar empresa:', err)
-      showToast('Erro ao salvar empresa', 'error')
+      const errorMessage = err.message || 'Erro desconhecido ao salvar empresa'
+      showToast(errorMessage, 'error')
     }
   }
 
@@ -177,10 +199,10 @@ export default function EmpresasPage() {
     // Show toast for first error found
     if (errors.cnpj) {
       showToast(errors.cnpj.message, 'warning')
-    } else if (errors.razao_social) {
-      showToast(errors.razao_social.message, 'warning')
     } else if (errors.nome) {
       showToast(errors.nome.message, 'warning')
+    } else if (errors.segmento) {
+      showToast(errors.segmento.message, 'warning')
     }
   }
 
@@ -200,10 +222,18 @@ export default function EmpresasPage() {
 
   const handleEdit = (empresa: any) => {
     setEditingId(empresa.id)
+    const cnpj = empresa.cnpj || ''
+    const nome = empresa.nome || ''
+    const segmento = empresa.segmento || ''
+    
+    setCnpjValue(cnpj)
+    setNomeValue(nome)
+    setSegmentoValue(segmento)
+    
     reset({
-      cnpj: empresa.cnpj || '',
-      razao_social: empresa.razao_social || '',
-      nome: empresa.nome || '',
+      cnpj: cnpj,
+      nome: nome,
+      segmento: segmento,
       ativo: empresa.ativo
     })
     setShowModal(true)
@@ -230,10 +260,13 @@ export default function EmpresasPage() {
   const closeModal = () => {
     setShowModal(false)
     setEditingId(null)
+    setCnpjValue('')
+    setNomeValue('')
+    setSegmentoValue('')
     reset({
       cnpj: '',
-      razao_social: '',
       nome: '',
+      segmento: '',
       ativo: true
     })
   }
@@ -282,65 +315,6 @@ export default function EmpresasPage() {
 
   return (
     <div style={{ padding: '32px', backgroundColor: '#f9fafb', minHeight: '100vh' }}>
-      {/* Top Filters Bar */}
-      <div style={{
-        display: 'flex',
-        gap: '16px',
-        marginBottom: '32px',
-        alignItems: 'center'
-      }}>
-        <button style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          padding: '10px 16px',
-          backgroundColor: 'white',
-          border: '1px solid #e5e7eb',
-          borderRadius: '8px',
-          fontSize: '14px',
-          color: '#374151',
-          cursor: 'pointer',
-          transition: 'all 0.2s'
-        }}>
-          <Calendar style={{ width: '18px', height: '18px' }} />
-          Este Mês
-        </button>
-
-        <button style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          padding: '10px 16px',
-          backgroundColor: 'white',
-          border: '1px solid #e5e7eb',
-          borderRadius: '8px',
-          fontSize: '14px',
-          color: '#374151',
-          cursor: 'pointer',
-          transition: 'all 0.2s'
-        }}>
-          <Building2 style={{ width: '18px', height: '18px' }} />
-          Todas as Empresas
-        </button>
-
-        <button style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          padding: '10px 16px',
-          backgroundColor: 'white',
-          border: '1px solid #e5e7eb',
-          borderRadius: '8px',
-          fontSize: '14px',
-          color: '#374151',
-          cursor: 'pointer',
-          transition: 'all 0.2s'
-        }}>
-          <FolderKanban style={{ width: '18px', height: '18px' }} />
-          Todos os Projetos
-        </button>
-      </div>
-
       {/* Main Content */}
       <div style={{
         backgroundColor: 'white',
@@ -412,7 +386,7 @@ export default function EmpresasPage() {
             }} />
             <input
               type="text"
-              placeholder="Buscar por apelido ou CNPJ..."
+              placeholder="Buscar por razão social ou CNPJ..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               style={{
@@ -450,7 +424,7 @@ export default function EmpresasPage() {
                   textTransform: 'uppercase',
                   letterSpacing: '0.5px'
                 }}>
-                  Apelido
+                  Razão Social
                 </th>
                 <th style={{
                   padding: '12px 24px',
@@ -472,7 +446,7 @@ export default function EmpresasPage() {
                   textTransform: 'uppercase',
                   letterSpacing: '0.5px'
                 }}>
-                  Razão Social
+                  Apelido
                 </th>
                 <th style={{
                   padding: '12px 24px',
@@ -552,7 +526,7 @@ export default function EmpresasPage() {
                       fontSize: '14px',
                       color: '#6b7280'
                     }}>
-                      {empresa.razao_social || '-'}
+                      {empresa.segmento || '-'}
                     </td>
                     <td style={{ padding: '16px 24px' }}>
                       <span style={{
@@ -670,36 +644,67 @@ export default function EmpresasPage() {
                 }}>
                   CNPJ *
                 </label>
-                <input
-                  {...register('cnpj')}
-                  style={{
-                    width: '100%',
-                    padding: '12px 16px',
-                    border: errors.cnpj ? '1px solid #dc2626' : '1px solid #e5e7eb',
-                    borderRadius: '8px',
-                    fontSize: '14px',
-                    outline: 'none',
-                    transition: 'all 0.2s'
-                  }}
-                  placeholder="00.000.000/0000-00"
-                  maxLength={18}
-                  onChange={(e) => {
-                    const formatted = formatCNPJ(e.target.value)
-                    e.target.value = formatted
-                    setValue('cnpj', formatted)
-                  }}
-                  onFocus={(e) => {
-                    if (!errors.cnpj) {
+                <div style={{ position: 'relative' }}>
+                  <input
+                    {...register('cnpj')}
+                    value={cnpjValue}
+                    style={{
+                      width: '100%',
+                      padding: '12px 40px 12px 16px',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '8px',
+                      fontSize: '14px',
+                      outline: 'none',
+                      transition: 'all 0.2s'
+                    }}
+                    placeholder="00.000.000/0000-00"
+                    maxLength={18}
+                    onChange={(e) => {
+                      const formatted = formatCNPJ(e.target.value)
+                      e.target.value = formatted
+                      setCnpjValue(formatted)
+                      setValue('cnpj', formatted)
+                    }}
+                    onFocus={(e) => {
                       e.currentTarget.style.borderColor = '#1555D6'
                       e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
-                    }
-                  }}
-                  onBlur={(e) => {
-                    e.currentTarget.style.borderColor = errors.cnpj ? '#dc2626' : '#e5e7eb'
-                    e.currentTarget.style.boxShadow = 'none'
-                    handleCNPJBlur(e.target.value)
-                  }}
-                />
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = '#e5e7eb'
+                      e.currentTarget.style.boxShadow = 'none'
+                      handleCNPJBlur(e.target.value)
+                    }}
+                  />
+                  {cnpjValue && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCnpjValue('')
+                        setValue('cnpj', '')
+                      }}
+                      style={{
+                        position: 'absolute',
+                        right: '12px',
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        padding: '4px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: '#9ca3af',
+                        fontSize: '18px',
+                        lineHeight: 1
+                      }}
+                      onMouseOver={(e) => e.currentTarget.style.color = '#6b7280'}
+                      onMouseOut={(e) => e.currentTarget.style.color = '#9ca3af'}
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Razão Social */}
@@ -713,37 +718,78 @@ export default function EmpresasPage() {
                 }}>
                   Razão Social *
                 </label>
-                <input
-                  {...register('razao_social')}
-                  style={{
-                    width: '100%',
-                    padding: '12px 16px',
-                    border: errors.razao_social ? '1px solid #dc2626' : '1px solid #e5e7eb',
-                    borderRadius: '8px',
-                    fontSize: '14px',
-                    outline: 'none',
-                    transition: 'all 0.2s',
-                    textTransform: 'uppercase'
-                  }}
-                  placeholder="RAZÃO SOCIAL DA EMPRESA"
-                  maxLength={40}
-                  onChange={(e) => {
-                    e.target.value = e.target.value.toUpperCase()
-                  }}
-                  onFocus={(e) => {
-                    if (!errors.razao_social) {
+                <div style={{ position: 'relative' }}>
+                  <input
+                    {...register('nome')}
+                    value={nomeValue}
+                    style={{
+                      width: '100%',
+                      padding: '12px 40px 12px 16px',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '8px',
+                      fontSize: '14px',
+                      outline: 'none',
+                      transition: 'all 0.2s',
+                      textTransform: 'uppercase'
+                    }}
+                    placeholder="RAZÃO SOCIAL DA EMPRESA"
+                    maxLength={40}
+                    onChange={(e) => {
+                      const upperValue = e.target.value.toUpperCase()
+                      setNomeValue(upperValue)
+                      setValue('nome', upperValue)
+                    }}
+                    onFocus={(e) => {
                       e.currentTarget.style.borderColor = '#1555D6'
                       e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
-                    }
-                  }}
-                  onBlur={(e) => {
-                    e.currentTarget.style.borderColor = errors.razao_social ? '#dc2626' : '#e5e7eb'
-                    e.currentTarget.style.boxShadow = 'none'
-                  }}
-                />
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = '#e5e7eb'
+                      e.currentTarget.style.boxShadow = 'none'
+                    }}
+                  />
+                  {nomeValue && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNomeValue('')
+                        setValue('nome', '')
+                      }}
+                      style={{
+                        position: 'absolute',
+                        right: '12px',
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        padding: '4px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: '#9ca3af',
+                        fontSize: '18px',
+                        lineHeight: 1
+                      }}
+                      onMouseOver={(e) => e.currentTarget.style.color = '#6b7280'}
+                      onMouseOut={(e) => e.currentTarget.style.color = '#9ca3af'}
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'flex-end',
+                  marginTop: '4px',
+                  fontSize: '12px',
+                  color: nomeValue.length >= 40 ? '#ef4444' : '#9ca3af'
+                }}>
+                  {nomeValue.length}/40
+                </div>
               </div>
 
-              {/* Apelido (Nome) */}
+              {/* Apelido (Segmento) */}
               <div>
                 <label style={{
                   display: 'block',
@@ -754,34 +800,75 @@ export default function EmpresasPage() {
                 }}>
                   Apelido *
                 </label>
-                <input
-                  {...register('nome')}
-                  style={{
-                    width: '100%',
-                    padding: '12px 16px',
-                    border: errors.nome ? '1px solid #dc2626' : '1px solid #e5e7eb',
-                    borderRadius: '8px',
-                    fontSize: '14px',
-                    outline: 'none',
-                    transition: 'all 0.2s',
-                    textTransform: 'uppercase'
-                  }}
-                  placeholder="APELIDO"
-                  maxLength={20}
-                  onChange={(e) => {
-                    e.target.value = e.target.value.toUpperCase()
-                  }}
-                  onFocus={(e) => {
-                    if (!errors.nome) {
+                <div style={{ position: 'relative' }}>
+                  <input
+                    {...register('segmento')}
+                    value={segmentoValue}
+                    style={{
+                      width: '100%',
+                      padding: '12px 40px 12px 16px',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '8px',
+                      fontSize: '14px',
+                      outline: 'none',
+                      transition: 'all 0.2s',
+                      textTransform: 'uppercase'
+                    }}
+                    placeholder="APELIDO"
+                    maxLength={20}
+                    onChange={(e) => {
+                      const upperValue = e.target.value.toUpperCase()
+                      setSegmentoValue(upperValue)
+                      setValue('segmento', upperValue)
+                    }}
+                    onFocus={(e) => {
                       e.currentTarget.style.borderColor = '#1555D6'
                       e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
-                    }
-                  }}
-                  onBlur={(e) => {
-                    e.currentTarget.style.borderColor = errors.nome ? '#dc2626' : '#e5e7eb'
-                    e.currentTarget.style.boxShadow = 'none'
-                  }}
-                />
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = '#e5e7eb'
+                      e.currentTarget.style.boxShadow = 'none'
+                    }}
+                  />
+                  {segmentoValue && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSegmentoValue('')
+                        setValue('segmento', '')
+                      }}
+                      style={{
+                        position: 'absolute',
+                        right: '12px',
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        padding: '4px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: '#9ca3af',
+                        fontSize: '18px',
+                        lineHeight: 1
+                      }}
+                      onMouseOver={(e) => e.currentTarget.style.color = '#6b7280'}
+                      onMouseOut={(e) => e.currentTarget.style.color = '#9ca3af'}
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'flex-end',
+                  marginTop: '4px',
+                  fontSize: '12px',
+                  color: segmentoValue.length >= 20 ? '#ef4444' : '#9ca3af'
+                }}>
+                  {segmentoValue.length}/20
+                </div>
               </div>
 
               {/* Ativo */}

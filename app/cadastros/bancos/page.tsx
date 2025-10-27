@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
-import { formatDate } from '@/lib/utils'
 import { Plus, Pencil, Trash2, Search, CheckCircle, AlertTriangle, XCircle } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -17,34 +16,33 @@ interface Toast {
   type: ToastType
 }
 
-const projetoSchema = z.object({
+const bancoSchema = z.object({
+  codigo: z.string()
+    .min(3, 'Código deve ter 3 dígitos')
+    .max(3, 'Código deve ter 3 dígitos')
+    .regex(/^\d{3}$/, 'Código deve conter apenas números'),
   nome: z.string()
     .min(1, 'Nome é obrigatório')
-    .max(50, 'Nome deve ter no máximo 50 caracteres')
+    .max(100, 'Nome deve ter no máximo 100 caracteres')
     .transform(val => val.toUpperCase()),
-  empresa_id: z.string().min(1, 'Empresa é obrigatória'),
-  descricao: z.string()
-    .max(200, 'Descrição deve ter no máximo 200 caracteres')
-    .optional(),
   ativo: z.boolean().default(true)
 })
 
-type ProjetoForm = z.infer<typeof projetoSchema>
+type BancoForm = z.infer<typeof bancoSchema>
 
-export default function ProjetosPage() {
-  const [projetos, setProjetos] = useState<any[]>([])
-  const [empresas, setEmpresas] = useState<any[]>([])
+export default function BancosPage() {
+  const [bancos, setBancos] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [toasts, setToasts] = useState<Toast[]>([])
   const [toastIdCounter, setToastIdCounter] = useState(0)
+  const [codigoValue, setCodigoValue] = useState('')
   const [nomeValue, setNomeValue] = useState('')
-  const [descricaoValue, setDescricaoValue] = useState('')
 
-  const { register, handleSubmit, reset, formState: { errors }, setValue } = useForm<ProjetoForm>({
-    resolver: zodResolver(projetoSchema),
+  const { register, handleSubmit, reset, formState: { errors }, setValue } = useForm<BancoForm>({
+    resolver: zodResolver(bancoSchema),
     defaultValues: {
       ativo: true
     }
@@ -87,145 +85,129 @@ export default function ProjetosPage() {
   }
 
   useEffect(() => {
-    loadData()
+    loadBancos()
   }, [])
 
-  const loadData = async () => {
+  const loadBancos = async () => {
     try {
-      // Load empresas
-      const { data: empresasData } = await supabase
-        .from('empresas')
+      const { data, error } = await supabase
+        .from('bancos')
         .select('*')
-        .eq('ativo', true)
-        .order('nome')
-
-      setEmpresas(empresasData || [])
-
-      // Load projetos
-      const { data: projetosData, error } = await supabase
-        .from('projetos')
-        .select('*, empresas(nome)')
-        .order('nome', { ascending: true })
+        .order('codigo', { ascending: true })
 
       if (error) throw error
-      setProjetos(projetosData || [])
+      setBancos(data || [])
     } catch (err) {
-      console.error('Erro ao carregar projetos:', err)
-      showToast('Erro ao carregar projetos', 'error')
+      console.error('Erro ao carregar bancos:', err)
+      showToast('Erro ao carregar bancos', 'error')
     } finally {
       setLoading(false)
     }
   }
 
-  const onSubmit = async (data: ProjetoForm) => {
+  const onSubmit = async (data: BancoForm) => {
     try {
       if (editingId) {
         const { error } = await supabase
-          .from('projetos')
+          .from('bancos')
           .update(data)
           .eq('id', editingId)
 
         if (error) {
           console.error('Erro detalhado ao atualizar:', error)
           
-          // Check for duplicate constraint violation
-          if (error.code === '23505' && error.message.includes('projetos_org_id_empresa_id_nome_key')) {
-            showToast('Já existe projeto cadastrado para essa empresa', 'warning')
+          if (error.code === '23505' && error.message.includes('bancos_org_id_codigo_key')) {
+            showToast('Já existe um banco com este código', 'warning')
             return
           }
           
-          throw new Error(`Erro ao atualizar projeto: ${error.message}`)
+          throw new Error(`Erro ao atualizar banco: ${error.message}`)
         }
-        showToast('Projeto atualizado com sucesso!', 'success')
+        showToast('Banco atualizado com sucesso!', 'success')
       } else {
         const { error } = await supabase
-          .from('projetos')
+          .from('bancos')
           .insert([data])
 
         if (error) {
           console.error('Erro detalhado ao criar:', error)
           
-          // Check for duplicate constraint violation
-          if (error.code === '23505' && error.message.includes('projetos_org_id_empresa_id_nome_key')) {
-            showToast('Já existe projeto cadastrado para essa empresa', 'warning')
+          if (error.code === '23505' && error.message.includes('bancos_org_id_codigo_key')) {
+            showToast('Já existe um banco com este código', 'warning')
             return
           }
           
-          throw new Error(`Erro ao criar projeto: ${error.message}`)
+          throw new Error(`Erro ao criar banco: ${error.message}`)
         }
-        showToast('Projeto criado com sucesso!', 'success')
+        showToast('Banco criado com sucesso!', 'success')
       }
 
-      loadData()
+      loadBancos()
       closeModal()
     } catch (err: any) {
-      console.error('Erro ao salvar projeto:', err)
-      const errorMessage = err.message || 'Erro desconhecido ao salvar projeto'
+      console.error('Erro ao salvar banco:', err)
+      const errorMessage = err.message || 'Erro desconhecido ao salvar banco'
       showToast(errorMessage, 'error')
     }
   }
 
   const onSubmitError = (errors: any) => {
-    if (errors.nome) {
+    if (errors.codigo) {
+      showToast(errors.codigo.message, 'warning')
+    } else if (errors.nome) {
       showToast(errors.nome.message, 'warning')
-    } else if (errors.empresa_id) {
-      showToast(errors.empresa_id.message, 'warning')
-    } else if (errors.descricao) {
-      showToast(errors.descricao.message, 'warning')
     }
   }
 
-  const handleEdit = (projeto: any) => {
-    setEditingId(projeto.id)
-    const nome = projeto.nome || ''
-    const descricao = projeto.descricao || ''
+  const handleEdit = (banco: any) => {
+    setEditingId(banco.id)
+    const codigo = banco.codigo || ''
+    const nome = banco.nome || ''
     
+    setCodigoValue(codigo)
     setNomeValue(nome)
-    setDescricaoValue(descricao)
     
     reset({
+      codigo: codigo,
       nome: nome,
-      empresa_id: projeto.empresa_id,
-      descricao: descricao,
-      ativo: projeto.ativo
+      ativo: banco.ativo
     })
     setShowModal(true)
   }
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Tem certeza que deseja excluir este projeto?')) return
+    if (!confirm('Tem certeza que deseja excluir este banco?')) return
 
     try {
       const { error } = await supabase
-        .from('projetos')
+        .from('bancos')
         .delete()
         .eq('id', id)
 
       if (error) throw error
-      showToast('Projeto excluído com sucesso!', 'success')
-      loadData()
+      showToast('Banco excluído com sucesso!', 'success')
+      loadBancos()
     } catch (err) {
-      console.error('Erro ao excluir projeto:', err)
-      showToast('Erro ao excluir projeto', 'error')
+      console.error('Erro ao excluir banco:', err)
+      showToast('Erro ao excluir banco', 'error')
     }
   }
 
   const closeModal = () => {
     setShowModal(false)
     setEditingId(null)
+    setCodigoValue('')
     setNomeValue('')
-    setDescricaoValue('')
     reset({
+      codigo: '',
       nome: '',
-      empresa_id: '',
-      descricao: '',
       ativo: true
     })
   }
 
-  const filteredProjetos = projetos.filter(p =>
-    p.nome.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (p.empresas?.nome && p.empresas.nome.toLowerCase().includes(searchTerm.toLowerCase()))
+  const filteredBancos = bancos.filter(b =>
+    b.codigo?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    b.nome?.toLowerCase().includes(searchTerm.toLowerCase())
   )
 
   if (loading) {
@@ -276,13 +258,13 @@ export default function ProjetosPage() {
                 color: '#111827',
                 marginBottom: '4px'
               }}>
-                Projetos
+                Bancos
               </h1>
               <p style={{
                 fontSize: '14px',
                 color: '#6b7280'
               }}>
-                Gerencie os projetos das empresas
+                Gerencie o cadastro de bancos
               </p>
             </div>
             <button
@@ -305,7 +287,7 @@ export default function ProjetosPage() {
               onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#1555D6'}
             >
               <Plus style={{ width: '20px', height: '20px' }} />
-              Novo Projeto
+              Novo Banco
             </button>
           </div>
 
@@ -322,7 +304,7 @@ export default function ProjetosPage() {
             }} />
             <input
               type="text"
-              placeholder="Buscar por nome do projeto ou empresa..."
+              placeholder="Buscar por código ou nome do banco..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               style={{
@@ -358,9 +340,10 @@ export default function ProjetosPage() {
                   fontWeight: '600',
                   color: '#6b7280',
                   textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
+                  letterSpacing: '0.5px',
+                  width: '100px'
                 }}>
-                  Nome
+                  Código
                 </th>
                 <th style={{
                   padding: '12px 24px',
@@ -371,7 +354,7 @@ export default function ProjetosPage() {
                   textTransform: 'uppercase',
                   letterSpacing: '0.5px'
                 }}>
-                  Empresa
+                  Nome do Banco
                 </th>
                 <th style={{
                   padding: '12px 24px',
@@ -380,18 +363,8 @@ export default function ProjetosPage() {
                   fontWeight: '600',
                   color: '#6b7280',
                   textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
-                }}>
-                  Descrição
-                </th>
-                <th style={{
-                  padding: '12px 24px',
-                  textAlign: 'left',
-                  fontSize: '12px',
-                  fontWeight: '600',
-                  color: '#6b7280',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
+                  letterSpacing: '0.5px',
+                  width: '120px'
                 }}>
                   Status
                 </th>
@@ -402,28 +375,29 @@ export default function ProjetosPage() {
                   fontWeight: '600',
                   color: '#6b7280',
                   textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
+                  letterSpacing: '0.5px',
+                  width: '120px'
                 }}>
                   Ações
                 </th>
               </tr>
             </thead>
             <tbody>
-              {filteredProjetos.length === 0 ? (
+              {filteredBancos.length === 0 ? (
                 <tr>
-                  <td colSpan={5} style={{
+                  <td colSpan={4} style={{
                     padding: '48px 24px',
                     textAlign: 'center',
                     color: '#9ca3af',
                     fontSize: '14px'
                   }}>
-                    Nenhum projeto encontrado
+                    Nenhum banco encontrado
                   </td>
                 </tr>
               ) : (
-                filteredProjetos.map((projeto) => (
+                filteredBancos.map((banco) => (
                   <tr
-                    key={projeto.id}
+                    key={banco.id}
                     style={{
                       borderBottom: '1px solid #f3f4f6',
                       transition: 'background-color 0.2s'
@@ -434,24 +408,18 @@ export default function ProjetosPage() {
                     <td style={{
                       padding: '16px 24px',
                       fontSize: '14px',
+                      fontWeight: '600',
+                      color: '#1555D6'
+                    }}>
+                      {banco.codigo}
+                    </td>
+                    <td style={{
+                      padding: '16px 24px',
+                      fontSize: '14px',
                       fontWeight: '500',
                       color: '#111827'
                     }}>
-                      {projeto.nome}
-                    </td>
-                    <td style={{
-                      padding: '16px 24px',
-                      fontSize: '14px',
-                      color: '#6b7280'
-                    }}>
-                      {projeto.empresas?.nome || '-'}
-                    </td>
-                    <td style={{
-                      padding: '16px 24px',
-                      fontSize: '14px',
-                      color: '#6b7280'
-                    }}>
-                      {projeto.descricao || '-'}
+                      {banco.nome}
                     </td>
                     <td style={{ padding: '16px 24px' }}>
                       <span style={{
@@ -461,10 +429,10 @@ export default function ProjetosPage() {
                         fontSize: '12px',
                         fontWeight: '500',
                         borderRadius: '12px',
-                        backgroundColor: projeto.ativo ? '#dcfce7' : '#f3f4f6',
-                        color: projeto.ativo ? '#16a34a' : '#6b7280'
+                        backgroundColor: banco.ativo ? '#dcfce7' : '#f3f4f6',
+                        color: banco.ativo ? '#16a34a' : '#6b7280'
                       }}>
-                        {projeto.ativo ? 'Ativo' : 'Inativo'}
+                        {banco.ativo ? 'Ativo' : 'Inativo'}
                       </span>
                     </td>
                     <td style={{ padding: '16px 24px' }}>
@@ -475,7 +443,7 @@ export default function ProjetosPage() {
                         gap: '8px'
                       }}>
                         <button
-                          onClick={() => handleEdit(projeto)}
+                          onClick={() => handleEdit(banco)}
                           style={{
                             padding: '8px',
                             backgroundColor: 'transparent',
@@ -490,7 +458,7 @@ export default function ProjetosPage() {
                           <Pencil style={{ width: '16px', height: '16px', color: '#6b7280' }} />
                         </button>
                         <button
-                          onClick={() => handleDelete(projeto.id)}
+                          onClick={() => handleDelete(banco.id)}
                           style={{
                             padding: '8px',
                             backgroundColor: 'transparent',
@@ -547,10 +515,91 @@ export default function ProjetosPage() {
               color: '#111827',
               marginBottom: '24px'
             }}>
-              {editingId ? 'Editar Projeto' : 'Novo Projeto'}
+              {editingId ? 'Editar Banco' : 'Novo Banco'}
             </h2>
 
             <form onSubmit={handleSubmit(onSubmit, onSubmitError)} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+              {/* Código */}
+              <div>
+                <label style={{
+                  display: 'block',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  color: '#374151',
+                  marginBottom: '8px'
+                }}>
+                  Código * (3 dígitos)
+                </label>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    {...register('codigo')}
+                    value={codigoValue}
+                    style={{
+                      width: '100%',
+                      padding: '12px 40px 12px 16px',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '8px',
+                      fontSize: '14px',
+                      outline: 'none',
+                      transition: 'all 0.2s'
+                    }}
+                    placeholder="000"
+                    maxLength={3}
+                    onChange={(e) => {
+                      const value = e.target.value.replace(/\D/g, '')
+                      setCodigoValue(value)
+                      setValue('codigo', value)
+                    }}
+                    onFocus={(e) => {
+                      e.currentTarget.style.borderColor = '#1555D6'
+                      e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = '#e5e7eb'
+                      e.currentTarget.style.boxShadow = 'none'
+                    }}
+                  />
+                  {codigoValue && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCodigoValue('')
+                        setValue('codigo', '')
+                      }}
+                      style={{
+                        position: 'absolute',
+                        right: '12px',
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        padding: '4px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: '#9ca3af',
+                        fontSize: '18px',
+                        lineHeight: 1
+                      }}
+                      onMouseOver={(e) => e.currentTarget.style.color = '#6b7280'}
+                      onMouseOut={(e) => e.currentTarget.style.color = '#9ca3af'}
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'flex-end',
+                  marginTop: '4px',
+                  fontSize: '12px',
+                  color: codigoValue.length >= 3 ? '#10b981' : '#9ca3af'
+                }}>
+                  {codigoValue.length}/3
+                </div>
+              </div>
+
               {/* Nome */}
               <div>
                 <label style={{
@@ -560,7 +609,7 @@ export default function ProjetosPage() {
                   color: '#374151',
                   marginBottom: '8px'
                 }}>
-                  Nome *
+                  Nome do Banco *
                 </label>
                 <div style={{ position: 'relative' }}>
                   <input
@@ -576,8 +625,8 @@ export default function ProjetosPage() {
                       transition: 'all 0.2s',
                       textTransform: 'uppercase'
                     }}
-                    placeholder="NOME DO PROJETO"
-                    maxLength={50}
+                    placeholder="NOME COMPLETO DO BANCO"
+                    maxLength={100}
                     onChange={(e) => {
                       const upperValue = e.target.value.toUpperCase()
                       setNomeValue(upperValue)
@@ -627,102 +676,9 @@ export default function ProjetosPage() {
                   justifyContent: 'flex-end',
                   marginTop: '4px',
                   fontSize: '12px',
-                  color: nomeValue.length >= 50 ? '#ef4444' : '#9ca3af'
+                  color: nomeValue.length >= 100 ? '#ef4444' : '#9ca3af'
                 }}>
-                  {nomeValue.length}/50
-                </div>
-              </div>
-
-              {/* Empresa */}
-              <div>
-                <label style={{
-                  display: 'block',
-                  fontSize: '14px',
-                  fontWeight: '500',
-                  color: '#374151',
-                  marginBottom: '8px'
-                }}>
-                  Empresa *
-                </label>
-                <select
-                  {...register('empresa_id')}
-                  style={{
-                    width: '100%',
-                    padding: '12px 16px',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: '8px',
-                    fontSize: '14px',
-                    outline: 'none',
-                    transition: 'all 0.2s',
-                    backgroundColor: 'white',
-                    cursor: 'pointer'
-                  }}
-                  onFocus={(e) => {
-                    e.currentTarget.style.borderColor = '#1555D6'
-                    e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
-                  }}
-                  onBlur={(e) => {
-                    e.currentTarget.style.borderColor = '#e5e7eb'
-                    e.currentTarget.style.boxShadow = 'none'
-                  }}
-                >
-                  <option value="">Selecione uma empresa</option>
-                  {empresas.map(e => (
-                    <option key={e.id} value={e.id}>{e.nome}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Descrição */}
-              <div>
-                <label style={{
-                  display: 'block',
-                  fontSize: '14px',
-                  fontWeight: '500',
-                  color: '#374151',
-                  marginBottom: '8px'
-                }}>
-                  Descrição
-                </label>
-                <div style={{ position: 'relative' }}>
-                  <textarea
-                    {...register('descricao')}
-                    value={descricaoValue}
-                    style={{
-                      width: '100%',
-                      padding: '12px 16px',
-                      border: '1px solid #e5e7eb',
-                      borderRadius: '8px',
-                      fontSize: '14px',
-                      outline: 'none',
-                      transition: 'all 0.2s',
-                      resize: 'vertical',
-                      minHeight: '80px'
-                    }}
-                    placeholder="Descrição do projeto"
-                    maxLength={200}
-                    onChange={(e) => {
-                      setDescricaoValue(e.target.value)
-                      setValue('descricao', e.target.value)
-                    }}
-                    onFocus={(e) => {
-                      e.currentTarget.style.borderColor = '#1555D6'
-                      e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
-                    }}
-                    onBlur={(e) => {
-                      e.currentTarget.style.borderColor = '#e5e7eb'
-                      e.currentTarget.style.boxShadow = 'none'
-                    }}
-                  />
-                </div>
-                <div style={{
-                  display: 'flex',
-                  justifyContent: 'flex-end',
-                  marginTop: '4px',
-                  fontSize: '12px',
-                  color: descricaoValue.length >= 200 ? '#ef4444' : '#9ca3af'
-                }}>
-                  {descricaoValue.length}/200
+                  {nomeValue.length}/100
                 </div>
               </div>
 
@@ -748,7 +704,7 @@ export default function ProjetosPage() {
                     cursor: 'pointer'
                   }}
                 >
-                  Projeto ativo
+                  Banco ativo
                 </label>
               </div>
 

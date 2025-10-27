@@ -18,7 +18,8 @@ import {
   PieChart,
   FileSignature,
   ChevronDown,
-  ChevronRight
+  ChevronRight,
+  Landmark
 } from 'lucide-react'
 
 type MenuItem = {
@@ -40,6 +41,7 @@ const menuItems: MenuItem[] = [
     children: [
       { title: 'Empresas', icon: Building2, href: '/cadastros/empresas' },
       { title: 'Projetos', icon: FolderKanban, href: '/cadastros/projetos' },
+      { title: 'Bancos', icon: Landmark, href: '/cadastros/bancos' },
       { title: 'Contas Bancárias', icon: CreditCard, href: '/cadastros/bancos-contas' },
       { title: 'Contrapartes', icon: Users, href: '/cadastros/contrapartes' }
     ]
