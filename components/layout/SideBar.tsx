@@ -50,10 +50,10 @@ const menuItems: MenuItem[] = [
     title: 'Plano de Contas',
     icon: FileText,
     children: [
-      { title: 'Tipos', icon: FileText, href: '/plano-contas/tipos' },
-      { title: 'Grupos', icon: FileText, href: '/plano-contas/grupos' },
-      { title: 'Categorias', icon: FileText, href: '/plano-contas/categorias' },
-      { title: 'Subcategorias', icon: FileText, href: '/plano-contas/subcategorias' }
+      { title: 'Tipos', icon: FileText, href: '/planodecontas/tipos' },
+      { title: 'Grupos', icon: FileText, href: '/planodecontas/grupos' },
+      { title: 'Categorias', icon: FileText, href: '/planodecontas/categorias' },
+      { title: 'Subcategorias', icon: FileText, href: '/planodecontas/subcategorias' }
     ]
   },
   {

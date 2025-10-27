@@ -19,7 +19,7 @@ interface Toast {
 const contraparteSchema = z.object({
   nome: z.string().min(1, 'Nome é obrigatório').max(40, 'Nome deve ter no máximo 40 caracteres'),
   apelido: z.string().max(20, 'Apelido deve ter no máximo 20 caracteres').optional().or(z.literal('')),
-  documento: z.string().max(18, 'Documento deve ter no máximo 18 caracteres').optional().or(z.literal('')),
+  documento: z.string().min(1, 'CPF/CNPJ é obrigatório').max(18, 'Documento deve ter no máximo 18 caracteres'),
   pessoa: z.enum(['PF', 'PJ']),
   relacao: z.enum(['CLIENTE', 'FORNECEDOR', 'AMBOS']),
   email: z.string().email('E-mail inválido').max(100, 'E-mail deve ter no máximo 100 caracteres').optional().or(z.literal('')),
@@ -133,6 +133,21 @@ const formatarTelefone = (valor: string): string => {
   }
 }
 
+// Função para capitalizar primeira letra de palavras com mais de 2 caracteres
+const capitalizarTexto = (texto: string): string => {
+  return texto
+    .split(' ')
+    .map(palavra => {
+      if (palavra.length > 2) {
+        // Capitaliza primeira letra de palavras com mais de 2 caracteres
+        return palavra.charAt(0).toUpperCase() + palavra.slice(1).toLowerCase()
+      }
+      // Mantém palavras com 2 ou menos caracteres em minúsculas
+      return palavra.toLowerCase()
+    })
+    .join(' ')
+}
+
 export default function ContrapartesPage() {
   const [contrapartes, setContrapartes] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -222,22 +237,25 @@ export default function ContrapartesPage() {
     if (documentoLimpo.length === 0) return false
 
     try {
-      let query = supabase
+      // Buscar por documento com ou sem formatação
+      const { data, error } = await supabase
         .from('contrapartes')
-        .select('id, nome')
-        .eq('documento', documento)
-
-      // Se estiver editando, excluir o ID atual da busca
-      if (idAtual) {
-        query = query.neq('id', idAtual)
-      }
-
-      const { data, error } = await query
+        .select('id, nome, documento')
+        .or(`documento.eq.${documento},documento.eq.${documentoLimpo}`)
 
       if (error) throw error
       
-      if (data && data.length > 0) {
-        showToast(`Documento já cadastrado para: ${data[0].nome}`, 'warning')
+      // Filtrar resultados removendo o registro atual (se estiver editando)
+      const duplicados = data?.filter(item => {
+        if (idAtual && item.id === idAtual) return false
+        
+        // Comparar documentos sem formatação
+        const docBanco = (item.documento || '').replace(/[^\d]/g, '')
+        return docBanco === documentoLimpo
+      })
+
+      if (duplicados && duplicados.length > 0) {
+        showToast(`Documento já cadastrado para: ${duplicados[0].nome}`, 'warning')
         return true
       }
 
@@ -250,24 +268,51 @@ export default function ContrapartesPage() {
 
   const onSubmit = async (data: ContraparteForm) => {
     try {
-      // Verificar duplicidade de documento antes de salvar
-      if (data.documento) {
-        const isDuplicado = await verificarDocumentoDuplicado(data.documento, editingId || undefined)
-        if (isDuplicado) {
-          return // Não prosseguir se houver duplicidade
+      // 1. Validar se documento foi preenchido
+      if (!data.documento || data.documento.trim() === '') {
+        showToast('CPF/CNPJ é obrigatório', 'warning')
+        return
+      }
+
+      // 2. Validar formato do documento
+      const documentoLimpo = data.documento.replace(/[^\d]/g, '')
+      
+      if (data.pessoa === 'PF') {
+        if (documentoLimpo.length !== 11) {
+          showToast('CPF deve ter 11 dígitos', 'warning')
+          return
+        }
+        if (!validarCPF(documentoLimpo)) {
+          showToast('CPF inválido', 'warning')
+          return
+        }
+      } else {
+        if (documentoLimpo.length !== 14) {
+          showToast('CNPJ deve ter 14 dígitos', 'warning')
+          return
+        }
+        if (!validarCNPJ(documentoLimpo)) {
+          showToast('CNPJ inválido', 'warning')
+          return
         }
       }
 
-      // Limpar campos vazios antes de enviar
+      // 3. Verificar duplicidade de documento antes de salvar
+      const isDuplicado = await verificarDocumentoDuplicado(data.documento, editingId || undefined)
+      if (isDuplicado) {
+        return // Não prosseguir se houver duplicidade
+      }
+
+      // 4. Limpar campos vazios antes de enviar
       const cleanedData = {
         ...data,
         apelido: data.apelido || null,
-        documento: data.documento || null,
         email: data.email || null,
         telefone: data.telefone || null,
         endereco: data.endereco || null
       }
 
+      // 5. Salvar no banco
       if (editingId) {
         const { error } = await supabase
           .from('contrapartes')
@@ -814,9 +859,15 @@ export default function ContrapartesPage() {
                       {...register('nome')}
                       value={nomeValue}
                       onChange={(e) => {
-                        const valor = e.target.value.toUpperCase().slice(0, 40)
+                        const valor = e.target.value.slice(0, 40)
                         setNomeValue(valor)
                         setValue('nome', valor)
+                      }}
+                      onBlur={(e) => {
+                        const valorCapitalizado = capitalizarTexto(e.target.value)
+                        setNomeValue(valorCapitalizado)
+                        setValue('nome', valorCapitalizado)
+                        e.currentTarget.style.borderColor = '#e5e7eb'
                       }}
                       placeholder="Nome completo"
                       maxLength={40}
@@ -827,11 +878,9 @@ export default function ContrapartesPage() {
                         borderRadius: '8px',
                         fontSize: '14px',
                         outline: 'none',
-                        transition: 'border-color 0.2s',
-                        textTransform: 'uppercase'
+                        transition: 'border-color 0.2s'
                       }}
                       onFocus={(e) => e.currentTarget.style.borderColor = '#1555D6'}
-                      onBlur={(e) => e.currentTarget.style.borderColor = '#e5e7eb'}
                     />
                     {nomeValue && (
                       <button
@@ -885,9 +934,15 @@ export default function ContrapartesPage() {
                       {...register('apelido')}
                       value={apelidoValue}
                       onChange={(e) => {
-                        const valor = e.target.value.toUpperCase().slice(0, 20)
+                        const valor = e.target.value.slice(0, 20)
                         setApelidoValue(valor)
                         setValue('apelido', valor)
+                      }}
+                      onBlur={(e) => {
+                        const valorCapitalizado = capitalizarTexto(e.target.value)
+                        setApelidoValue(valorCapitalizado)
+                        setValue('apelido', valorCapitalizado)
+                        e.currentTarget.style.borderColor = '#e5e7eb'
                       }}
                       placeholder="Apelido"
                       maxLength={20}
@@ -898,11 +953,9 @@ export default function ContrapartesPage() {
                         borderRadius: '8px',
                         fontSize: '14px',
                         outline: 'none',
-                        transition: 'border-color 0.2s',
-                        textTransform: 'uppercase'
+                        transition: 'border-color 0.2s'
                       }}
                       onFocus={(e) => e.currentTarget.style.borderColor = '#1555D6'}
-                      onBlur={(e) => e.currentTarget.style.borderColor = '#e5e7eb'}
                     />
                     {apelidoValue && (
                       <button
@@ -1019,7 +1072,7 @@ export default function ContrapartesPage() {
                     color: '#374151',
                     marginBottom: '4px'
                   }}>
-                    {pessoaSelecionada === 'PF' ? 'CPF' : 'CNPJ'}
+                    {pessoaSelecionada === 'PF' ? 'CPF *' : 'CNPJ *'}
                   </label>
                   <div style={{ position: 'relative' }}>
                     <input
@@ -1238,9 +1291,15 @@ export default function ContrapartesPage() {
                     {...register('endereco')}
                     value={enderecoValue}
                     onChange={(e) => {
-                      const valor = e.target.value.toUpperCase().slice(0, 200)
+                      const valor = e.target.value.slice(0, 200)
                       setEnderecoValue(valor)
                       setValue('endereco', valor)
+                    }}
+                    onBlur={(e) => {
+                      const valorCapitalizado = capitalizarTexto(e.target.value)
+                      setEnderecoValue(valorCapitalizado)
+                      setValue('endereco', valorCapitalizado)
+                      e.currentTarget.style.borderColor = '#e5e7eb'
                     }}
                     placeholder="Rua, número, bairro, cidade - UF"
                     maxLength={200}
@@ -1251,11 +1310,9 @@ export default function ContrapartesPage() {
                       borderRadius: '8px',
                       fontSize: '14px',
                       outline: 'none',
-                      transition: 'border-color 0.2s',
-                      textTransform: 'uppercase'
+                      transition: 'border-color 0.2s'
                     }}
                     onFocus={(e) => e.currentTarget.style.borderColor = '#1555D6'}
-                    onBlur={(e) => e.currentTarget.style.borderColor = '#e5e7eb'}
                   />
                   {enderecoValue && (
                     <button
