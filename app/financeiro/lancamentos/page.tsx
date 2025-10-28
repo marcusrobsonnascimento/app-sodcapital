@@ -15,6 +15,7 @@ interface Toast {
   id: number
   message: string
   type: ToastType
+  requiresConfirmation?: boolean
 }
 
 // Types
@@ -68,6 +69,7 @@ interface Retencao {
   id?: string
   imposto: string
   valor: number
+  valorFormatado?: string
   detalhe: string
 }
 
@@ -104,7 +106,32 @@ const formatCurrencyBRL = (value: number): string => {
   return new Intl.NumberFormat('pt-BR', {
     style: 'currency',
     currency: 'BRL'
-  }).valueOf().format(value)
+  }).format(value)
+}
+
+// Função para formatar input (adiciona pontos e vírgula)
+const formatCurrencyInput = (value: string): string => {
+  // Remove tudo exceto números
+  const numbers = value.replace(/\D/g, '')
+  
+  if (!numbers) return ''
+  
+  // Converte para número (centavos)
+  const amount = parseInt(numbers, 10) / 100
+  
+  // Formata para BRL
+  return new Intl.NumberFormat('pt-BR', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(amount)
+}
+
+// Função para parsear valor formatado para número
+const parseCurrencyInput = (value: string): number => {
+  if (!value) return 0
+  // Remove pontos de milhar e substitui vírgula por ponto
+  const cleaned = value.replace(/\./g, '').replace(',', '.')
+  return parseFloat(cleaned) || 0
 }
 
 // Função para formatar data para input date
@@ -116,15 +143,15 @@ const formatDateForInput = (date: string | null): string => {
 const lancamentoSchema = z.object({
   tipo: z.enum(['RECEITA', 'DESPESA'], { required_error: 'Tipo é obrigatório' }),
   empresa_id: z.string().min(1, 'Empresa é obrigatória'),
-  projeto_id: z.string().optional(),
-  banco_conta_id: z.string().optional(),
-  contraparte_id: z.string().optional(),
+  projeto_id: z.string().min(1, 'Projeto é obrigatório'),
+  banco_conta_id: z.string().min(1, 'Conta bancária é obrigatória'),
+  contraparte_id: z.string().min(1, 'Contraparte é obrigatória'),
   tipo_plano_id: z.string().min(1, 'Tipo do plano de contas é obrigatório'),
   grupo_id: z.string().min(1, 'Grupo é obrigatório'),
   categoria_id: z.string().min(1, 'Categoria é obrigatória'),
   subcategoria_id: z.string().min(1, 'Subcategoria é obrigatória'),
-  valor_bruto: z.coerce.number().min(0, 'Valor bruto deve ser maior ou igual a 0'),
-  data_emissao: z.string().optional(),
+  valor_bruto: z.coerce.number().min(0.01, 'Valor bruto é obrigatório'),
+  data_emissao: z.string().min(1, 'Data de emissão é obrigatória'),
   data_vencimento: z.string().min(1, 'Data de vencimento é obrigatória'),
   documento_tipo: z.string().optional(),
   documento_numero: z.string().optional(),
@@ -175,6 +202,7 @@ export default function LancamentosPage() {
   // Retenções
   const [retencoes, setRetencoes] = useState<Retencao[]>([])
   const [valorBruto, setValorBruto] = useState<number>(0)
+  const [valorBrutoFormatado, setValorBrutoFormatado] = useState<string>('')
   const [valorLiquido, setValorLiquido] = useState<number>(0)
 
   const [toasts, setToasts] = useState<Toast[]>([])
@@ -211,6 +239,7 @@ export default function LancamentosPage() {
   })
 
   const selectedEmpresaId = watch('empresa_id')
+  const selectedTipoLancamento = watch('tipo')
   const selectedTipoPlanoId = watch('tipo_plano_id')
   const selectedGrupoId = watch('grupo_id')
   const selectedCategoriaId = watch('categoria_id')
@@ -223,9 +252,36 @@ export default function LancamentosPage() {
     const newToast: Toast = { id, message, type }
     setToasts(prev => [...prev, newToast])
 
+    // Warning dura 2 segundos, outros tipos 3 segundos
+    const duration = type === 'warning' ? 2000 : 3000
+
     setTimeout(() => {
       setToasts(prev => prev.filter(toast => toast.id !== id))
-    }, 3000)
+    }, duration)
+  }
+
+  const showToastCustomDuration = (message: string, type: ToastType, duration: number) => {
+    const id = toastIdCounter
+    setToastIdCounter(prev => prev + 1)
+
+    const newToast: Toast = { id, message, type }
+    setToasts(prev => [...prev, newToast])
+
+    setTimeout(() => {
+      setToasts(prev => prev.filter(toast => toast.id !== id))
+    }, duration)
+  }
+
+  const showToastWithConfirmation = (message: string, type: ToastType) => {
+    const id = toastIdCounter
+    setToastIdCounter(prev => prev + 1)
+
+    const newToast: Toast = { id, message, type, requiresConfirmation: true }
+    setToasts(prev => [...prev, newToast])
+  }
+
+  const dismissToast = (id: number) => {
+    setToasts(prev => prev.filter(toast => toast.id !== id))
   }
 
   const getToastStyles = (type: ToastType) => {
@@ -346,6 +402,20 @@ export default function LancamentosPage() {
     const liquido = Math.max(0, valorBruto - totalRetencoes)
     setValorLiquido(liquido)
   }, [valorBruto, retencoes])
+
+  // Auto-selecionar tipo do plano de contas baseado no tipo do lançamento
+  useEffect(() => {
+    if (selectedTipoLancamento && !isEditing && tipos.length > 0) {
+      // Buscar tipo do plano com nome correspondente
+      const tipoPlano = tipos.find(t => 
+        t.nome.toLowerCase() === (selectedTipoLancamento === 'RECEITA' ? 'receitas' : 'despesas')
+      )
+      
+      if (tipoPlano) {
+        setValue('tipo_plano_id', tipoPlano.id)
+      }
+    }
+  }, [selectedTipoLancamento, tipos, isEditing])
 
   const loadEmpresas = async () => {
     try {
@@ -566,6 +636,29 @@ export default function LancamentosPage() {
 
   const onSubmit = async (data: LancamentoForm) => {
     try {
+      // Validar duplicidade de retenções
+      if (retencoes.length > 0) {
+        const impostos = retencoes.map(r => r.imposto)
+        const impostosUnicos = new Set(impostos)
+        
+        if (impostos.length !== impostosUnicos.size) {
+          // Encontrar qual imposto está duplicado
+          const duplicados: string[] = []
+          impostos.forEach((imposto, index) => {
+            if (impostos.indexOf(imposto) !== index && !duplicados.includes(imposto)) {
+              duplicados.push(imposto)
+            }
+          })
+          
+          const nomesDuplicados = duplicados.join(', ')
+          showToastWithConfirmation(
+            `Não é permitido adicionar retenções duplicadas. Imposto(s) duplicado(s): ${nomesDuplicados}`,
+            'warning'
+          )
+          return
+        }
+      }
+
       const lancamentoData = {
         tipo: data.tipo,
         empresa_id: data.empresa_id,
@@ -661,6 +754,23 @@ export default function LancamentosPage() {
     }
   }
 
+  const onSubmitError = (errors: any) => {
+    // Coletar todas as mensagens de erro
+    const errorMessages: string[] = []
+    
+    Object.keys(errors).forEach((key) => {
+      if (errors[key]?.message) {
+        errorMessages.push(errors[key].message)
+      }
+    })
+
+    // Mostrar um único toast com botão OK
+    if (errorMessages.length > 0) {
+      const message = errorMessages.join(' • ')
+      showToastWithConfirmation(message, 'warning')
+    }
+  }
+
   const handleEdit = async (lancamento: Lancamento) => {
     try {
       setIsEditing(true)
@@ -721,7 +831,14 @@ export default function LancamentosPage() {
       setValue('observacoes', lancamento.observacoes || '')
 
       setValorBruto(lancamento.valor_bruto)
-      setRetencoes(lancamento.retencoes || [])
+      setValorBrutoFormatado(formatCurrencyInput((lancamento.valor_bruto * 100).toString()))
+      
+      // Formatar valores das retenções
+      const retencoesFormatadas = (lancamento.retencoes || []).map(ret => ({
+        ...ret,
+        valorFormatado: formatCurrencyInput((ret.valor * 100).toString())
+      }))
+      setRetencoes(retencoesFormatadas)
 
       await new Promise(resolve => setTimeout(resolve, 50))
       setShowModal(true)
@@ -804,14 +921,19 @@ export default function LancamentosPage() {
     setIsEditing(false)
     setRetencoes([])
     setValorBruto(0)
+    setValorBrutoFormatado('')
     setValorLiquido(0)
+    
+    // Buscar tipo do plano correspondente a "Despesa"
+    const tipoPlanoInicial = tipos.find(t => t.nome.toLowerCase() === 'despesas')
+
     reset({
       tipo: 'DESPESA',
       empresa_id: '',
       projeto_id: '',
       banco_conta_id: '',
       contraparte_id: '',
-      tipo_plano_id: '',
+      tipo_plano_id: tipoPlanoInicial?.id || '',
       grupo_id: '',
       categoria_id: '',
       subcategoria_id: '',
@@ -831,12 +953,13 @@ export default function LancamentosPage() {
     setIsEditing(false)
     setRetencoes([])
     setValorBruto(0)
+    setValorBrutoFormatado('')
     setValorLiquido(0)
     reset()
   }
 
   const addRetencao = () => {
-    setRetencoes([...retencoes, { imposto: 'IRRF', valor: 0, detalhe: '' }])
+    setRetencoes([...retencoes, { imposto: 'IRRF', valor: 0, valorFormatado: '', detalhe: '' }])
   }
 
   const removeRetencao = (index: number) => {
@@ -846,6 +969,16 @@ export default function LancamentosPage() {
   const updateRetencao = (index: number, field: keyof Retencao, value: any) => {
     const updated = [...retencoes]
     updated[index] = { ...updated[index], [field]: value }
+    setRetencoes(updated)
+  }
+
+  const updateRetencaoValor = (index: number, valorFormatado: string) => {
+    const updated = [...retencoes]
+    updated[index] = {
+      ...updated[index],
+      valorFormatado,
+      valor: parseCurrencyInput(valorFormatado)
+    }
     setRetencoes(updated)
   }
 
@@ -1935,7 +2068,7 @@ export default function LancamentosPage() {
               backgroundColor: 'white',
               borderRadius: '12px',
               width: '100%',
-              maxWidth: '900px',
+              maxWidth: '1300px',
               maxHeight: '90vh',
               overflow: 'auto',
               boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
@@ -2000,18 +2133,19 @@ export default function LancamentosPage() {
 
             {/* Body */}
             <div style={{ padding: '18px' }}>
-              <form onSubmit={handleSubmit(onSubmit)}>
-                {/* Grid 2 colunas */}
+              <form onSubmit={handleSubmit(onSubmit, onSubmitError)}>
+                {/* Grid 5 colunas - Linha 1 */}
                 <div style={{
                   display: 'grid',
-                  gridTemplateColumns: '1fr 1fr',
-                  gap: '14px'
+                  gridTemplateColumns: '120px 1fr 1fr 1fr 1fr',
+                  gap: '12px',
+                  marginBottom: '14px'
                 }}>
-                  {/* Tipo */}
-                  <div style={{ marginBottom: '0' }}>
+                  {/* Tipo - Menor */}
+                  <div>
                     <label style={{
                       display: 'block',
-                      fontSize: '14px',
+                      fontSize: '13px',
                       fontWeight: '500',
                       color: '#374151',
                       marginBottom: '6px'
@@ -2022,10 +2156,10 @@ export default function LancamentosPage() {
                       {...register('tipo')}
                       style={{
                         width: '100%',
-                        padding: '10px 12px',
-                        border: `1px solid ${errors.tipo ? '#ef4444' : '#e5e7eb'}`,
+                        padding: '9px 10px',
+                        border: '1px solid #e5e7eb',
                         borderRadius: '8px',
-                        fontSize: '14px',
+                        fontSize: '13px',
                         outline: 'none',
                         cursor: 'pointer'
                       }}
@@ -2034,17 +2168,17 @@ export default function LancamentosPage() {
                       <option value="DESPESA">Despesa</option>
                     </select>
                     {errors.tipo && (
-                      <span style={{ fontSize: '12px', color: '#ef4444', marginTop: '4px', display: 'block' }}>
+                      <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '2px', display: 'block' }}>
                         {errors.tipo.message}
                       </span>
                     )}
                   </div>
 
                   {/* Empresa */}
-                  <div style={{ marginBottom: '0' }}>
+                  <div>
                     <label style={{
                       display: 'block',
-                      fontSize: '14px',
+                      fontSize: '13px',
                       fontWeight: '500',
                       color: '#374151',
                       marginBottom: '6px'
@@ -2055,120 +2189,135 @@ export default function LancamentosPage() {
                       {...register('empresa_id')}
                       style={{
                         width: '100%',
-                        padding: '10px 12px',
-                        border: `1px solid ${errors.empresa_id ? '#ef4444' : '#e5e7eb'}`,
+                        padding: '9px 10px',
+                        border: '1px solid #e5e7eb',
                         borderRadius: '8px',
-                        fontSize: '14px',
+                        fontSize: '13px',
                         outline: 'none',
                         cursor: 'pointer'
                       }}
                     >
-                      <option value="">Selecione uma empresa</option>
+                      <option value="">Selecione</option>
                       {empresas.map((emp) => (
                         <option key={emp.id} value={emp.id}>{emp.nome}</option>
                       ))}
                     </select>
                     {errors.empresa_id && (
-                      <span style={{ fontSize: '12px', color: '#ef4444', marginTop: '4px', display: 'block' }}>
+                      <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '2px', display: 'block' }}>
                         {errors.empresa_id.message}
                       </span>
                     )}
                   </div>
 
                   {/* Projeto */}
-                  <div style={{ marginBottom: '0' }}>
+                  <div>
                     <label style={{
                       display: 'block',
-                      fontSize: '14px',
+                      fontSize: '13px',
                       fontWeight: '500',
                       color: '#374151',
                       marginBottom: '6px'
                     }}>
-                      Projeto
+                      Projeto *
                     </label>
                     <select
                       {...register('projeto_id')}
                       disabled={!selectedEmpresaId}
                       style={{
                         width: '100%',
-                        padding: '10px 12px',
+                        padding: '9px 10px',
                         border: '1px solid #e5e7eb',
                         borderRadius: '8px',
-                        fontSize: '14px',
+                        fontSize: '13px',
                         outline: 'none',
                         cursor: selectedEmpresaId ? 'pointer' : 'not-allowed',
                         opacity: selectedEmpresaId ? 1 : 0.6
                       }}
                     >
-                      <option value="">Nenhum</option>
+                      <option value="">Selecione</option>
                       {projetos.map((proj) => (
                         <option key={proj.id} value={proj.id}>{proj.nome}</option>
                       ))}
                     </select>
+                    {errors.projeto_id && (
+                      <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '2px', display: 'block' }}>
+                        {errors.projeto_id.message}
+                      </span>
+                    )}
                   </div>
 
                   {/* Conta Bancária */}
-                  <div style={{ marginBottom: '0' }}>
+                  <div>
                     <label style={{
                       display: 'block',
-                      fontSize: '14px',
+                      fontSize: '13px',
                       fontWeight: '500',
                       color: '#374151',
                       marginBottom: '6px'
                     }}>
-                      Conta Bancária
+                      Conta Bancária *
                     </label>
                     <select
                       {...register('banco_conta_id')}
                       disabled={!selectedEmpresaId}
                       style={{
                         width: '100%',
-                        padding: '10px 12px',
+                        padding: '9px 10px',
                         border: '1px solid #e5e7eb',
                         borderRadius: '8px',
-                        fontSize: '14px',
+                        fontSize: '13px',
                         outline: 'none',
                         cursor: selectedEmpresaId ? 'pointer' : 'not-allowed',
                         opacity: selectedEmpresaId ? 1 : 0.6
                       }}
                     >
-                      <option value="">Nenhuma</option>
+                      <option value="">Selecione</option>
                       {bancosContas.map((bc) => (
                         <option key={bc.id} value={bc.id}>
                           {bc.banco_nome} - {bc.numero_conta}
                         </option>
                       ))}
                     </select>
+                    {errors.banco_conta_id && (
+                      <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '2px', display: 'block' }}>
+                        {errors.banco_conta_id.message}
+                      </span>
+                    )}
                   </div>
 
                   {/* Contraparte */}
-                  <div style={{ marginBottom: '0', gridColumn: '1 / -1' }}>
+                  <div>
                     <label style={{
                       display: 'block',
-                      fontSize: '14px',
+                      fontSize: '13px',
                       fontWeight: '500',
                       color: '#374151',
                       marginBottom: '6px'
                     }}>
-                      Contraparte
+                      Contraparte *
                     </label>
                     <select
                       {...register('contraparte_id')}
                       style={{
                         width: '100%',
-                        padding: '10px 12px',
+                        padding: '9px 10px',
                         border: '1px solid #e5e7eb',
                         borderRadius: '8px',
-                        fontSize: '14px',
+                        fontSize: '13px',
                         outline: 'none',
                         cursor: 'pointer'
                       }}
                     >
-                      <option value="">Nenhuma</option>
+                      <option value="">Selecione</option>
                       {contrapartes.map((cp) => (
                         <option key={cp.id} value={cp.id}>{cp.nome}</option>
                       ))}
                     </select>
+                    {errors.contraparte_id && (
+                      <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '2px', display: 'block' }}>
+                        {errors.contraparte_id.message}
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -2193,14 +2342,14 @@ export default function LancamentosPage() {
                 <div style={{
                   display: 'grid',
                   gridTemplateColumns: 'repeat(4, 1fr)',
-                  gap: '14px',
+                  gap: '12px',
                   marginBottom: '14px'
                 }}>
                   {/* Tipo Plano */}
                   <div>
                     <label style={{
                       display: 'block',
-                      fontSize: '14px',
+                      fontSize: '13px',
                       fontWeight: '500',
                       color: '#374151',
                       marginBottom: '6px'
@@ -2209,12 +2358,31 @@ export default function LancamentosPage() {
                     </label>
                     <select
                       {...register('tipo_plano_id')}
+                      onChange={(e) => {
+                        const tipoPlanoId = e.target.value
+                        setValue('tipo_plano_id', tipoPlanoId)
+                        
+                        // Sincronizar com o campo Tipo (de cima)
+                        if (tipoPlanoId && tipos.length > 0) {
+                          const tipoPlanoSelecionado = tipos.find(t => t.id === tipoPlanoId)
+                          
+                          if (tipoPlanoSelecionado) {
+                            const nomeTipoPlano = tipoPlanoSelecionado.nome.toLowerCase()
+                            
+                            if (nomeTipoPlano === 'receitas') {
+                              setValue('tipo', 'RECEITA')
+                            } else if (nomeTipoPlano === 'despesas') {
+                              setValue('tipo', 'DESPESA')
+                            }
+                          }
+                        }
+                      }}
                       style={{
                         width: '100%',
-                        padding: '10px 12px',
-                        border: `1px solid ${errors.tipo_plano_id ? '#ef4444' : '#e5e7eb'}`,
+                        padding: '9px 10px',
+                        border: '1px solid #e5e7eb',
                         borderRadius: '8px',
-                        fontSize: '14px',
+                        fontSize: '13px',
                         outline: 'none',
                         cursor: 'pointer'
                       }}
@@ -2235,7 +2403,7 @@ export default function LancamentosPage() {
                   <div>
                     <label style={{
                       display: 'block',
-                      fontSize: '14px',
+                      fontSize: '13px',
                       fontWeight: '500',
                       color: '#374151',
                       marginBottom: '6px'
@@ -2247,10 +2415,10 @@ export default function LancamentosPage() {
                       disabled={!selectedTipoPlanoId}
                       style={{
                         width: '100%',
-                        padding: '10px 12px',
-                        border: `1px solid ${errors.grupo_id ? '#ef4444' : '#e5e7eb'}`,
+                        padding: '9px 10px',
+                        border: '1px solid #e5e7eb',
                         borderRadius: '8px',
-                        fontSize: '14px',
+                        fontSize: '13px',
                         outline: 'none',
                         cursor: selectedTipoPlanoId ? 'pointer' : 'not-allowed',
                         opacity: selectedTipoPlanoId ? 1 : 0.6
@@ -2272,7 +2440,7 @@ export default function LancamentosPage() {
                   <div>
                     <label style={{
                       display: 'block',
-                      fontSize: '14px',
+                      fontSize: '13px',
                       fontWeight: '500',
                       color: '#374151',
                       marginBottom: '6px'
@@ -2284,10 +2452,10 @@ export default function LancamentosPage() {
                       disabled={!selectedGrupoId}
                       style={{
                         width: '100%',
-                        padding: '10px 12px',
-                        border: `1px solid ${errors.categoria_id ? '#ef4444' : '#e5e7eb'}`,
+                        padding: '9px 10px',
+                        border: '1px solid #e5e7eb',
                         borderRadius: '8px',
-                        fontSize: '14px',
+                        fontSize: '13px',
                         outline: 'none',
                         cursor: selectedGrupoId ? 'pointer' : 'not-allowed',
                         opacity: selectedGrupoId ? 1 : 0.6
@@ -2309,7 +2477,7 @@ export default function LancamentosPage() {
                   <div>
                     <label style={{
                       display: 'block',
-                      fontSize: '14px',
+                      fontSize: '13px',
                       fontWeight: '500',
                       color: '#374151',
                       marginBottom: '6px'
@@ -2321,10 +2489,10 @@ export default function LancamentosPage() {
                       disabled={!selectedCategoriaId}
                       style={{
                         width: '100%',
-                        padding: '10px 12px',
-                        border: `1px solid ${errors.subcategoria_id ? '#ef4444' : '#e5e7eb'}`,
+                        padding: '9px 10px',
+                        border: '1px solid #e5e7eb',
                         borderRadius: '8px',
-                        fontSize: '14px',
+                        fontSize: '13px',
                         outline: 'none',
                         cursor: selectedCategoriaId ? 'pointer' : 'not-allowed',
                         opacity: selectedCategoriaId ? 1 : 0.6
@@ -2360,37 +2528,188 @@ export default function LancamentosPage() {
                   </h3>
                 </div>
 
-                {/* Valor Bruto */}
-                <div style={{ marginBottom: '14px' }}>
-                  <label style={{
-                    display: 'block',
-                    fontSize: '14px',
-                    fontWeight: '500',
-                    color: '#374151',
-                    marginBottom: '6px'
+                {/* Seção Unificada: Datas, Documentos e Valores */}
+                <div style={{
+                  borderTop: '1px solid #e5e7eb',
+                  margin: '16px 0',
+                  paddingTop: '16px'
+                }}>
+                  <h3 style={{
+                    fontSize: '16px',
+                    fontWeight: '600',
+                    color: '#1f2937',
+                    marginTop: 0,
+                    marginBottom: '14px'
                   }}>
-                    Valor Bruto *
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={valorBruto}
-                    onChange={(e) => {
-                      const val = parseFloat(e.target.value) || 0
-                      setValorBruto(val)
-                      setValue('valor_bruto', val)
-                    }}
-                    style={{
-                      width: '100%',
-                      padding: '10px 12px',
-                      border: '1px solid #e5e7eb',
-                      borderRadius: '8px',
-                      fontSize: '14px',
-                      outline: 'none'
-                    }}
-                    placeholder="0,00"
-                  />
+                    Datas, Documentos e Valores
+                  </h3>
+                </div>
+
+                {/* Grid 5 colunas: Data Emissão | Data Vencimento | Valor Bruto | Tipo Doc | Num Doc */}
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 1fr 1fr 0.8fr 0.6fr',
+                  gap: '12px',
+                  marginBottom: '14px'
+                }}>
+                  {/* Data Emissão */}
+                  <div>
+                    <label style={{
+                      display: 'block',
+                      fontSize: '13px',
+                      fontWeight: '500',
+                      color: '#374151',
+                      marginBottom: '6px'
+                    }}>
+                      Data Emissão *
+                    </label>
+                    <input
+                      {...register('data_emissao')}
+                      type="date"
+                      style={{
+                        width: '100%',
+                        padding: '9px 10px',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '8px',
+                        fontSize: '13px',
+                        outline: 'none'
+                      }}
+                    />
+                    {errors.data_emissao && (
+                      <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '2px', display: 'block' }}>
+                        {errors.data_emissao.message}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Data Vencimento */}
+                  <div>
+                    <label style={{
+                      display: 'block',
+                      fontSize: '13px',
+                      fontWeight: '500',
+                      color: '#374151',
+                      marginBottom: '6px'
+                    }}>
+                      Data Vencimento *
+                    </label>
+                    <input
+                      {...register('data_vencimento')}
+                      type="date"
+                      style={{
+                        width: '100%',
+                        padding: '9px 10px',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '8px',
+                        fontSize: '13px',
+                        outline: 'none'
+                      }}
+                    />
+                    {errors.data_vencimento && (
+                      <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '2px', display: 'block' }}>
+                        {errors.data_vencimento.message}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Valor Bruto */}
+                  <div>
+                    <label style={{
+                      display: 'block',
+                      fontSize: '13px',
+                      fontWeight: '500',
+                      color: '#374151',
+                      marginBottom: '6px'
+                    }}>
+                      Valor Bruto *
+                    </label>
+                    <div style={{ position: 'relative' }}>
+                      <span style={{
+                        position: 'absolute',
+                        left: '10px',
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        fontSize: '13px',
+                        color: '#6b7280',
+                        fontWeight: '500'
+                      }}>
+                        R$
+                      </span>
+                      <input
+                        type="text"
+                        value={valorBrutoFormatado}
+                        onChange={(e) => {
+                          const formatted = formatCurrencyInput(e.target.value)
+                          setValorBrutoFormatado(formatted)
+                          const numericValue = parseCurrencyInput(formatted)
+                          setValorBruto(numericValue)
+                          setValue('valor_bruto', numericValue)
+                        }}
+                        style={{
+                          width: '100%',
+                          padding: '9px 10px 9px 32px',
+                          border: '1px solid #e5e7eb',
+                          borderRadius: '8px',
+                          fontSize: '13px',
+                          outline: 'none',
+                          textAlign: 'right'
+                        }}
+                        placeholder="0,00"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Tipo Documento */}
+                  <div>
+                    <label style={{
+                      display: 'block',
+                      fontSize: '13px',
+                      fontWeight: '500',
+                      color: '#374151',
+                      marginBottom: '6px'
+                    }}>
+                      Tipo Doc
+                    </label>
+                    <input
+                      {...register('documento_tipo')}
+                      type="text"
+                      placeholder="NF, Boleto..."
+                      style={{
+                        width: '100%',
+                        padding: '9px 10px',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '8px',
+                        fontSize: '13px',
+                        outline: 'none'
+                      }}
+                    />
+                  </div>
+
+                  {/* Número Documento */}
+                  <div>
+                    <label style={{
+                      display: 'block',
+                      fontSize: '13px',
+                      fontWeight: '500',
+                      color: '#374151',
+                      marginBottom: '6px'
+                    }}>
+                      Nº Doc
+                    </label>
+                    <input
+                      {...register('documento_numero')}
+                      type="text"
+                      placeholder="123456"
+                      style={{
+                        width: '100%',
+                        padding: '9px 10px',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '8px',
+                        fontSize: '13px',
+                        outline: 'none'
+                      }}
+                    />
+                  </div>
                 </div>
 
                 {/* Retenções */}
@@ -2468,12 +2787,13 @@ export default function LancamentosPage() {
                           </select>
 
                           <input
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            value={ret.valor || ''}
-                            onChange={(e) => updateRetencao(index, 'valor', parseFloat(e.target.value) || 0)}
-                            placeholder="Valor"
+                            type="text"
+                            value={ret.valorFormatado || ''}
+                            onChange={(e) => {
+                              const formatted = formatCurrencyInput(e.target.value)
+                              updateRetencaoValor(index, formatted)
+                            }}
+                            placeholder="0,00"
                             style={{
                               padding: '8px',
                               border: '1px solid #e5e7eb',
@@ -2556,135 +2876,6 @@ export default function LancamentosPage() {
                       {formatCurrencyBRL(valorLiquido)}
                     </span>
                   </div>
-                </div>
-
-                {/* Separador Datas */}
-                <div style={{
-                  borderTop: '1px solid #e5e7eb',
-                  margin: '16px 0',
-                  paddingTop: '16px'
-                }}>
-                  <h3 style={{
-                    fontSize: '16px',
-                    fontWeight: '600',
-                    color: '#1f2937',
-                    marginTop: 0,
-                    marginBottom: '14px'
-                  }}>
-                    Datas e Documentos
-                  </h3>
-                </div>
-
-                {/* Datas - Grid 3 colunas */}
-                <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(3, 1fr)',
-                  gap: '14px',
-                  marginBottom: '14px'
-                }}>
-                  <div>
-                    <label style={{
-                      display: 'block',
-                      fontSize: '14px',
-                      fontWeight: '500',
-                      color: '#374151',
-                      marginBottom: '6px'
-                    }}>
-                      Data Emissão
-                    </label>
-                    <input
-                      {...register('data_emissao')}
-                      type="date"
-                      style={{
-                        width: '100%',
-                        padding: '10px 12px',
-                        border: '1px solid #e5e7eb',
-                        borderRadius: '8px',
-                        fontSize: '14px',
-                        outline: 'none'
-                      }}
-                    />
-                  </div>
-
-                  <div>
-                    <label style={{
-                      display: 'block',
-                      fontSize: '14px',
-                      fontWeight: '500',
-                      color: '#374151',
-                      marginBottom: '6px'
-                    }}>
-                      Data Vencimento *
-                    </label>
-                    <input
-                      {...register('data_vencimento')}
-                      type="date"
-                      style={{
-                        width: '100%',
-                        padding: '10px 12px',
-                        border: `1px solid ${errors.data_vencimento ? '#ef4444' : '#e5e7eb'}`,
-                        borderRadius: '8px',
-                        fontSize: '14px',
-                        outline: 'none'
-                      }}
-                    />
-                    {errors.data_vencimento && (
-                      <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '2px', display: 'block' }}>
-                        {errors.data_vencimento.message}
-                      </span>
-                    )}
-                  </div>
-
-                  <div>
-                    <label style={{
-                      display: 'block',
-                      fontSize: '14px',
-                      fontWeight: '500',
-                      color: '#374151',
-                      marginBottom: '6px'
-                    }}>
-                      Tipo Documento
-                    </label>
-                    <input
-                      {...register('documento_tipo')}
-                      type="text"
-                      placeholder="Ex: NF, Boleto, Recibo"
-                      style={{
-                        width: '100%',
-                        padding: '10px 12px',
-                        border: '1px solid #e5e7eb',
-                        borderRadius: '8px',
-                        fontSize: '14px',
-                        outline: 'none'
-                      }}
-                    />
-                  </div>
-                </div>
-
-                {/* Documento Número */}
-                <div style={{ marginBottom: '14px' }}>
-                  <label style={{
-                    display: 'block',
-                    fontSize: '14px',
-                    fontWeight: '500',
-                    color: '#374151',
-                    marginBottom: '6px'
-                  }}>
-                    Número Documento
-                  </label>
-                  <input
-                    {...register('documento_numero')}
-                    type="text"
-                    placeholder="Ex: 123456"
-                    style={{
-                      width: '100%',
-                      padding: '10px 12px',
-                      border: '1px solid #e5e7eb',
-                      borderRadius: '8px',
-                      fontSize: '14px',
-                      outline: 'none'
-                    }}
-                  />
                 </div>
 
                 {/* Observações */}
@@ -2787,25 +2978,58 @@ export default function LancamentosPage() {
               style={{
                 backgroundColor: 'white',
                 borderTop: `4px solid ${borderColor}`,
-                padding: '16px 20px',
+                padding: toast.requiresConfirmation ? '20px' : '16px 20px',
                 borderRadius: '12px',
                 boxShadow: '0 10px 25px rgba(0, 0, 0, 0.15)',
                 display: 'flex',
-                alignItems: 'center',
-                gap: '12px',
-                minWidth: '300px',
-                animation: 'scaleIn 0.3s ease-out'
+                flexDirection: toast.requiresConfirmation ? 'column' : 'row',
+                alignItems: toast.requiresConfirmation ? 'stretch' : 'center',
+                gap: toast.requiresConfirmation ? '16px' : '12px',
+                minWidth: '400px',
+                maxWidth: '600px',
+                animation: 'scaleIn 0.3s ease-out',
+                pointerEvents: toast.requiresConfirmation ? 'auto' : 'none'
               }}
             >
-              <Icon style={{ width: '24px', height: '24px', flexShrink: 0, color: iconColor }} />
-              <span style={{
-                fontSize: '14px',
-                fontWeight: '500',
-                flex: 1,
-                color: '#374151'
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px'
               }}>
-                {toast.message}
-              </span>
+                <Icon style={{ width: '24px', height: '24px', flexShrink: 0, color: iconColor }} />
+                <span style={{
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  flex: 1,
+                  color: '#374151',
+                  lineHeight: '1.5'
+                }}>
+                  {toast.message}
+                </span>
+              </div>
+              
+              {toast.requiresConfirmation && (
+                <button
+                  onClick={() => dismissToast(toast.id)}
+                  style={{
+                    padding: '10px 24px',
+                    backgroundColor: '#1555D6',
+                    border: 'none',
+                    borderRadius: '8px',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    color: 'white',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s',
+                    alignSelf: 'center',
+                    minWidth: '100px'
+                  }}
+                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#1044b5'}
+                  onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#1555D6'}
+                >
+                  OK
+                </button>
+              )}
             </div>
           )
         })}
