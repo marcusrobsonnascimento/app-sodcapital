@@ -92,13 +92,19 @@ export default function BancosPage() {
     try {
       const { data, error } = await supabase
         .from('bancos')
-        .select('*')
+        .select('*', { count: 'exact' })
         .order('codigo', { ascending: true })
 
-      if (error) throw error
+      if (error) {
+        console.error('Erro ao carregar bancos:', error)
+        showToast(`Erro: ${error.message}`, 'error')
+        throw error
+      }
+
       setBancos(data || [])
-    } catch (err) {
-      console.error('Erro ao carregar bancos:', err)
+      
+    } catch (err: any) {
+      console.error('Erro na função loadBancos:', err)
       showToast('Erro ao carregar bancos', 'error')
     } finally {
       setLoading(false)
@@ -114,13 +120,10 @@ export default function BancosPage() {
           .eq('id', editingId)
 
         if (error) {
-          console.error('Erro detalhado ao atualizar:', error)
-          
           if (error.code === '23505' && error.message.includes('bancos_org_id_codigo_key')) {
             showToast('Já existe um banco com este código', 'warning')
             return
           }
-          
           throw new Error(`Erro ao atualizar banco: ${error.message}`)
         }
         showToast('Banco atualizado com sucesso!', 'success')
@@ -130,13 +133,10 @@ export default function BancosPage() {
           .insert([data])
 
         if (error) {
-          console.error('Erro detalhado ao criar:', error)
-          
           if (error.code === '23505' && error.message.includes('bancos_org_id_codigo_key')) {
             showToast('Já existe um banco com este código', 'warning')
             return
           }
-          
           throw new Error(`Erro ao criar banco: ${error.message}`)
         }
         showToast('Banco criado com sucesso!', 'success')
@@ -217,7 +217,9 @@ export default function BancosPage() {
         alignItems: 'center',
         justifyContent: 'center',
         height: '100%',
-        minHeight: '400px'
+        minHeight: '400px',
+        flexDirection: 'column',
+        gap: '16px'
       }}>
         <div style={{
           width: '48px',
@@ -227,6 +229,9 @@ export default function BancosPage() {
           borderRadius: '50%',
           animation: 'spin 1s linear infinite'
         }}></div>
+        <div style={{ fontSize: '14px', color: '#6b7280' }}>
+          Carregando bancos...
+        </div>
       </div>
     )
   }
@@ -391,7 +396,19 @@ export default function BancosPage() {
                     color: '#9ca3af',
                     fontSize: '14px'
                   }}>
-                    Nenhum banco encontrado
+                    {bancos.length === 0 ? (
+                      <div>
+                        <div style={{ fontSize: '48px', marginBottom: '16px' }}>🏦</div>
+                        <div style={{ fontWeight: '600', marginBottom: '8px' }}>Nenhum banco cadastrado</div>
+                        <div style={{ fontSize: '13px' }}>Clique em "Novo Banco" para começar</div>
+                      </div>
+                    ) : (
+                      <div>
+                        <div style={{ fontSize: '48px', marginBottom: '16px' }}>🔍</div>
+                        <div style={{ fontWeight: '600', marginBottom: '8px' }}>Nenhum banco encontrado</div>
+                        <div style={{ fontSize: '13px' }}>Tente buscar com outros termos</div>
+                      </div>
+                    )}
                   </td>
                 </tr>
               ) : (

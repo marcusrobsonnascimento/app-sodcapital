@@ -275,11 +275,11 @@ export default function FluxoCaixaPage() {
       // 1. Carregar saldo inicial
       await loadSaldoInicial()
       
-      // 2. Carregar lançamentos do período
-      await loadAgenda()
+      // 2. Carregar lançamentos do período e retornar dados
+      const agendaData = await loadAgenda()
       
-      // 3. Calcular horizontes
-      await calcularHorizontes()
+      // 3. Calcular horizontes COM OS DADOS RETORNADOS
+      calcularHorizontes(agendaData)
 
     } catch (err) {
       console.error('Erro ao carregar fluxo de caixa:', err)
@@ -324,7 +324,8 @@ export default function FluxoCaixaPage() {
     }
   }
 
-  const loadAgenda = async () => {
+  // ✅ CORRIGIDO: Agora retorna Promise<AgendaItem[]>
+  const loadAgenda = async (): Promise<AgendaItem[]> => {
     try {
       // Query base
       let query = supabase
@@ -384,6 +385,8 @@ export default function FluxoCaixaPage() {
       // Filtrar lançamentos pelo período
       const agendaItems: AgendaItem[] = []
       const saldosDiariosMap = new Map<string, { entradas: number, saidas: number }>()
+      const breakdownSubcategoriasTemp: BreakdownItem[] = []
+      const breakdownContrapartesTemp: BreakdownItem[] = []
 
       lancamentos?.forEach(lanc => {
         // Determinar data de referência
@@ -431,20 +434,20 @@ export default function FluxoCaixaPage() {
 
         // Breakdown por subcategoria
         const subNome = subcategoria?.nome || 'Não classificado'
-        const subIndex = breakdownSubcategorias.findIndex(b => b.nome === subNome)
+        const subIndex = breakdownSubcategoriasTemp.findIndex(b => b.nome === subNome)
         if (subIndex >= 0) {
-          breakdownSubcategorias[subIndex].valor += Math.abs(valor)
+          breakdownSubcategoriasTemp[subIndex].valor += Math.abs(valor)
         } else {
-          breakdownSubcategorias.push({ nome: subNome, valor: Math.abs(valor), percentual: 0 })
+          breakdownSubcategoriasTemp.push({ nome: subNome, valor: Math.abs(valor), percentual: 0 })
         }
 
         // Breakdown por contraparte
         const contraparteNome = contraparte?.nome || 'Não informado'
-        const contraparteIndex = breakdownContrapartes.findIndex(b => b.nome === contraparteNome)
+        const contraparteIndex = breakdownContrapartesTemp.findIndex(b => b.nome === contraparteNome)
         if (contraparteIndex >= 0) {
-          breakdownContrapartes[contraparteIndex].valor += Math.abs(valor)
+          breakdownContrapartesTemp[contraparteIndex].valor += Math.abs(valor)
         } else {
-          breakdownContrapartes.push({ nome: contraparteNome, valor: Math.abs(valor), percentual: 0 })
+          breakdownContrapartesTemp.push({ nome: contraparteNome, valor: Math.abs(valor), percentual: 0 })
         }
       })
 
@@ -490,28 +493,33 @@ export default function FluxoCaixaPage() {
       setSaldoProjetado(saldoInicial + totalEntradas - totalSaidas)
 
       // Calcular percentuais dos breakdowns
-      const totalBreakdown = breakdownSubcategorias.reduce((sum, b) => sum + b.valor, 0)
-      breakdownSubcategorias.forEach(b => {
+      const totalBreakdown = breakdownSubcategoriasTemp.reduce((sum, b) => sum + b.valor, 0)
+      breakdownSubcategoriasTemp.forEach(b => {
         b.percentual = totalBreakdown > 0 ? (b.valor / totalBreakdown) * 100 : 0
       })
-      breakdownSubcategorias.sort((a, b) => b.valor - a.valor)
-      setBreakdownSubcategorias([...breakdownSubcategorias.slice(0, 10)])
+      breakdownSubcategoriasTemp.sort((a, b) => b.valor - a.valor)
+      setBreakdownSubcategorias([...breakdownSubcategoriasTemp.slice(0, 10)])
 
-      const totalContrapartes = breakdownContrapartes.reduce((sum, b) => sum + b.valor, 0)
-      breakdownContrapartes.forEach(b => {
+      const totalContrapartes = breakdownContrapartesTemp.reduce((sum, b) => sum + b.valor, 0)
+      breakdownContrapartesTemp.forEach(b => {
         b.percentual = totalContrapartes > 0 ? (b.valor / totalContrapartes) * 100 : 0
       })
-      breakdownContrapartes.sort((a, b) => b.valor - a.valor)
-      setBreakdownContrapartes([...breakdownContrapartes.slice(0, 10)])
+      breakdownContrapartesTemp.sort((a, b) => b.valor - a.valor)
+      setBreakdownContrapartes([...breakdownContrapartesTemp.slice(0, 10)])
+
+      // ✅ RETORNAR os dados calculados
+      return agendaItems
 
     } catch (err) {
       console.error('Erro ao carregar agenda:', err)
       setAgenda([])
       setSaldosDiarios([])
+      return []
     }
   }
 
-  const calcularHorizontes = async () => {
+  // ✅ CORRIGIDO: Agora recebe agendaData como parâmetro
+  const calcularHorizontes = (agendaData: AgendaItem[]) => {
     const hoje = new Date()
     const horizontesDias = [7, 30, 60, 90, 180]
     const horiz: {[key: number]: { entradas: number, saidas: number, liquido: number }} = {}
@@ -519,8 +527,8 @@ export default function FluxoCaixaPage() {
     for (const dias of horizontesDias) {
       const fimHorizonte = getDateString(addDays(hoje, dias))
       
-      // Filtrar agenda para este horizonte
-      const lancamentosHorizonte = agenda.filter(a => {
+      // ✅ USAR agendaData passado como parâmetro, não o estado
+      const lancamentosHorizonte = agendaData.filter(a => {
         return a.data >= getDateString(hoje) && a.data <= fimHorizonte
       })
 
