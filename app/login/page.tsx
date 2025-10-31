@@ -2,319 +2,133 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import Link from 'next/link'
 import { supabase } from '@/lib/supabaseClient'
-import { Eye, EyeOff } from 'lucide-react'
 
 export default function LoginPage() {
   const router = useRouter()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [logoError, setLogoError] = useState(false)
 
-  const handleLogin = async (event: React.FormEvent) => {
-    event.preventDefault()
-    setError('')
-    setLoading(true)
-
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault()
+    
     try {
+      setLoading(true)
+      setError('')
+
       const { data, error: signInError } = await supabase.auth.signInWithPassword({
         email,
         password
       })
 
-      if (signInError) {
-        throw signInError
-      }
+      if (signInError) throw signInError
 
-      if (data.user) {
-        router.push('/')
+      if (data.session) {
+        router.push('/dashboard')
       }
     } catch (err: any) {
-      setError(err.message || 'Credenciais inválidas')
+      setError(err.message || 'Erro ao fazer login')
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div 
-      style={{
-        minHeight: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: '#f3f4f6',
-        padding: '2rem'
-      }}
-    >
-      <div 
-        style={{
-          width: '100%',
-          maxWidth: '480px',
-          backgroundColor: '#ffffff',
-          borderRadius: '16px',
-          boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
-          padding: '3rem 2.5rem',
-        }}
-      >
-        {/* Logo e Título */}
-        <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-          {/* Logo - tenta carregar imagem, se falhar usa texto */}
-          {!logoError ? (
-            <div style={{ marginBottom: '1rem' }}>
-              <img 
-                src="/sodcapital-logo.png" 
-                alt="SodCapital"
-                onError={() => setLogoError(true)}
-                style={{
-                  height: '60px',
-                  width: 'auto',
-                  margin: '0 auto',
-                  display: 'block'
-                }}
-              />
-            </div>
-          ) : (
-            <h1 
-              style={{
-                fontSize: '2rem',
-                fontWeight: '700',
-                color: '#1555D6',
-                marginBottom: '0.5rem',
-                letterSpacing: '0.5px'
-              }}
-            >
-              SODCAPITAL
-            </h1>
-          )}
-          
-          <p 
-            style={{
-              fontSize: '0.95rem',
-              color: '#6b7280',
-              fontWeight: '400'
-            }}
-          >
-            Sistema de Gestão Financeira
-          </p>
-        </div>
+    <div style={{ 
+      minHeight: '100vh', 
+      display: 'flex', 
+      alignItems: 'center', 
+      justifyContent: 'center',
+      backgroundColor: '#f3f4f6'
+    }}>
+      <div style={{
+        backgroundColor: 'white',
+        padding: '40px',
+        borderRadius: '10px',
+        boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+        width: '100%',
+        maxWidth: '400px'
+      }}>
+        <h1 style={{ fontSize: '28px', fontWeight: 'bold', marginBottom: '10px', textAlign: 'center' }}>
+          SodCapital
+        </h1>
+        <p style={{ color: '#6B7280', textAlign: 'center', marginBottom: '30px' }}>
+          Sistema Financeiro
+        </p>
 
-        {/* Formulário */}
+        {error && (
+          <div style={{
+            backgroundColor: '#FEE2E2',
+            border: '1px solid #EF4444',
+            color: '#991B1B',
+            padding: '12px',
+            borderRadius: '8px',
+            marginBottom: '20px',
+            fontSize: '14px'
+          }}>
+            {error}
+          </div>
+        )}
+
         <form onSubmit={handleLogin}>
-          {/* Mensagem de Erro */}
-          {error && (
-            <div 
-              style={{
-                backgroundColor: '#fef2f2',
-                border: '1px solid #fecaca',
-                borderRadius: '8px',
-                padding: '0.75rem 1rem',
-                marginBottom: '1.5rem'
-              }}
-            >
-              <p style={{ fontSize: '0.875rem', color: '#dc2626', margin: 0, textAlign: 'center' }}>
-                {error}
-              </p>
-            </div>
-          )}
-
-          {/* Campo E-mail */}
-          <div style={{ marginBottom: '1.25rem' }}>
-            <label 
-              htmlFor="email"
-              style={{
-                display: 'block',
-                fontSize: '0.875rem',
-                fontWeight: '600',
-                color: '#374151',
-                marginBottom: '0.5rem'
-              }}
-            >
-              E-mail
+          <div style={{ marginBottom: '20px' }}>
+            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>
+              Email
             </label>
             <input
-              id="email"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="seu@email.com"
               required
               style={{
                 width: '100%',
-                padding: '0.75rem 1rem',
-                fontSize: '0.95rem',
-                border: '1px solid #d1d5db',
-                borderRadius: '8px',
-                backgroundColor: '#ffffff',
-                color: '#111827',
-                outline: 'none',
-                transition: 'all 0.2s',
-                boxSizing: 'border-box'
-              }}
-              onFocus={(e) => {
-                e.target.style.borderColor = '#1555D6'
-                e.target.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
-              }}
-              onBlur={(e) => {
-                e.target.style.borderColor = '#d1d5db'
-                e.target.style.boxShadow = 'none'
+                padding: '10px',
+                border: '1px solid #D1D5DB',
+                borderRadius: '6px',
+                fontSize: '14px'
               }}
             />
           </div>
 
-          {/* Campo Senha */}
-          <div style={{ marginBottom: '1rem' }}>
-            <label 
-              htmlFor="password"
-              style={{
-                display: 'block',
-                fontSize: '0.875rem',
-                fontWeight: '600',
-                color: '#374151',
-                marginBottom: '0.5rem'
-              }}
-            >
+          <div style={{ marginBottom: '24px' }}>
+            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>
               Senha
             </label>
-            <div style={{ position: 'relative' }}>
-              <input
-                id="password"
-                type={showPassword ? 'text' : 'password'}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                required
-                style={{
-                  width: '100%',
-                  padding: '0.75rem 1rem',
-                  paddingRight: '3rem',
-                  fontSize: '0.95rem',
-                  border: '1px solid #d1d5db',
-                  borderRadius: '8px',
-                  backgroundColor: '#ffffff',
-                  color: '#111827',
-                  outline: 'none',
-                  transition: 'all 0.2s',
-                  boxSizing: 'border-box'
-                }}
-                onFocus={(e) => {
-                  e.target.style.borderColor = '#1555D6'
-                  e.target.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
-                }}
-                onBlur={(e) => {
-                  e.target.style.borderColor = '#d1d5db'
-                  e.target.style.boxShadow = 'none'
-                }}
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                style={{
-                  position: 'absolute',
-                  right: '0.75rem',
-                  top: '50%',
-                  transform: 'translateY(-50%)',
-                  background: 'none',
-                  border: 'none',
-                  cursor: 'pointer',
-                  color: '#9ca3af',
-                  padding: '0.25rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center'
-                }}
-              >
-                {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
-              </button>
-            </div>
-          </div>
-
-          {/* Link Esqueceu Senha */}
-          <div style={{ textAlign: 'right', marginBottom: '1.5rem' }}>
-            <Link
-              href="/reset"
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
               style={{
-                fontSize: '0.875rem',
-                color: '#1555D6',
-                textDecoration: 'none',
-                fontWeight: '500'
+                width: '100%',
+                padding: '10px',
+                border: '1px solid #D1D5DB',
+                borderRadius: '6px',
+                fontSize: '14px'
               }}
-              onMouseEnter={(e) => e.currentTarget.style.color = '#0B2A6B'}
-              onMouseLeave={(e) => e.currentTarget.style.color = '#1555D6'}
-            >
-              Esqueceu sua senha?
-            </Link>
+            />
           </div>
 
-          {/* Botão Entrar */}
           <button
             type="submit"
             disabled={loading}
             style={{
               width: '100%',
-              padding: '0.875rem 1.5rem',
-              fontSize: '0.95rem',
-              fontWeight: '600',
-              color: '#ffffff',
-              backgroundColor: loading ? '#93c5fd' : '#1555D6',
+              backgroundColor: loading ? '#9CA3AF' : '#3B82F6',
+              color: 'white',
+              padding: '12px',
+              borderRadius: '6px',
+              fontSize: '16px',
+              fontWeight: '500',
               border: 'none',
-              borderRadius: '8px',
-              cursor: loading ? 'not-allowed' : 'pointer',
-              transition: 'all 0.2s',
-              marginBottom: '1.5rem'
-            }}
-            onMouseEnter={(e) => {
-              if (!loading) {
-                e.currentTarget.style.backgroundColor = '#0B2A6B'
-                e.currentTarget.style.transform = 'translateY(-1px)'
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (!loading) {
-                e.currentTarget.style.backgroundColor = '#1555D6'
-                e.currentTarget.style.transform = 'translateY(0)'
-              }
+              cursor: loading ? 'not-allowed' : 'pointer'
             }}
           >
             {loading ? 'Entrando...' : 'Entrar'}
           </button>
-
-          {/* Box de Exemplo */}
-          <div 
-            style={{
-              backgroundColor: '#f9fafb',
-              border: '1px solid #e5e7eb',
-              borderRadius: '8px',
-              padding: '1rem',
-            }}
-          >
-            <p style={{ fontSize: '0.8rem', color: '#6b7280', margin: '0 0 0.5rem 0', fontWeight: '600' }}>
-              Exemplo:
-            </p>
-            <p style={{ fontSize: '0.8rem', color: '#6b7280', margin: '0.25rem 0' }}>
-              E-mail: <span style={{ fontWeight: '500' }}>seu@email.com</span>
-            </p>
-            <p style={{ fontSize: '0.8rem', color: '#6b7280', margin: '0.25rem 0' }}>
-              Senha: <span style={{ fontWeight: '500' }}>admin123</span>
-            </p>
-          </div>
         </form>
-
-        {/* Footer */}
-        <p 
-          style={{
-            marginTop: '2rem',
-            textAlign: 'center',
-            fontSize: '0.75rem',
-            color: '#9ca3af'
-          }}
-        >
-          © {new Date().getFullYear()} SodCapital. Todos os direitos reservados.
-        </p>
       </div>
     </div>
   )
