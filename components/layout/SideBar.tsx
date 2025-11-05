@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import Image from 'next/image'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
@@ -19,7 +20,8 @@ import {
   FileSignature,
   ChevronDown,
   ChevronRight,
-  Landmark
+  Landmark,
+  ListTree
 } from 'lucide-react'
 
 type MenuItem = {
@@ -41,19 +43,10 @@ const menuItems: MenuItem[] = [
     children: [
       { title: 'Empresas', icon: Building2, href: '/cadastros/empresas' },
       { title: 'Projetos', icon: FolderKanban, href: '/cadastros/projetos' },
+      { title: 'Plano de Contas', icon: ListTree, href: '/cadastros/plano-contas' },
       { title: 'Bancos', icon: Landmark, href: '/cadastros/bancos' },
       { title: 'Contas Bancárias', icon: CreditCard, href: '/cadastros/bancos-contas' },
       { title: 'Contrapartes', icon: Users, href: '/cadastros/contrapartes' }
-    ]
-  },
-  {
-    title: 'Plano de Contas',
-    icon: FileText,
-    children: [
-      { title: 'Tipos', icon: FileText, href: '/planodecontas/tipos' },
-      { title: 'Grupos', icon: FileText, href: '/planodecontas/grupos' },
-      { title: 'Categorias', icon: FileText, href: '/planodecontas/categorias' },
-      { title: 'Subcategorias', icon: FileText, href: '/planodecontas/subcategorias' }
     ]
   },
   {
@@ -231,22 +224,21 @@ export default function SideBar() {
             borderBottom: '1px solid #f3f4f6'
           }}
         >
-          <h1 
-            style={{
-              fontSize: '1.5rem',
-              fontWeight: '700',
-              color: '#1555D6',
-              marginBottom: '0.25rem',
-              letterSpacing: '0.3px'
-            }}
-          >
-            SODCAPITAL
-          </h1>
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '0.25rem' }}>
+            <Image
+              src="/sodcapital-logo.png"
+              alt="SodCapital"
+              width={150}
+              height={45}
+              priority
+            />
+          </div>
           <p 
             style={{ 
               fontSize: '0.75rem',
               color: '#6b7280',
-              fontWeight: '500'
+              fontWeight: '500',
+              textAlign: 'center'
             }}
           >
             ERP Financeiro
@@ -298,7 +290,6 @@ export default function SideBar() {
           }
         }
 
-        /* Scrollbar customizada para o menu */
         #sidebar-nav::-webkit-scrollbar {
           width: 6px;
         }

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Image from 'next/image'
 import { useRouter, usePathname } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
 import SideBar from './SideBar'
@@ -56,17 +57,15 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
       >
         {/* Logo ou nome */}
         <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
-          <h1 
-            style={{
-              fontSize: '2rem',
-              fontWeight: '700',
-              color: '#1555D6',
-              letterSpacing: '0.5px',
-              marginBottom: '0.5rem'
-            }}
-          >
-            SODCAPITAL
-          </h1>
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '0.5rem' }}>
+            <Image
+              src="/sodcapital-logo.png"
+              alt="SodCapital"
+              width={160}
+              height={48}
+              priority
+            />
+          </div>
           <p style={{ fontSize: '0.875rem', color: '#6b7280' }}>
             Carregando sistema...
           </p>

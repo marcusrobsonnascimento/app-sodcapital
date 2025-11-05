@@ -78,6 +78,9 @@ export default function EmpresasPage() {
   const [empresas, setEmpresas] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
+  const [showDeleteModal, setShowDeleteModal] = useState(false)
+  const [deleteId, setDeleteId] = useState<string | null>(null)
+  const [deletingEmpresa, setDeletingEmpresa] = useState<any>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [toasts, setToasts] = useState<Toast[]>([])
@@ -239,21 +242,35 @@ export default function EmpresasPage() {
     setShowModal(true)
   }
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Tem certeza que deseja excluir esta empresa?')) return
+  const openDeleteModal = (empresa: any) => {
+    setDeleteId(empresa.id)
+    setDeletingEmpresa(empresa)
+    setShowDeleteModal(true)
+  }
+
+  const closeDeleteModal = () => {
+    setShowDeleteModal(false)
+    setDeleteId(null)
+    setDeletingEmpresa(null)
+  }
+
+  const confirmDelete = async () => {
+    if (!deleteId) return
 
     try {
       const { error } = await supabase
         .from('empresas')
         .delete()
-        .eq('id', id)
+        .eq('id', deleteId)
 
       if (error) throw error
       showToast('Empresa excluída com sucesso!', 'success')
       loadEmpresas()
+      closeDeleteModal()
     } catch (err) {
       console.error('Erro ao excluir empresa:', err)
       showToast('Erro ao excluir empresa', 'error')
+      closeDeleteModal()
     }
   }
 
@@ -572,7 +589,7 @@ export default function EmpresasPage() {
                           <Pencil style={{ width: '16px', height: '16px', color: '#6b7280' }} />
                         </button>
                         <button
-                          onClick={() => handleDelete(empresa.id)}
+                          onClick={() => openDeleteModal(empresa)}
                           style={{
                             padding: '8px',
                             backgroundColor: 'transparent',
@@ -596,7 +613,7 @@ export default function EmpresasPage() {
         </div>
       </div>
 
-      {/* Modal */}
+      {/* Modal de Edição/Criação */}
       {showModal && (
         <div
           style={{
@@ -944,6 +961,140 @@ export default function EmpresasPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Confirmação de Exclusão */}
+      {showDeleteModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 50,
+            backdropFilter: 'blur(4px)'
+          }}
+          onClick={closeDeleteModal}
+        >
+          <div
+            style={{
+              backgroundColor: 'white',
+              borderRadius: '16px',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+              padding: '32px',
+              width: '100%',
+              maxWidth: '450px',
+              margin: '16px',
+              animation: 'scaleIn 0.2s ease-out'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Ícone de Aviso */}
+            <div style={{
+              width: '56px',
+              height: '56px',
+              margin: '0 auto 20px',
+              borderRadius: '50%',
+              backgroundColor: '#fee2e2',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}>
+              <AlertTriangle style={{ width: '28px', height: '28px', color: '#dc2626' }} />
+            </div>
+
+            {/* Título */}
+            <h2 style={{
+              fontSize: '20px',
+              fontWeight: '700',
+              color: '#111827',
+              marginBottom: '12px',
+              textAlign: 'center'
+            }}>
+              Excluir Empresa
+            </h2>
+
+            {/* Mensagem */}
+            <p style={{
+              fontSize: '14px',
+              color: '#6b7280',
+              textAlign: 'center',
+              marginBottom: '8px',
+              lineHeight: '1.5'
+            }}>
+              Tem certeza que deseja excluir a empresa
+            </p>
+            
+            {deletingEmpresa && (
+              <p style={{
+                fontSize: '15px',
+                fontWeight: '600',
+                color: '#111827',
+                textAlign: 'center',
+                marginBottom: '24px'
+              }}>
+                {deletingEmpresa.nome}?
+              </p>
+            )}
+
+            <p style={{
+              fontSize: '13px',
+              color: '#ef4444',
+              textAlign: 'center',
+              marginBottom: '24px',
+              fontWeight: '500'
+            }}>
+              Esta ação não pode ser desfeita.
+            </p>
+
+            {/* Botões */}
+            <div style={{
+              display: 'flex',
+              gap: '12px'
+            }}>
+              <button
+                onClick={closeDeleteModal}
+                style={{
+                  flex: 1,
+                  padding: '12px 24px',
+                  backgroundColor: 'white',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: '8px',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  color: '#374151',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+                onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#f9fafb'}
+                onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'white'}
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmDelete}
+                style={{
+                  flex: 1,
+                  padding: '12px 24px',
+                  backgroundColor: '#dc2626',
+                  border: 'none',
+                  borderRadius: '8px',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  color: 'white',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+                onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#b91c1c'}
+                onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#dc2626'}
+              >
+                Sim, Excluir
+              </button>
+            </div>
           </div>
         </div>
       )}
