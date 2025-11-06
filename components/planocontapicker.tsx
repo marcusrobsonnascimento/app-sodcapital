@@ -1,100 +1,76 @@
 'use client'
 
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
-import { Search, ChevronDown, X } from 'lucide-react'
-import { PlanoContaFluxo, TipoFluxo, Sentido } from '../types/plano-contas.ts'
+
+interface PlanoContaFluxo {
+  id: string
+  codigo_conta: string
+  tipo_fluxo: 'Operacional' | 'Investimento' | 'Financiamento'
+  grupo: string
+  categoria: string
+  subcategoria: string
+  sentido: 'Entrada' | 'Saida' | null
+}
 
 interface PlanoContaPickerProps {
   value: string
-  onChange: (value: string) => void
-  tipoFluxoFilter?: TipoFluxo
-  sentidoFilter?: Sentido
-  disabled?: boolean
+  onChange: (id: string) => void
+  sentidoFilter?: 'Entrada' | 'Saida'
   error?: string
-  placeholder?: string
 }
 
-export default function PlanoContaPicker({
-  value,
-  onChange,
-  tipoFluxoFilter,
-  sentidoFilter,
-  disabled = false,
-  error,
-  placeholder = 'Selecione uma conta...'
-}: PlanoContaPickerProps) {
-  const [contas, setContas] = useState<PlanoContaFluxo[]>([])
-  const [filteredContas, setFilteredContas] = useState<PlanoContaFluxo[]>([])
-  const [searchTerm, setSearchTerm] = useState('')
-  const [isOpen, setIsOpen] = useState(false)
-  const [selectedConta, setSelectedConta] = useState<PlanoContaFluxo | null>(null)
-  const [loading, setLoading] = useState(false)
-  const dropdownRef = useRef<HTMLDivElement>(null)
+export default function PlanoContaPicker({ value, onChange, sentidoFilter, error }: PlanoContaPickerProps) {
+  const [todasContas, setTodasContas] = useState<PlanoContaFluxo[]>([])
+  const [loading, setLoading] = useState(true)
 
+  // Estados das seleções
+  const [tipoFluxoSelecionado, setTipoFluxoSelecionado] = useState<string>('')
+  const [grupoSelecionado, setGrupoSelecionado] = useState<string>('')
+  const [categoriaSelecionada, setCategoriaSelecionada] = useState<string>('')
+  const [subcategoriaSelecionada, setSubcategoriaSelecionada] = useState<string>('')
+
+  // Listas filtradas
+  const [tiposFluxoDisponiveis, setTiposFluxoDisponiveis] = useState<string[]>([])
+  const [gruposDisponiveis, setGruposDisponiveis] = useState<string[]>([])
+  const [categoriasDisponiveis, setCategoriasDisponiveis] = useState<string[]>([])
+  const [subcategoriasDisponiveis, setSubcategoriasDisponiveis] = useState<string[]>([])
+
+  // Carregar todas as contas ao montar
   useEffect(() => {
     loadContas()
-  }, [tipoFluxoFilter, sentidoFilter])
-
-  useEffect(() => {
-    if (value && contas.length > 0) {
-      const conta = contas.find(c => c.id === value)
-      setSelectedConta(conta || null)
-    } else {
-      setSelectedConta(null)
-    }
-  }, [value, contas])
-
-  useEffect(() => {
-    const filtered = contas.filter(conta => {
-      if (!conta.ativo) return false
-
-      const searchLower = searchTerm.toLowerCase()
-      const matchesSearch = 
-        conta.codigo_conta.toLowerCase().includes(searchLower) ||
-        conta.categoria.toLowerCase().includes(searchLower) ||
-        conta.subcategoria.toLowerCase().includes(searchLower) ||
-        (conta.grupo && conta.grupo.toLowerCase().includes(searchLower))
-
-      return matchesSearch
-    })
-
-    setFilteredContas(filtered)
-  }, [searchTerm, contas])
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsOpen(false)
-      }
-    }
-
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
+  // Filtrar por sentido quando mudar
+  useEffect(() => {
+    if (todasContas.length > 0) {
+      aplicarFiltroSentido()
+    }
+  }, [sentidoFilter, todasContas])
+
+  // Quando value mudar externamente (edição), preencher os campos
+  useEffect(() => {
+    if (value && todasContas.length > 0) {
+      const conta = todasContas.find(c => c.id === value)
+      if (conta) {
+        setTipoFluxoSelecionado(conta.tipo_fluxo)
+        setGrupoSelecionado(conta.grupo)
+        setCategoriaSelecionada(conta.categoria)
+        setSubcategoriaSelecionada(conta.subcategoria)
+      }
+    }
+  }, [value, todasContas])
+
   const loadContas = async () => {
-    setLoading(true)
     try {
-      let query = supabase
+      const { data, error } = await supabase
         .from('plano_contas_fluxo')
         .select('*')
         .eq('ativo', true)
         .order('codigo_conta', { ascending: true })
 
-      if (tipoFluxoFilter) {
-        query = query.eq('tipo_fluxo', tipoFluxoFilter)
-      }
-
-      if (sentidoFilter) {
-        query = query.eq('sentido', sentidoFilter)
-      }
-
-      const { data, error } = await query
-
       if (error) throw error
-      setContas(data || [])
-      setFilteredContas(data || [])
+      setTodasContas(data || [])
     } catch (err) {
       console.error('Erro ao carregar plano de contas:', err)
     } finally {
@@ -102,273 +78,371 @@ export default function PlanoContaPicker({
     }
   }
 
-  const handleSelect = (conta: PlanoContaFluxo) => {
-    setSelectedConta(conta)
-    onChange(conta.id)
-    setIsOpen(false)
-    setSearchTerm('')
+  const aplicarFiltroSentido = () => {
+    let contasFiltradas = todasContas
+
+    if (sentidoFilter) {
+      contasFiltradas = todasContas.filter(c => c.sentido === sentidoFilter)
+    }
+
+    // Extrair tipos de fluxo únicos
+    const tipos = Array.from(new Set(contasFiltradas.map(c => c.tipo_fluxo)))
+    setTiposFluxoDisponiveis(tipos)
+
+    // Resetar seleções
+    setTipoFluxoSelecionado('')
+    setGrupoSelecionado('')
+    setCategoriaSelecionada('')
+    setSubcategoriaSelecionada('')
+    setGruposDisponiveis([])
+    setCategoriasDisponiveis([])
+    setSubcategoriasDisponiveis([])
   }
 
-  const handleClear = () => {
-    setSelectedConta(null)
+  const handleTipoFluxoChange = (tipo: string) => {
+    setTipoFluxoSelecionado(tipo)
+    setGrupoSelecionado('')
+    setCategoriaSelecionada('')
+    setSubcategoriaSelecionada('')
     onChange('')
-    setSearchTerm('')
+
+    if (!tipo) {
+      setGruposDisponiveis([])
+      setCategoriasDisponiveis([])
+      setSubcategoriasDisponiveis([])
+      return
+    }
+
+    // Filtrar grupos disponíveis para este tipo de fluxo
+    let contasFiltradas = todasContas.filter(c => c.tipo_fluxo === tipo)
+
+    if (sentidoFilter) {
+      contasFiltradas = contasFiltradas.filter(c => c.sentido === sentidoFilter)
+    }
+
+    const grupos = Array.from(new Set(contasFiltradas.map(c => c.grupo))).sort()
+    setGruposDisponiveis(grupos)
+    setCategoriasDisponiveis([])
+    setSubcategoriasDisponiveis([])
   }
 
-  const getTipoFluxoColor = (tipo: TipoFluxo) => {
-    switch (tipo) {
-      case 'Operacional': return { bg: '#dbeafe', color: '#1d4ed8' }
-      case 'Investimento': return { bg: '#fef3c7', color: '#b45309' }
-      case 'Financiamento': return { bg: '#e0e7ff', color: '#6366f1' }
+  const handleGrupoChange = (grupo: string) => {
+    setGrupoSelecionado(grupo)
+    setCategoriaSelecionada('')
+    setSubcategoriaSelecionada('')
+    onChange('')
+
+    if (!grupo) {
+      setCategoriasDisponiveis([])
+      setSubcategoriasDisponiveis([])
+      return
+    }
+
+    // Filtrar categorias disponíveis para este grupo
+    let contasFiltradas = todasContas.filter(
+      c => c.tipo_fluxo === tipoFluxoSelecionado && c.grupo === grupo
+    )
+
+    if (sentidoFilter) {
+      contasFiltradas = contasFiltradas.filter(c => c.sentido === sentidoFilter)
+    }
+
+    const categorias = Array.from(new Set(contasFiltradas.map(c => c.categoria))).sort()
+    setCategoriasDisponiveis(categorias)
+    setSubcategoriasDisponiveis([])
+  }
+
+  const handleCategoriaChange = (categoria: string) => {
+    setCategoriaSelecionada(categoria)
+    setSubcategoriaSelecionada('')
+    onChange('')
+
+    if (!categoria) {
+      setSubcategoriasDisponiveis([])
+      return
+    }
+
+    // Filtrar subcategorias disponíveis para esta categoria
+    let contasFiltradas = todasContas.filter(
+      c =>
+        c.tipo_fluxo === tipoFluxoSelecionado &&
+        c.grupo === grupoSelecionado &&
+        c.categoria === categoria
+    )
+
+    if (sentidoFilter) {
+      contasFiltradas = contasFiltradas.filter(c => c.sentido === sentidoFilter)
+    }
+
+    const subcategorias = Array.from(new Set(contasFiltradas.map(c => c.subcategoria))).sort()
+    setSubcategoriasDisponiveis(subcategorias)
+  }
+
+  const handleSubcategoriaChange = (subcategoria: string) => {
+    setSubcategoriaSelecionada(subcategoria)
+
+    if (!subcategoria) {
+      onChange('')
+      return
+    }
+
+    // Encontrar a conta correspondente
+    let conta = todasContas.find(
+      c =>
+        c.tipo_fluxo === tipoFluxoSelecionado &&
+        c.grupo === grupoSelecionado &&
+        c.categoria === categoriaSelecionada &&
+        c.subcategoria === subcategoria
+    )
+
+    if (sentidoFilter && conta) {
+      conta = todasContas.find(
+        c =>
+          c.tipo_fluxo === tipoFluxoSelecionado &&
+          c.grupo === grupoSelecionado &&
+          c.categoria === categoriaSelecionada &&
+          c.subcategoria === subcategoria &&
+          c.sentido === sentidoFilter
+      )
+    }
+
+    if (conta) {
+      onChange(conta.id)
     }
   }
 
-  const getSentidoColor = (sentido: Sentido | null) => {
-    if (sentido === 'Entrada') return { bg: '#dcfce7', color: '#16a34a' }
-    if (sentido === 'Saida') return { bg: '#fee2e2', color: '#dc2626' }
-    return { bg: '#f3f4f6', color: '#6b7280' }
+  if (loading) {
+    return (
+      <div style={{ padding: '20px', textAlign: 'center', color: '#6b7280' }}>
+        Carregando plano de contas...
+      </div>
+    )
+  }
+
+  const selectStyle = {
+    width: '100%',
+    padding: '9px 10px',
+    border: '1px solid #e5e7eb',
+    borderRadius: '8px',
+    fontSize: '13px',
+    outline: 'none',
+    cursor: 'pointer',
+    backgroundColor: 'white'
+  }
+
+  const disabledSelectStyle = {
+    ...selectStyle,
+    backgroundColor: '#f9fafb',
+    cursor: 'not-allowed',
+    opacity: 0.6
   }
 
   return (
-    <div ref={dropdownRef} style={{ position: 'relative', width: '100%' }}>
-      {/* Selected Display / Search Input */}
+    <div>
       <div
-        onClick={() => !disabled && setIsOpen(!isOpen)}
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          padding: '9px 12px',
-          border: `1px solid ${error ? '#ef4444' : '#e5e7eb'}`,
-          borderRadius: '8px',
-          fontSize: '13px',
-          cursor: disabled ? 'not-allowed' : 'pointer',
-          backgroundColor: disabled ? '#f9fafb' : 'white',
-          opacity: disabled ? 0.6 : 1,
-          transition: 'all 0.2s',
-          minHeight: '38px'
+          display: 'grid',
+          gridTemplateColumns: 'repeat(4, 1fr)',
+          gap: '12px'
         }}
       >
-        <Search size={16} style={{ color: '#9ca3af', flexShrink: 0 }} />
-        
-        {selectedConta ? (
-          <>
-            <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden' }}>
-              <span style={{
-                fontFamily: 'monospace',
-                fontWeight: '600',
-                color: '#374151',
-                flexShrink: 0
-              }}>
-                {selectedConta.codigo_conta}
-              </span>
-              <span style={{ color: '#6b7280', flexShrink: 0 }}>•</span>
-              <span style={{
-                color: '#374151',
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis'
-              }}>
-                {selectedConta.categoria} - {selectedConta.subcategoria}
-              </span>
-            </div>
-            {!disabled && (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  handleClear()
-                }}
-                style={{
-                  padding: '2px',
-                  background: 'none',
-                  border: 'none',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  color: '#9ca3af',
-                  flexShrink: 0
-                }}
-              >
-                <X size={16} />
-              </button>
-            )}
-          </>
-        ) : (
-          <>
-            <span style={{ flex: 1, color: '#9ca3af' }}>{placeholder}</span>
-            <ChevronDown size={16} style={{ color: '#9ca3af', flexShrink: 0 }} />
-          </>
-        )}
+        {/* Tipo de Fluxo */}
+        <div>
+          <label
+            style={{
+              display: 'block',
+              fontSize: '12px',
+              fontWeight: '500',
+              color: '#374151',
+              marginBottom: '6px'
+            }}
+          >
+            Tipo de Fluxo
+          </label>
+          <select
+            value={tipoFluxoSelecionado}
+            onChange={(e) => handleTipoFluxoChange(e.target.value)}
+            style={selectStyle}
+            onFocus={(e) => {
+              e.currentTarget.style.borderColor = '#1555D6'
+              e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+            }}
+            onBlur={(e) => {
+              e.currentTarget.style.borderColor = '#e5e7eb'
+              e.currentTarget.style.boxShadow = 'none'
+            }}
+          >
+            <option value="">Selecione</option>
+            {tiposFluxoDisponiveis.map((tipo) => (
+              <option key={tipo} value={tipo}>
+                {tipo}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Grupo */}
+        <div>
+          <label
+            style={{
+              display: 'block',
+              fontSize: '12px',
+              fontWeight: '500',
+              color: '#374151',
+              marginBottom: '6px'
+            }}
+          >
+            Grupo
+          </label>
+          <select
+            value={grupoSelecionado}
+            onChange={(e) => handleGrupoChange(e.target.value)}
+            disabled={!tipoFluxoSelecionado}
+            style={tipoFluxoSelecionado ? selectStyle : disabledSelectStyle}
+            onFocus={(e) => {
+              if (tipoFluxoSelecionado) {
+                e.currentTarget.style.borderColor = '#1555D6'
+                e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+              }
+            }}
+            onBlur={(e) => {
+              e.currentTarget.style.borderColor = '#e5e7eb'
+              e.currentTarget.style.boxShadow = 'none'
+            }}
+          >
+            <option value="">Selecione</option>
+            {gruposDisponiveis.map((grupo) => (
+              <option key={grupo} value={grupo}>
+                {grupo}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Categoria */}
+        <div>
+          <label
+            style={{
+              display: 'block',
+              fontSize: '12px',
+              fontWeight: '500',
+              color: '#374151',
+              marginBottom: '6px'
+            }}
+          >
+            Categoria
+          </label>
+          <select
+            value={categoriaSelecionada}
+            onChange={(e) => handleCategoriaChange(e.target.value)}
+            disabled={!grupoSelecionado}
+            style={grupoSelecionado ? selectStyle : disabledSelectStyle}
+            onFocus={(e) => {
+              if (grupoSelecionado) {
+                e.currentTarget.style.borderColor = '#1555D6'
+                e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+              }
+            }}
+            onBlur={(e) => {
+              e.currentTarget.style.borderColor = '#e5e7eb'
+              e.currentTarget.style.boxShadow = 'none'
+            }}
+          >
+            <option value="">Selecione</option>
+            {categoriasDisponiveis.map((categoria) => (
+              <option key={categoria} value={categoria}>
+                {categoria}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Subcategoria */}
+        <div>
+          <label
+            style={{
+              display: 'block',
+              fontSize: '12px',
+              fontWeight: '500',
+              color: '#374151',
+              marginBottom: '6px'
+            }}
+          >
+            Subcategoria
+          </label>
+          <select
+            value={subcategoriaSelecionada}
+            onChange={(e) => handleSubcategoriaChange(e.target.value)}
+            disabled={!categoriaSelecionada}
+            style={categoriaSelecionada ? selectStyle : disabledSelectStyle}
+            onFocus={(e) => {
+              if (categoriaSelecionada) {
+                e.currentTarget.style.borderColor = '#1555D6'
+                e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+              }
+            }}
+            onBlur={(e) => {
+              e.currentTarget.style.borderColor = '#e5e7eb'
+              e.currentTarget.style.boxShadow = 'none'
+            }}
+          >
+            <option value="">Selecione</option>
+            {subcategoriasDisponiveis.map((subcategoria) => (
+              <option key={subcategoria} value={subcategoria}>
+                {subcategoria}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
-      {error && (
-        <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '4px', display: 'block' }}>
-          {error}
-        </span>
-      )}
-
-      {/* Dropdown */}
-      {isOpen && !disabled && (
+      {/* Preview do código selecionado */}
+      {value && (
         <div
           style={{
-            position: 'absolute',
-            top: 'calc(100% + 4px)',
-            left: 0,
-            right: 0,
-            backgroundColor: 'white',
-            border: '1px solid #e5e7eb',
-            borderRadius: '8px',
-            boxShadow: '0 10px 25px rgba(0, 0, 0, 0.1)',
-            zIndex: 50,
-            maxHeight: '320px',
-            display: 'flex',
-            flexDirection: 'column',
-            overflow: 'hidden'
+            marginTop: '12px',
+            padding: '12px',
+            backgroundColor: '#f0f9ff',
+            border: '1px solid #bfdbfe',
+            borderRadius: '8px'
           }}
         >
-          {/* Search Input */}
-          <div style={{ padding: '12px', borderBottom: '1px solid #e5e7eb' }}>
-            <div style={{ position: 'relative' }}>
-              <Search
-                size={16}
-                style={{
-                  position: 'absolute',
-                  left: '10px',
-                  top: '50%',
-                  transform: 'translateY(-50%)',
-                  color: '#9ca3af'
-                }}
-              />
-              <input
-                type="text"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Buscar por código ou descrição..."
-                autoFocus
-                style={{
-                  width: '100%',
-                  padding: '8px 12px 8px 36px',
-                  border: '1px solid #e5e7eb',
-                  borderRadius: '6px',
-                  fontSize: '13px',
-                  outline: 'none'
-                }}
-              />
-            </div>
-          </div>
-
-          {/* Results */}
-          <div style={{ flex: 1, overflowY: 'auto' }}>
-            {loading ? (
-              <div style={{
-                padding: '24px',
-                textAlign: 'center',
-                color: '#6b7280',
-                fontSize: '13px'
-              }}>
-                Carregando...
-              </div>
-            ) : filteredContas.length === 0 ? (
-              <div style={{
-                padding: '24px',
-                textAlign: 'center',
-                color: '#6b7280',
-                fontSize: '13px'
-              }}>
-                Nenhuma conta encontrada
-              </div>
-            ) : (
-              filteredContas.map((conta) => {
-                const tipoColor = getTipoFluxoColor(conta.tipo_fluxo)
-                const sentidoColor = getSentidoColor(conta.sentido)
-
-                return (
-                  <div
-                    key={conta.id}
-                    onClick={() => handleSelect(conta)}
-                    style={{
-                      padding: '10px 12px',
-                      borderBottom: '1px solid #f3f4f6',
-                      cursor: 'pointer',
-                      transition: 'background-color 0.2s',
-                      backgroundColor: value === conta.id ? '#f0f9ff' : 'transparent'
-                    }}
-                    onMouseOver={(e) => {
-                      if (value !== conta.id) {
-                        e.currentTarget.style.backgroundColor = '#f9fafb'
-                      }
-                    }}
-                    onMouseOut={(e) => {
-                      if (value !== conta.id) {
-                        e.currentTarget.style.backgroundColor = 'transparent'
-                      }
-                    }}
-                  >
-                    <div style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      marginBottom: '4px'
-                    }}>
-                      <span style={{
-                        fontFamily: 'monospace',
-                        fontSize: '13px',
-                        fontWeight: '600',
-                        color: '#374151'
-                      }}>
-                        {conta.codigo_conta}
-                      </span>
-                      
-                      <span style={{
-                        display: 'inline-flex',
-                        padding: '2px 8px',
-                        fontSize: '10px',
-                        fontWeight: '500',
-                        borderRadius: '8px',
-                        backgroundColor: tipoColor.bg,
-                        color: tipoColor.color
-                      }}>
-                        {conta.tipo_fluxo}
-                      </span>
-
-                      {conta.sentido && (
-                        <span style={{
-                          display: 'inline-flex',
-                          padding: '2px 8px',
-                          fontSize: '10px',
-                          fontWeight: '500',
-                          borderRadius: '8px',
-                          backgroundColor: sentidoColor.bg,
-                          color: sentidoColor.color
-                        }}>
-                          {conta.sentido}
-                        </span>
-                      )}
-                    </div>
-
-                    <div style={{
-                      fontSize: '12px',
-                      color: '#374151'
-                    }}>
-                      {conta.categoria} - {conta.subcategoria}
-                    </div>
-
-                    {conta.grupo && (
-                      <div style={{
-                        fontSize: '11px',
-                        color: '#9ca3af',
-                        marginTop: '2px'
-                      }}>
-                        {conta.grupo}
-                      </div>
-                    )}
-                  </div>
-                )
-              })
-            )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span
+              style={{
+                fontSize: '12px',
+                fontWeight: '500',
+                color: '#1e40af'
+              }}
+            >
+              Código:
+            </span>
+            <span
+              style={{
+                fontSize: '14px',
+                fontWeight: '700',
+                color: '#1e3a8a',
+                fontFamily: 'monospace'
+              }}
+            >
+              {todasContas.find((c) => c.id === value)?.codigo_conta}
+            </span>
           </div>
         </div>
+      )}
+
+      {/* Erro */}
+      {error && (
+        <p
+          style={{
+            marginTop: '6px',
+            fontSize: '12px',
+            color: '#ef4444',
+            fontWeight: '500'
+          }}
+        >
+          {error}
+        </p>
       )}
     </div>
   )

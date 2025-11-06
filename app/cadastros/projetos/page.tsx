@@ -3,12 +3,11 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 import { formatDate } from '@/lib/utils'
-import { Plus, Pencil, Trash2, Search, CheckCircle, AlertTriangle, XCircle } from 'lucide-react'
+import { Plus, Pencil, Trash2, Search, CheckCircle, AlertTriangle, XCircle, FolderTree } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
 
-// Toast notification system
 type ToastType = 'success' | 'warning' | 'error'
 
 interface Toast {
@@ -17,12 +16,30 @@ interface Toast {
   type: ToastType
 }
 
+interface Projeto {
+  id: string
+  nome: string
+  empresa_id: string
+  projeto_pai_id: string | null
+  descricao?: string
+  ativo: boolean
+  empresas?: { nome: string }
+}
+
+interface ProjetoHierarquico extends Projeto {
+  nivel: number
+  caminho_completo: string
+  nome_indentado: string
+  filhos?: ProjetoHierarquico[]
+}
+
 const projetoSchema = z.object({
   nome: z.string()
     .min(1, 'Nome é obrigatório')
     .max(50, 'Nome deve ter no máximo 50 caracteres')
     .transform(val => val.toUpperCase()),
   empresa_id: z.string().min(1, 'Empresa é obrigatória'),
+  projeto_pai_id: z.string().nullable().optional(),
   descricao: z.string()
     .max(200, 'Descrição deve ter no máximo 200 caracteres')
     .optional(),
@@ -32,25 +49,33 @@ const projetoSchema = z.object({
 type ProjetoForm = z.infer<typeof projetoSchema>
 
 export default function ProjetosPage() {
-  const [projetos, setProjetos] = useState<any[]>([])
+  const [projetos, setProjetos] = useState<ProjetoHierarquico[]>([])
   const [empresas, setEmpresas] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
+  const [showDeleteModal, setShowDeleteModal] = useState(false)
+  const [deleteId, setDeleteId] = useState<string | null>(null)
+  const [deletingProjeto, setDeletingProjeto] = useState<ProjetoHierarquico | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [toasts, setToasts] = useState<Toast[]>([])
   const [toastIdCounter, setToastIdCounter] = useState(0)
   const [nomeValue, setNomeValue] = useState('')
   const [descricaoValue, setDescricaoValue] = useState('')
+  const [mostrarHierarquia, setMostrarHierarquia] = useState(true)
+  const [empresaSelecionadaModal, setEmpresaSelecionadaModal] = useState<string>('')
+  const [checkingDependencies, setCheckingDependencies] = useState(false)
 
-  const { register, handleSubmit, reset, formState: { errors }, setValue } = useForm<ProjetoForm>({
+  const { register, handleSubmit, reset, formState: { errors }, setValue, watch } = useForm<ProjetoForm>({
     resolver: zodResolver(projetoSchema),
     defaultValues: {
-      ativo: true
+      ativo: true,
+      projeto_pai_id: null
     }
   })
 
-  // Toast functions
+  const empresaIdWatch = watch('empresa_id')
+
   const showToast = (message: string, type: ToastType) => {
     const id = toastIdCounter
     setToastIdCounter(prev => prev + 1)
@@ -92,7 +117,6 @@ export default function ProjetosPage() {
 
   const loadData = async () => {
     try {
-      // Load empresas
       const { data: empresasData } = await supabase
         .from('empresas')
         .select('*')
@@ -101,14 +125,15 @@ export default function ProjetosPage() {
 
       setEmpresas(empresasData || [])
 
-      // Load projetos
       const { data: projetosData, error } = await supabase
         .from('projetos')
         .select('*, empresas(nome)')
         .order('nome', { ascending: true })
 
       if (error) throw error
-      setProjetos(projetosData || [])
+      
+      const hierarquia = construirHierarquia(projetosData || [])
+      setProjetos(hierarquia)
     } catch (err) {
       console.error('Erro ao carregar projetos:', err)
       showToast('Erro ao carregar projetos', 'error')
@@ -117,18 +142,110 @@ export default function ProjetosPage() {
     }
   }
 
+  const construirHierarquia = (projetos: Projeto[]): ProjetoHierarquico[] => {
+    const map = new Map<string, ProjetoHierarquico>()
+
+    projetos.forEach((projeto) => {
+      map.set(projeto.id, {
+        ...projeto,
+        nivel: 0,
+        caminho_completo: projeto.nome,
+        nome_indentado: projeto.nome,
+        filhos: []
+      })
+    })
+
+    const raizes: ProjetoHierarquico[] = []
+
+    projetos.forEach((projeto) => {
+      const node = map.get(projeto.id)!
+
+      if (!projeto.projeto_pai_id) {
+        raizes.push(node)
+      } else {
+        const pai = map.get(projeto.projeto_pai_id)
+        if (pai) {
+          node.nivel = pai.nivel + 1
+          node.caminho_completo = `${pai.caminho_completo} > ${projeto.nome}`
+          node.nome_indentado = '└─ '.repeat(node.nivel) + projeto.nome
+          pai.filhos = pai.filhos || []
+          pai.filhos.push(node)
+        } else {
+          raizes.push(node)
+        }
+      }
+    })
+
+    return achatarHierarquia(raizes)
+  }
+
+  const achatarHierarquia = (projetos: ProjetoHierarquico[]): ProjetoHierarquico[] => {
+    const resultado: ProjetoHierarquico[] = []
+
+    const processar = (projeto: ProjetoHierarquico) => {
+      resultado.push(projeto)
+      if (projeto.filhos && projeto.filhos.length > 0) {
+        projeto.filhos.forEach(processar)
+      }
+    }
+
+    projetos.forEach(processar)
+    return resultado
+  }
+
+  const verificarVinculos = async (projetoId: string): Promise<{ temVinculo: boolean; mensagem: string }> => {
+    try {
+      const temFilhos = projetos.some(p => p.projeto_pai_id === projetoId)
+      
+      if (temFilhos) {
+        return {
+          temVinculo: true,
+          mensagem: 'Não é possível excluir projeto com subprojetos'
+        }
+      }
+
+      const { count, error } = await supabase
+        .from('lancamentos')
+        .select('*', { count: 'exact', head: true })
+        .eq('projeto_id', projetoId)
+
+      if (error) throw error
+
+      if (count && count > 0) {
+        return {
+          temVinculo: true,
+          mensagem: `Não é possível excluir. Existem ${count} lançamento(s) vinculado(s) a este projeto`
+        }
+      }
+
+      return { temVinculo: false, mensagem: '' }
+    } catch (error) {
+      console.error('Erro ao verificar vínculos:', error)
+      throw error
+    }
+  }
+
   const onSubmit = async (data: ProjetoForm) => {
     try {
+      if (data.projeto_pai_id === editingId) {
+        showToast('Projeto não pode ser pai de si mesmo', 'warning')
+        return
+      }
+
+      const dataToSave = {
+        ...data,
+        projeto_pai_id: data.projeto_pai_id || null
+      }
+
       if (editingId) {
         const { error } = await supabase
           .from('projetos')
-          .update(data)
+          .update(dataToSave)
           .eq('id', editingId)
 
         if (error) {
           console.error('Erro detalhado ao atualizar:', error)
           
-          // Check for duplicate constraint violation
           if (error.code === '23505' && error.message.includes('projetos_org_id_empresa_id_nome_key')) {
             showToast('Já existe projeto cadastrado para essa empresa', 'warning')
             return
@@ -140,12 +257,11 @@ export default function ProjetosPage() {
       } else {
         const { error } = await supabase
           .from('projetos')
-          .insert([data])
+          .insert([dataToSave])
 
         if (error) {
           console.error('Erro detalhado ao criar:', error)
           
-          // Check for duplicate constraint violation
           if (error.code === '23505' && error.message.includes('projetos_org_id_empresa_id_nome_key')) {
             showToast('Já existe projeto cadastrado para essa empresa', 'warning')
             return
@@ -182,31 +298,63 @@ export default function ProjetosPage() {
     
     setNomeValue(nome)
     setDescricaoValue(descricao)
+    setEmpresaSelecionadaModal(projeto.empresa_id)
     
     reset({
       nome: nome,
       empresa_id: projeto.empresa_id,
+      projeto_pai_id: projeto.projeto_pai_id || null,
       descricao: descricao,
       ativo: projeto.ativo
     })
     setShowModal(true)
   }
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Tem certeza que deseja excluir este projeto?')) return
+  const openDeleteModal = async (projeto: ProjetoHierarquico) => {
+    setCheckingDependencies(true)
+    
+    try {
+      const { temVinculo, mensagem } = await verificarVinculos(projeto.id)
+      
+      if (temVinculo) {
+        showToast(mensagem, 'warning')
+        setCheckingDependencies(false)
+        return
+      }
+
+      setDeleteId(projeto.id)
+      setDeletingProjeto(projeto)
+      setShowDeleteModal(true)
+    } catch (error) {
+      showToast('Erro ao verificar dependências do projeto', 'error')
+    } finally {
+      setCheckingDependencies(false)
+    }
+  }
+
+  const closeDeleteModal = () => {
+    setShowDeleteModal(false)
+    setDeleteId(null)
+    setDeletingProjeto(null)
+  }
+
+  const confirmDelete = async () => {
+    if (!deleteId) return
 
     try {
       const { error } = await supabase
         .from('projetos')
         .delete()
-        .eq('id', id)
+        .eq('id', deleteId)
 
       if (error) throw error
       showToast('Projeto excluído com sucesso!', 'success')
       loadData()
+      closeDeleteModal()
     } catch (err) {
       console.error('Erro ao excluir projeto:', err)
       showToast('Erro ao excluir projeto', 'error')
+      closeDeleteModal()
     }
   }
 
@@ -215,9 +363,11 @@ export default function ProjetosPage() {
     setEditingId(null)
     setNomeValue('')
     setDescricaoValue('')
+    setEmpresaSelecionadaModal('')
     reset({
       nome: '',
       empresa_id: '',
+      projeto_pai_id: null,
       descricao: '',
       ativo: true
     })
@@ -226,6 +376,12 @@ export default function ProjetosPage() {
   const filteredProjetos = projetos.filter(p =>
     p.nome.toLowerCase().includes(searchTerm.toLowerCase()) ||
     (p.empresas?.nome && p.empresas.nome.toLowerCase().includes(searchTerm.toLowerCase()))
+  )
+
+  const projetosPai = projetos.filter(p => 
+    p.empresa_id === empresaIdWatch && 
+    p.id !== editingId &&
+    p.nivel === 0
   )
 
   if (loading) {
@@ -251,14 +407,12 @@ export default function ProjetosPage() {
 
   return (
     <div style={{ padding: '32px', backgroundColor: '#f9fafb', minHeight: '100vh' }}>
-      {/* Main Content */}
       <div style={{
         backgroundColor: 'white',
         borderRadius: '16px',
         boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
         overflow: 'hidden'
       }}>
-        {/* Header with Title and Button */}
         <div style={{
           padding: '32px',
           borderBottom: '1px solid #e5e7eb'
@@ -282,7 +436,7 @@ export default function ProjetosPage() {
                 fontSize: '14px',
                 color: '#6b7280'
               }}>
-                Gerencie os projetos das empresas
+                Gerencie os projetos e subprojetos das empresas
               </p>
             </div>
             <button
@@ -309,44 +463,84 @@ export default function ProjetosPage() {
             </button>
           </div>
 
-          {/* Search Bar */}
-          <div style={{ position: 'relative' }}>
-            <Search style={{
-              position: 'absolute',
-              left: '16px',
-              top: '50%',
-              transform: 'translateY(-50%)',
-              width: '20px',
-              height: '20px',
-              color: '#9ca3af'
-            }} />
-            <input
-              type="text"
-              placeholder="Buscar por nome do projeto ou empresa..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+          <div style={{ 
+            display: 'flex', 
+            gap: '12px',
+            marginBottom: '16px'
+          }}>
+            <div style={{ position: 'relative', flex: 1 }}>
+              <Search style={{
+                position: 'absolute',
+                left: '16px',
+                top: '50%',
+                transform: 'translateY(-50%)',
+                width: '20px',
+                height: '20px',
+                color: '#9ca3af'
+              }} />
+              <input
+                type="text"
+                placeholder="Buscar por nome do projeto ou empresa..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '12px 16px 12px 48px',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: '8px',
+                  fontSize: '14px',
+                  outline: 'none',
+                  transition: 'all 0.2s'
+                }}
+                onFocus={(e) => {
+                  e.currentTarget.style.borderColor = '#1555D6'
+                  e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = '#e5e7eb'
+                  e.currentTarget.style.boxShadow = 'none'
+                }}
+              />
+            </div>
+
+            <button
+              onClick={() => setMostrarHierarquia(!mostrarHierarquia)}
               style={{
-                width: '100%',
-                padding: '12px 16px 12px 48px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '12px 20px',
+                backgroundColor: mostrarHierarquia ? '#1555D6' : 'white',
+                color: mostrarHierarquia ? 'white' : '#374151',
                 border: '1px solid #e5e7eb',
                 borderRadius: '8px',
                 fontSize: '14px',
-                outline: 'none',
-                transition: 'all 0.2s'
+                fontWeight: '500',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+                whiteSpace: 'nowrap'
               }}
-              onFocus={(e) => {
-                e.currentTarget.style.borderColor = '#1555D6'
-                e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+              onMouseOver={(e) => {
+                if (mostrarHierarquia) {
+                  e.currentTarget.style.backgroundColor = '#1044b5'
+                } else {
+                  e.currentTarget.style.backgroundColor = '#f9fafb'
+                }
               }}
-              onBlur={(e) => {
-                e.currentTarget.style.borderColor = '#e5e7eb'
-                e.currentTarget.style.boxShadow = 'none'
+              onMouseOut={(e) => {
+                if (mostrarHierarquia) {
+                  e.currentTarget.style.backgroundColor = '#1555D6'
+                } else {
+                  e.currentTarget.style.backgroundColor = 'white'
+                }
               }}
-            />
+            >
+              <FolderTree style={{ width: '20px', height: '20px' }} />
+              {mostrarHierarquia ? 'Hierarquia ON' : 'Hierarquia OFF'}
+            </button>
           </div>
         </div>
 
-        {/* Table */}
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -435,9 +629,19 @@ export default function ProjetosPage() {
                       padding: '16px 24px',
                       fontSize: '14px',
                       fontWeight: '500',
-                      color: '#111827'
+                      color: '#111827',
+                      fontFamily: 'monospace'
                     }}>
-                      {projeto.nome}
+                      {mostrarHierarquia ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          {projeto.nivel === 0 ? (
+                            <FolderTree style={{ width: '16px', height: '16px', color: '#1555D6', flexShrink: 0 }} />
+                          ) : null}
+                          <span>{projeto.nome_indentado}</span>
+                        </div>
+                      ) : (
+                        projeto.nome
+                      )}
                     </td>
                     <td style={{
                       padding: '16px 24px',
@@ -490,16 +694,22 @@ export default function ProjetosPage() {
                           <Pencil style={{ width: '16px', height: '16px', color: '#6b7280' }} />
                         </button>
                         <button
-                          onClick={() => handleDelete(projeto.id)}
+                          onClick={() => openDeleteModal(projeto)}
+                          disabled={checkingDependencies}
                           style={{
                             padding: '8px',
                             backgroundColor: 'transparent',
                             border: 'none',
                             borderRadius: '6px',
-                            cursor: 'pointer',
-                            transition: 'background-color 0.2s'
+                            cursor: checkingDependencies ? 'wait' : 'pointer',
+                            transition: 'background-color 0.2s',
+                            opacity: checkingDependencies ? 0.5 : 1
                           }}
-                          onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#fee2e2'}
+                          onMouseOver={(e) => {
+                            if (!checkingDependencies) {
+                              e.currentTarget.style.backgroundColor = '#fee2e2'
+                            }
+                          }}
                           onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                         >
                           <Trash2 style={{ width: '16px', height: '16px', color: '#dc2626' }} />
@@ -514,7 +724,6 @@ export default function ProjetosPage() {
         </div>
       </div>
 
-      {/* Modal */}
       {showModal && (
         <div
           style={{
@@ -537,7 +746,9 @@ export default function ProjetosPage() {
               padding: '32px',
               width: '100%',
               maxWidth: '500px',
-              margin: '16px'
+              margin: '16px',
+              maxHeight: '90vh',
+              overflowY: 'auto'
             }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -551,7 +762,6 @@ export default function ProjetosPage() {
             </h2>
 
             <form onSubmit={handleSubmit(onSubmit, onSubmitError)} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-              {/* Nome */}
               <div>
                 <label style={{
                   display: 'block',
@@ -633,7 +843,6 @@ export default function ProjetosPage() {
                 </div>
               </div>
 
-              {/* Empresa */}
               <div>
                 <label style={{
                   display: 'block',
@@ -646,6 +855,11 @@ export default function ProjetosPage() {
                 </label>
                 <select
                   {...register('empresa_id')}
+                  onChange={(e) => {
+                    setValue('empresa_id', e.target.value)
+                    setEmpresaSelecionadaModal(e.target.value)
+                    setValue('projeto_pai_id', null)
+                  }}
                   style={{
                     width: '100%',
                     padding: '12px 16px',
@@ -673,7 +887,60 @@ export default function ProjetosPage() {
                 </select>
               </div>
 
-              {/* Descrição */}
+              <div>
+                <label style={{
+                  display: 'block',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  color: '#374151',
+                  marginBottom: '8px'
+                }}>
+                  Subprojeto de... (opcional)
+                </label>
+                <select
+                  {...register('projeto_pai_id')}
+                  disabled={!empresaIdWatch}
+                  style={{
+                    width: '100%',
+                    padding: '12px 16px',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: '8px',
+                    fontSize: '14px',
+                    outline: 'none',
+                    transition: 'all 0.2s',
+                    backgroundColor: empresaIdWatch ? 'white' : '#f9fafb',
+                    cursor: empresaIdWatch ? 'pointer' : 'not-allowed',
+                    opacity: empresaIdWatch ? 1 : 0.6
+                  }}
+                  onFocus={(e) => {
+                    if (empresaIdWatch) {
+                      e.currentTarget.style.borderColor = '#1555D6'
+                      e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                    }
+                  }}
+                  onBlur={(e) => {
+                    e.currentTarget.style.borderColor = '#e5e7eb'
+                    e.currentTarget.style.boxShadow = 'none'
+                  }}
+                >
+                  <option value="">Nenhum (projeto raiz)</option>
+                  {projetosPai.map(p => (
+                    <option key={p.id} value={p.id}>{p.nome}</option>
+                  ))}
+                </select>
+                <p style={{
+                  marginTop: '4px',
+                  fontSize: '12px',
+                  color: '#6b7280'
+                }}>
+                  {!empresaIdWatch 
+                    ? 'Selecione uma empresa primeiro'
+                    : projetosPai.length === 0
+                    ? 'Nenhum projeto disponível para ser pai'
+                    : 'Deixe vazio para criar um projeto raiz'}
+                </p>
+              </div>
+
               <div>
                 <label style={{
                   display: 'block',
@@ -726,7 +993,6 @@ export default function ProjetosPage() {
                 </div>
               </div>
 
-              {/* Ativo */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <input
                   type="checkbox"
@@ -752,7 +1018,6 @@ export default function ProjetosPage() {
                 </label>
               </div>
 
-              {/* Buttons */}
               <div style={{
                 display: 'flex',
                 gap: '12px',
@@ -803,7 +1068,145 @@ export default function ProjetosPage() {
         </div>
       )}
 
-      {/* Toast Notifications */}
+      {showDeleteModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 50,
+            backdropFilter: 'blur(4px)'
+          }}
+          onClick={closeDeleteModal}
+        >
+          <div
+            style={{
+              backgroundColor: 'white',
+              borderRadius: '16px',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+              padding: '32px',
+              width: '100%',
+              maxWidth: '450px',
+              margin: '16px',
+              animation: 'scaleIn 0.2s ease-out'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{
+              width: '56px',
+              height: '56px',
+              margin: '0 auto 20px',
+              borderRadius: '50%',
+              backgroundColor: '#fee2e2',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}>
+              <AlertTriangle style={{ width: '28px', height: '28px', color: '#dc2626' }} />
+            </div>
+
+            <h2 style={{
+              fontSize: '20px',
+              fontWeight: '700',
+              color: '#111827',
+              marginBottom: '12px',
+              textAlign: 'center'
+            }}>
+              Excluir Projeto
+            </h2>
+
+            <p style={{
+              fontSize: '14px',
+              color: '#6b7280',
+              textAlign: 'center',
+              marginBottom: '8px',
+              lineHeight: '1.5'
+            }}>
+              Tem certeza que deseja excluir o projeto
+            </p>
+            
+            {deletingProjeto && (
+              <>
+                <p style={{
+                  fontSize: '18px',
+                  fontWeight: '700',
+                  color: '#111827',
+                  textAlign: 'center',
+                  marginBottom: '4px'
+                }}>
+                  {deletingProjeto.nome}
+                </p>
+                <p style={{
+                  fontSize: '14px',
+                  color: '#6b7280',
+                  textAlign: 'center',
+                  marginBottom: '24px'
+                }}>
+                  {deletingProjeto.empresas?.nome}?
+                </p>
+              </>
+            )}
+
+            <p style={{
+              fontSize: '13px',
+              color: '#ef4444',
+              textAlign: 'center',
+              marginBottom: '24px',
+              fontWeight: '500'
+            }}>
+              Esta ação não pode ser desfeita.
+            </p>
+
+            <div style={{
+              display: 'flex',
+              gap: '12px'
+            }}>
+              <button
+                onClick={closeDeleteModal}
+                style={{
+                  flex: 1,
+                  padding: '12px 24px',
+                  backgroundColor: 'white',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: '8px',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  color: '#374151',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+                onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#f9fafb'}
+                onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'white'}
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmDelete}
+                style={{
+                  flex: 1,
+                  padding: '12px 24px',
+                  backgroundColor: '#dc2626',
+                  border: 'none',
+                  borderRadius: '8px',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  color: 'white',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+                onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#b91c1c'}
+                onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#dc2626'}
+              >
+                Sim, Excluir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={{
         position: 'fixed',
         top: '50%',

@@ -3,10 +3,11 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 import { formatDate } from '@/lib/utils'
-import { Plus, Pencil, Trash2, Search, CheckCircle, AlertTriangle, XCircle, Filter, DollarSign, X, Calendar } from 'lucide-react'
+import { Plus, Pencil, Trash2, Search, CheckCircle, AlertTriangle, XCircle, X } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
+import PlanoContaPicker from '@/components/planocontapicker'
 
 // Toast notification system
 type ToastType = 'success' | 'warning' | 'error'
@@ -28,6 +29,7 @@ interface Projeto {
   id: string
   empresa_id: string
   nome: string
+  projeto_pai_id: string | null
 }
 
 interface BancoConta {
@@ -42,27 +44,13 @@ interface Contraparte {
   nome: string
 }
 
-interface Tipo {
+interface PlanoContaFluxo {
   id: string
-  nome: string
-}
-
-interface Grupo {
-  id: string
-  tipo_id: string
-  nome: string
-}
-
-interface Categoria {
-  id: string
-  grupo_id: string
-  nome: string
-}
-
-interface Subcategoria {
-  id: string
-  categoria_id: string
-  nome: string
+  codigo_conta: string
+  categoria: string
+  subcategoria: string
+  tipo_fluxo: string
+  sentido: 'Entrada' | 'Saida' | null
 }
 
 interface Retencao {
@@ -70,17 +58,18 @@ interface Retencao {
   imposto: string
   valor: number
   valorFormatado?: string
-  detalhe: string
+  detalhe: string | null
 }
 
 interface Lancamento {
   id: string
-  tipo: 'RECEITA' | 'DESPESA'
+  tipo: 'Entrada' | 'Saida'
   empresa_id: string
   projeto_id: string | null
+  subprojeto_id: string | null
   banco_conta_id: string | null
   contraparte_id: string | null
-  subcategoria_id: string
+  plano_conta_id: string
   valor_bruto: number
   valor_liquido: number
   data_emissao: string | null
@@ -93,15 +82,13 @@ interface Lancamento {
   created_at: string
   empresa_nome?: string
   projeto_nome?: string
+  subprojeto_nome?: string
   contraparte_nome?: string
-  subcategoria_nome?: string
-  categoria_nome?: string
-  grupo_nome?: string
-  tipo_plano_nome?: string
+  plano_conta?: PlanoContaFluxo
   retencoes?: Retencao[]
 }
 
-// Função para formatar moeda BRL
+// Helpers de formatação
 const formatCurrencyBRL = (value: number): string => {
   return new Intl.NumberFormat('pt-BR', {
     style: 'currency',
@@ -109,47 +96,36 @@ const formatCurrencyBRL = (value: number): string => {
   }).format(value)
 }
 
-// Função para formatar input (adiciona pontos e vírgula)
 const formatCurrencyInput = (value: string): string => {
-  // Remove tudo exceto números
   const numbers = value.replace(/\D/g, '')
-  
   if (!numbers) return ''
-  
-  // Converte para número (centavos)
   const amount = parseInt(numbers, 10) / 100
-  
-  // Formata para BRL
   return new Intl.NumberFormat('pt-BR', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
   }).format(amount)
 }
 
-// Função para parsear valor formatado para número
 const parseCurrencyInput = (value: string): number => {
   if (!value) return 0
-  // Remove pontos de milhar e substitui vírgula por ponto
   const cleaned = value.replace(/\./g, '').replace(',', '.')
   return parseFloat(cleaned) || 0
 }
 
-// Função para formatar data para input date
 const formatDateForInput = (date: string | null): string => {
   if (!date) return ''
   return date.split('T')[0]
 }
 
+// Schema de validação
 const lancamentoSchema = z.object({
-  tipo: z.enum(['RECEITA', 'DESPESA'], { required_error: 'Tipo é obrigatório' }),
+  tipo: z.enum(['Entrada', 'Saida'], { required_error: 'Tipo é obrigatório' }),
   empresa_id: z.string().min(1, 'Empresa é obrigatória'),
   projeto_id: z.string().min(1, 'Projeto é obrigatório'),
+  subprojeto_id: z.string().optional(),
   banco_conta_id: z.string().min(1, 'Conta bancária é obrigatória'),
   contraparte_id: z.string().min(1, 'Contraparte é obrigatória'),
-  tipo_plano_id: z.string().min(1, 'Tipo do plano de contas é obrigatório'),
-  grupo_id: z.string().min(1, 'Grupo é obrigatório'),
-  categoria_id: z.string().min(1, 'Categoria é obrigatória'),
-  subcategoria_id: z.string().min(1, 'Subcategoria é obrigatória'),
+  plano_conta_id: z.string().min(1, 'Plano de conta é obrigatório'),
   valor_bruto: z.coerce.number().min(0.01, 'Valor bruto é obrigatório'),
   data_emissao: z.string().min(1, 'Data de emissão é obrigatória'),
   data_vencimento: z.string().min(1, 'Data de vencimento é obrigatória'),
@@ -174,16 +150,12 @@ export default function LancamentosPage() {
   const [lancamentos, setLancamentos] = useState<Lancamento[]>([])
   const [empresas, setEmpresas] = useState<Empresa[]>([])
   const [projetos, setProjetos] = useState<Projeto[]>([])
+  const [subprojetos, setSubprojetos] = useState<Projeto[]>([])
   const [bancosContas, setBancosContas] = useState<BancoConta[]>([])
   const [contrapartes, setContrapartes] = useState<Contraparte[]>([])
-  const [tipos, setTipos] = useState<Tipo[]>([])
-  const [grupos, setGrupos] = useState<Grupo[]>([])
-  const [categorias, setCategorias] = useState<Categoria[]>([])
-  const [subcategorias, setSubcategorias] = useState<Subcategoria[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [isEditing, setIsEditing] = useState(false)
 
   // Filtros
   const [searchTerm, setSearchTerm] = useState('')
@@ -192,10 +164,6 @@ export default function LancamentosPage() {
   const [selectedEmpresaFilter, setSelectedEmpresaFilter] = useState<string>('')
   const [selectedProjetoFilter, setSelectedProjetoFilter] = useState<string>('')
   const [selectedContraparteFilter, setSelectedContraparteFilter] = useState<string>('')
-  const [selectedTipoPlanoFilter, setSelectedTipoPlanoFilter] = useState<string>('')
-  const [selectedGrupoFilter, setSelectedGrupoFilter] = useState<string>('')
-  const [selectedCategoriaFilter, setSelectedCategoriaFilter] = useState<string>('')
-  const [selectedSubcategoriaFilter, setSelectedSubcategoriaFilter] = useState<string>('')
   const [dataVencimentoInicio, setDataVencimentoInicio] = useState('')
   const [dataVencimentoFim, setDataVencimentoFim] = useState('')
 
@@ -220,15 +188,13 @@ export default function LancamentosPage() {
   const { register, handleSubmit, reset, formState: { errors }, setValue, watch } = useForm<LancamentoForm>({
     resolver: zodResolver(lancamentoSchema),
     defaultValues: {
-      tipo: 'DESPESA',
+      tipo: 'Saida',
       empresa_id: '',
       projeto_id: '',
+      subprojeto_id: '',
       banco_conta_id: '',
       contraparte_id: '',
-      tipo_plano_id: '',
-      grupo_id: '',
-      categoria_id: '',
-      subcategoria_id: '',
+      plano_conta_id: '',
       valor_bruto: 0,
       data_emissao: '',
       data_vencimento: '',
@@ -239,34 +205,16 @@ export default function LancamentosPage() {
   })
 
   const selectedEmpresaId = watch('empresa_id')
+  const selectedProjetoId = watch('projeto_id')
   const selectedTipoLancamento = watch('tipo')
-  const selectedTipoPlanoId = watch('tipo_plano_id')
-  const selectedGrupoId = watch('grupo_id')
-  const selectedCategoriaId = watch('categoria_id')
 
   // Toast functions
   const showToast = (message: string, type: ToastType) => {
     const id = toastIdCounter
     setToastIdCounter(prev => prev + 1)
-
     const newToast: Toast = { id, message, type }
     setToasts(prev => [...prev, newToast])
-
-    // Warning dura 2 segundos, outros tipos 3 segundos
     const duration = type === 'warning' ? 2000 : 3000
-
-    setTimeout(() => {
-      setToasts(prev => prev.filter(toast => toast.id !== id))
-    }, duration)
-  }
-
-  const showToastCustomDuration = (message: string, type: ToastType, duration: number) => {
-    const id = toastIdCounter
-    setToastIdCounter(prev => prev + 1)
-
-    const newToast: Toast = { id, message, type }
-    setToasts(prev => [...prev, newToast])
-
     setTimeout(() => {
       setToasts(prev => prev.filter(toast => toast.id !== id))
     }, duration)
@@ -275,7 +223,6 @@ export default function LancamentosPage() {
   const showToastWithConfirmation = (message: string, type: ToastType) => {
     const id = toastIdCounter
     setToastIdCounter(prev => prev + 1)
-
     const newToast: Toast = { id, message, type, requiresConfirmation: true }
     setToasts(prev => [...prev, newToast])
   }
@@ -287,71 +234,20 @@ export default function LancamentosPage() {
   const getToastStyles = (type: ToastType) => {
     switch (type) {
       case 'success':
-        return {
-          borderColor: '#10b981',
-          icon: CheckCircle,
-          iconColor: '#10b981'
-        }
+        return { borderColor: '#10b981', icon: CheckCircle, iconColor: '#10b981' }
       case 'warning':
-        return {
-          borderColor: '#eab308',
-          icon: AlertTriangle,
-          iconColor: '#eab308'
-        }
+        return { borderColor: '#eab308', icon: AlertTriangle, iconColor: '#eab308' }
       case 'error':
-        return {
-          borderColor: '#ef4444',
-          icon: XCircle,
-          iconColor: '#ef4444'
-        }
+        return { borderColor: '#ef4444', icon: XCircle, iconColor: '#ef4444' }
     }
   }
 
   useEffect(() => {
     loadEmpresas()
     loadContrapartes()
-    loadTipos()
     loadLancamentos()
   }, [])
 
-  // Filtros de plano de contas (filtros superiores)
-  useEffect(() => {
-    if (selectedTipoPlanoFilter) {
-      loadGrupos(selectedTipoPlanoFilter)
-      setSelectedGrupoFilter('')
-      setSelectedCategoriaFilter('')
-      setSelectedSubcategoriaFilter('')
-    } else {
-      setGrupos([])
-      setSelectedGrupoFilter('')
-      setSelectedCategoriaFilter('')
-      setSelectedSubcategoriaFilter('')
-    }
-  }, [selectedTipoPlanoFilter])
-
-  useEffect(() => {
-    if (selectedGrupoFilter) {
-      loadCategorias(selectedGrupoFilter)
-      setSelectedCategoriaFilter('')
-      setSelectedSubcategoriaFilter('')
-    } else {
-      setCategorias([])
-      setSelectedCategoriaFilter('')
-      setSelectedSubcategoriaFilter('')
-    }
-  }, [selectedGrupoFilter])
-
-  useEffect(() => {
-    if (selectedCategoriaFilter) {
-      loadSubcategorias(selectedCategoriaFilter)
-      setSelectedSubcategoriaFilter('')
-    } else {
-      setSubcategorias([])
-      setSelectedSubcategoriaFilter('')
-    }
-  }, [selectedCategoriaFilter])
-
-  // Filtros de empresa/projeto
   useEffect(() => {
     if (selectedEmpresaFilter) {
       loadProjetosFilter(selectedEmpresaFilter)
@@ -361,61 +257,32 @@ export default function LancamentosPage() {
     }
   }, [selectedEmpresaFilter])
 
-  // Formulário - quando mudar empresa
   useEffect(() => {
-    if (selectedEmpresaId && !isEditing) {
+    if (selectedEmpresaId) {
       loadProjetos(selectedEmpresaId)
       loadBancosContas(selectedEmpresaId)
       setValue('projeto_id', '')
+      setValue('subprojeto_id', '')
       setValue('banco_conta_id', '')
+      setSubprojetos([])
     }
   }, [selectedEmpresaId])
 
-  // Formulário - cascata plano de contas
   useEffect(() => {
-    if (selectedTipoPlanoId && !isEditing) {
-      loadGrupos(selectedTipoPlanoId)
-      setValue('grupo_id', '')
-      setValue('categoria_id', '')
-      setValue('subcategoria_id', '')
+    if (selectedProjetoId) {
+      loadSubprojetos(selectedProjetoId)
+      setValue('subprojeto_id', '')
+    } else {
+      setSubprojetos([])
+      setValue('subprojeto_id', '')
     }
-  }, [selectedTipoPlanoId])
+  }, [selectedProjetoId])
 
-  useEffect(() => {
-    if (selectedGrupoId && !isEditing) {
-      loadCategorias(selectedGrupoId)
-      setValue('categoria_id', '')
-      setValue('subcategoria_id', '')
-    }
-  }, [selectedGrupoId])
-
-  useEffect(() => {
-    if (selectedCategoriaId && !isEditing) {
-      loadSubcategorias(selectedCategoriaId)
-      setValue('subcategoria_id', '')
-    }
-  }, [selectedCategoriaId])
-
-  // Recalcular valor líquido quando mudar valor bruto ou retenções
   useEffect(() => {
     const totalRetencoes = retencoes.reduce((sum, ret) => sum + (ret.valor || 0), 0)
     const liquido = Math.max(0, valorBruto - totalRetencoes)
     setValorLiquido(liquido)
   }, [valorBruto, retencoes])
-
-  // Auto-selecionar tipo do plano de contas baseado no tipo do lançamento
-  useEffect(() => {
-    if (selectedTipoLancamento && !isEditing && tipos.length > 0) {
-      // Buscar tipo do plano com nome correspondente
-      const tipoPlano = tipos.find(t => 
-        t.nome.toLowerCase() === (selectedTipoLancamento === 'RECEITA' ? 'receitas' : 'despesas')
-      )
-      
-      if (tipoPlano) {
-        setValue('tipo_plano_id', tipoPlano.id)
-      }
-    }
-  }, [selectedTipoLancamento, tipos, isEditing])
 
   const loadEmpresas = async () => {
     try {
@@ -436,8 +303,9 @@ export default function LancamentosPage() {
     try {
       const { data, error } = await supabase
         .from('projetos')
-        .select('id, empresa_id, nome')
+        .select('id, empresa_id, nome, projeto_pai_id')
         .eq('empresa_id', empresaId)
+        .is('projeto_pai_id', null)
         .order('nome', { ascending: true })
 
       if (error) throw error
@@ -448,18 +316,31 @@ export default function LancamentosPage() {
     }
   }
 
-  const loadProjetosFilter = async (empresaId: string) => {
-    // Para o filtro, carregar projetos sem alterar o estado principal
+  const loadSubprojetos = async (projetoId: string) => {
     try {
       const { data, error } = await supabase
         .from('projetos')
-        .select('id, empresa_id, nome')
+        .select('id, empresa_id, nome, projeto_pai_id')
+        .eq('projeto_pai_id', projetoId)
+        .order('nome', { ascending: true })
+
+      if (error) throw error
+      setSubprojetos(data || [])
+    } catch (err) {
+      console.error('Erro ao carregar subprojetos:', err)
+      showToast('Erro ao carregar subprojetos', 'error')
+    }
+  }
+
+  const loadProjetosFilter = async (empresaId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('projetos')
+        .select('id, empresa_id, nome, projeto_pai_id')
         .eq('empresa_id', empresaId)
         .order('nome', { ascending: true })
 
       if (error) throw error
-      // Aqui você poderia ter um estado separado para projetos do filtro
-      // Por simplicidade, vamos usar o mesmo estado
       setProjetos(data || [])
     } catch (err) {
       console.error('Erro ao carregar projetos:', err)
@@ -497,95 +378,16 @@ export default function LancamentosPage() {
     }
   }
 
-  const loadTipos = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('pc_tipos')
-        .select('id, nome')
-        .order('ordem', { ascending: true })
-        .order('nome', { ascending: true })
-
-      if (error) throw error
-      setTipos(data || [])
-    } catch (err) {
-      console.error('Erro ao carregar tipos:', err)
-      showToast('Erro ao carregar tipos', 'error')
-    }
-  }
-
-  const loadGrupos = async (tipoId: string) => {
-    try {
-      const { data, error } = await supabase
-        .from('pc_grupos')
-        .select('id, tipo_id, nome')
-        .eq('tipo_id', tipoId)
-        .order('ordem', { ascending: true })
-        .order('nome', { ascending: true })
-
-      if (error) throw error
-      setGrupos(data || [])
-    } catch (err) {
-      console.error('Erro ao carregar grupos:', err)
-      showToast('Erro ao carregar grupos', 'error')
-    }
-  }
-
-  const loadCategorias = async (grupoId: string) => {
-    try {
-      const { data, error } = await supabase
-        .from('pc_categorias')
-        .select('id, grupo_id, nome')
-        .eq('grupo_id', grupoId)
-        .order('ordem', { ascending: true })
-        .order('nome', { ascending: true })
-
-      if (error) throw error
-      setCategorias(data || [])
-    } catch (err) {
-      console.error('Erro ao carregar categorias:', err)
-      showToast('Erro ao carregar categorias', 'error')
-    }
-  }
-
-  const loadSubcategorias = async (categoriaId: string) => {
-    try {
-      const { data, error } = await supabase
-        .from('pc_subcategorias')
-        .select('id, categoria_id, nome')
-        .eq('categoria_id', categoriaId)
-        .order('ordem', { ascending: true })
-        .order('nome', { ascending: true })
-
-      if (error) throw error
-      setSubcategorias(data || [])
-    } catch (err) {
-      console.error('Erro ao carregar subcategorias:', err)
-      showToast('Erro ao carregar subcategorias', 'error')
-    }
-  }
-
   const loadLancamentos = async () => {
     setLoading(true)
     try {
-      // Carregar tipos se ainda não carregados
-      let tiposParaUsar = tipos
-      if (tipos.length === 0) {
-        const { data: tiposData } = await supabase
-          .from('pc_tipos')
-          .select('id, nome')
-        tiposParaUsar = tiposData || []
-        setTipos(tiposParaUsar)
-      }
-
-      // Carregar dados auxiliares
-      const { data: todosGrupos } = await supabase.from('pc_grupos').select('id, tipo_id, nome')
-      const { data: todasCategorias } = await supabase.from('pc_categorias').select('id, grupo_id, nome')
-      const { data: todasSubcategorias } = await supabase.from('pc_subcategorias').select('id, categoria_id, nome')
       const { data: todasEmpresas } = await supabase.from('empresas').select('id, nome')
       const { data: todosProjetos } = await supabase.from('projetos').select('id, nome')
       const { data: todasContrapartes } = await supabase.from('contrapartes').select('id, nome')
+      const { data: todasContas } = await supabase
+        .from('plano_contas_fluxo')
+        .select('id, codigo_conta, categoria, subcategoria, tipo_fluxo, sentido')
 
-      // Carregar lançamentos
       const { data: lancamentosData, error: lancamentosError } = await supabase
         .from('lancamentos')
         .select('*')
@@ -594,33 +396,27 @@ export default function LancamentosPage() {
 
       if (lancamentosError) throw lancamentosError
 
-      // Carregar retenções de todos os lançamentos
       const lancamentosIds = (lancamentosData || []).map((l: any) => l.id)
       const { data: todasRetencoes } = await supabase
         .from('lancamento_retencoes')
         .select('*')
         .in('lancamento_id', lancamentosIds)
 
-      // Fazer joins manuais
       const lancamentosCompletos = (lancamentosData || []).map((lanc: any) => {
-        const subcategoria = todasSubcategorias?.find(s => s.id === lanc.subcategoria_id)
-        const categoria = todasCategorias?.find(c => c.id === subcategoria?.categoria_id)
-        const grupo = todosGrupos?.find(g => g.id === categoria?.grupo_id)
-        const tipo = tiposParaUsar.find(t => t.id === grupo?.tipo_id)
         const empresa = todasEmpresas?.find(e => e.id === lanc.empresa_id)
         const projeto = todosProjetos?.find(p => p.id === lanc.projeto_id)
+        const subprojeto = todosProjetos?.find(p => p.id === lanc.subprojeto_id)
         const contraparte = todasContrapartes?.find(c => c.id === lanc.contraparte_id)
+        const planoConta = todasContas?.find(pc => pc.id === lanc.plano_conta_id)
         const retencoesDoLancamento = todasRetencoes?.filter(r => r.lancamento_id === lanc.id) || []
 
         return {
           ...lanc,
-          subcategoria_nome: subcategoria?.nome || 'Sem subcategoria',
-          categoria_nome: categoria?.nome || 'Sem categoria',
-          grupo_nome: grupo?.nome || 'Sem grupo',
-          tipo_plano_nome: tipo?.nome || 'Sem tipo',
           empresa_nome: empresa?.nome || 'Sem empresa',
           projeto_nome: projeto?.nome || '',
+          subprojeto_nome: subprojeto?.nome || '',
           contraparte_nome: contraparte?.nome || '',
+          plano_conta: planoConta || null,
           retencoes: retencoesDoLancamento
         }
       })
@@ -636,13 +432,11 @@ export default function LancamentosPage() {
 
   const onSubmit = async (data: LancamentoForm) => {
     try {
-      // Validar duplicidade de retenções
       if (retencoes.length > 0) {
         const impostos = retencoes.map(r => r.imposto)
         const impostosUnicos = new Set(impostos)
         
         if (impostos.length !== impostosUnicos.size) {
-          // Encontrar qual imposto está duplicado
           const duplicados: string[] = []
           impostos.forEach((imposto, index) => {
             if (impostos.indexOf(imposto) !== index && !duplicados.includes(imposto)) {
@@ -663,9 +457,10 @@ export default function LancamentosPage() {
         tipo: data.tipo,
         empresa_id: data.empresa_id,
         projeto_id: data.projeto_id || null,
+        subprojeto_id: data.subprojeto_id || null,
         banco_conta_id: data.banco_conta_id || null,
         contraparte_id: data.contraparte_id || null,
-        subcategoria_id: data.subcategoria_id,
+        plano_conta_id: data.plano_conta_id,
         valor_bruto: valorBruto,
         valor_liquido: valorLiquido,
         data_emissao: data.data_emissao || null,
@@ -678,7 +473,6 @@ export default function LancamentosPage() {
       }
 
       if (editingId) {
-        // Atualizar
         const { error: lancError } = await supabase
           .from('lancamentos')
           .update(lancamentoData)
@@ -686,13 +480,11 @@ export default function LancamentosPage() {
 
         if (lancError) throw lancError
 
-        // Deletar retenções antigas
         await supabase
           .from('lancamento_retencoes')
           .delete()
           .eq('lancamento_id', editingId)
 
-        // Inserir novas retenções
         if (retencoes.length > 0) {
           const retencoesData = retencoes
             .filter(r => r.valor > 0)
@@ -714,7 +506,6 @@ export default function LancamentosPage() {
 
         showToast('Lançamento atualizado com sucesso!', 'success')
       } else {
-        // Criar
         const { data: novoLancamento, error: lancError } = await supabase
           .from('lancamentos')
           .insert([lancamentoData])
@@ -723,7 +514,6 @@ export default function LancamentosPage() {
 
         if (lancError) throw lancError
 
-        // Inserir retenções
         if (retencoes.length > 0 && novoLancamento) {
           const retencoesData = retencoes
             .filter(r => r.valor > 0)
@@ -755,7 +545,6 @@ export default function LancamentosPage() {
   }
 
   const onSubmitError = (errors: any) => {
-    // Coletar todas as mensagens de erro
     const errorMessages: string[] = []
     
     Object.keys(errors).forEach((key) => {
@@ -764,7 +553,6 @@ export default function LancamentosPage() {
       }
     })
 
-    // Mostrar um único toast com botão OK
     if (errorMessages.length > 0) {
       const message = errorMessages.join(' • ')
       showToastWithConfirmation(message, 'warning')
@@ -773,56 +561,24 @@ export default function LancamentosPage() {
 
   const handleEdit = async (lancamento: Lancamento) => {
     try {
-      setIsEditing(true)
       setEditingId(lancamento.id)
 
-      // Buscar dados para popular cascata
-      const { data: subcategoria } = await supabase
-        .from('pc_subcategorias')
-        .select('id, categoria_id')
-        .eq('id', lancamento.subcategoria_id)
-        .single()
-
-      const { data: categoria } = await supabase
-        .from('pc_categorias')
-        .select('id, grupo_id')
-        .eq('id', subcategoria?.categoria_id)
-        .single()
-
-      const { data: grupo } = await supabase
-        .from('pc_grupos')
-        .select('id, tipo_id')
-        .eq('id', categoria?.grupo_id)
-        .single()
-
-      // Carregar listas dependentes
       if (lancamento.empresa_id) {
         await loadProjetos(lancamento.empresa_id)
         await loadBancosContas(lancamento.empresa_id)
+        
+        if (lancamento.projeto_id) {
+          await loadSubprojetos(lancamento.projeto_id)
+        }
       }
 
-      if (grupo?.tipo_id) {
-        await loadGrupos(grupo.tipo_id)
-      }
-
-      if (categoria?.grupo_id) {
-        await loadCategorias(categoria.grupo_id)
-      }
-
-      if (subcategoria?.categoria_id) {
-        await loadSubcategorias(subcategoria.categoria_id)
-      }
-
-      // Setar valores
       setValue('tipo', lancamento.tipo)
       setValue('empresa_id', lancamento.empresa_id)
       setValue('projeto_id', lancamento.projeto_id || '')
+      setValue('subprojeto_id', lancamento.subprojeto_id || '')
       setValue('banco_conta_id', lancamento.banco_conta_id || '')
       setValue('contraparte_id', lancamento.contraparte_id || '')
-      setValue('tipo_plano_id', grupo?.tipo_id || '')
-      setValue('grupo_id', categoria?.grupo_id || '')
-      setValue('categoria_id', subcategoria?.categoria_id || '')
-      setValue('subcategoria_id', lancamento.subcategoria_id)
+      setValue('plano_conta_id', lancamento.plano_conta_id)
       setValue('valor_bruto', lancamento.valor_bruto)
       setValue('data_emissao', formatDateForInput(lancamento.data_emissao))
       setValue('data_vencimento', formatDateForInput(lancamento.data_vencimento))
@@ -833,32 +589,26 @@ export default function LancamentosPage() {
       setValorBruto(lancamento.valor_bruto)
       setValorBrutoFormatado(formatCurrencyInput((lancamento.valor_bruto * 100).toString()))
       
-      // Formatar valores das retenções
       const retencoesFormatadas = (lancamento.retencoes || []).map(ret => ({
         ...ret,
         valorFormatado: formatCurrencyInput((ret.valor * 100).toString())
       }))
       setRetencoes(retencoesFormatadas)
 
-      await new Promise(resolve => setTimeout(resolve, 50))
       setShowModal(true)
-      setTimeout(() => setIsEditing(false), 100)
     } catch (error) {
       console.error('Erro ao editar lançamento:', error)
       showToast('Erro ao carregar dados para edição', 'error')
-      setIsEditing(false)
     }
   }
 
   const handleDelete = async (id: string) => {
     try {
-      // Deletar retenções primeiro
       await supabase
         .from('lancamento_retencoes')
         .delete()
         .eq('lancamento_id', id)
 
-      // Deletar lançamento
       const { error } = await supabase
         .from('lancamentos')
         .delete()
@@ -918,25 +668,20 @@ export default function LancamentosPage() {
 
   const openNewModal = () => {
     setEditingId(null)
-    setIsEditing(false)
     setRetencoes([])
     setValorBruto(0)
     setValorBrutoFormatado('')
     setValorLiquido(0)
-    
-    // Buscar tipo do plano correspondente a "Despesa"
-    const tipoPlanoInicial = tipos.find(t => t.nome.toLowerCase() === 'despesas')
+    setSubprojetos([])
 
     reset({
-      tipo: 'DESPESA',
+      tipo: 'Saida',
       empresa_id: '',
       projeto_id: '',
+      subprojeto_id: '',
       banco_conta_id: '',
       contraparte_id: '',
-      tipo_plano_id: tipoPlanoInicial?.id || '',
-      grupo_id: '',
-      categoria_id: '',
-      subcategoria_id: '',
+      plano_conta_id: '',
       valor_bruto: 0,
       data_emissao: '',
       data_vencimento: '',
@@ -950,16 +695,16 @@ export default function LancamentosPage() {
   const closeModal = () => {
     setShowModal(false)
     setEditingId(null)
-    setIsEditing(false)
     setRetencoes([])
     setValorBruto(0)
     setValorBrutoFormatado('')
     setValorLiquido(0)
+    setSubprojetos([])
     reset()
   }
 
   const addRetencao = () => {
-    setRetencoes([...retencoes, { imposto: 'IRRF', valor: 0, valorFormatado: '', detalhe: '' }])
+    setRetencoes([...retencoes, { imposto: 'IRRF', valor: 0, valorFormatado: '', detalhe: null }])
   }
 
   const removeRetencao = (index: number) => {
@@ -982,7 +727,6 @@ export default function LancamentosPage() {
     setRetencoes(updated)
   }
 
-  // Filtrar lançamentos
   const filteredLancamentos = lancamentos.filter(lanc => {
     const matchesSearch = 
       lanc.documento_numero?.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -995,13 +739,6 @@ export default function LancamentosPage() {
     const matchesProjeto = !selectedProjetoFilter || lanc.projeto_id === selectedProjetoFilter
     const matchesContraparte = !selectedContraparteFilter || lanc.contraparte_id === selectedContraparteFilter
 
-    // Filtros de plano de contas
-    const matchesTipoPlano = !selectedTipoPlanoFilter || lanc.tipo_plano_nome === tipos.find(t => t.id === selectedTipoPlanoFilter)?.nome
-    const matchesGrupo = !selectedGrupoFilter || lanc.grupo_nome === grupos.find(g => g.id === selectedGrupoFilter)?.nome
-    const matchesCategoria = !selectedCategoriaFilter || lanc.categoria_nome === categorias.find(c => c.id === selectedCategoriaFilter)?.nome
-    const matchesSubcategoria = !selectedSubcategoriaFilter || lanc.subcategoria_nome === subcategorias.find(s => s.id === selectedSubcategoriaFilter)?.nome
-
-    // Filtro de período
     let matchesPeriodo = true
     if (dataVencimentoInicio && dataVencimentoFim) {
       const vencimento = new Date(lanc.data_vencimento)
@@ -1011,8 +748,7 @@ export default function LancamentosPage() {
     }
 
     return matchesSearch && matchesTipo && matchesStatus && matchesEmpresa && 
-           matchesProjeto && matchesContraparte && matchesTipoPlano && matchesGrupo && 
-           matchesCategoria && matchesSubcategoria && matchesPeriodo
+           matchesProjeto && matchesContraparte && matchesPeriodo
   })
 
   const getStatusBadge = (status: string) => {
@@ -1029,14 +765,13 @@ export default function LancamentosPage() {
   }
 
   const getTipoBadge = (tipo: string) => {
-    return tipo === 'RECEITA'
-      ? { bg: '#d1fae5', color: '#065f46', label: 'Receita' }
-      : { bg: '#fee2e2', color: '#991b1b', label: 'Despesa' }
+    return tipo === 'Entrada'
+      ? { bg: '#d1fae5', color: '#065f46', label: 'Entrada' }
+      : { bg: '#fee2e2', color: '#991b1b', label: 'Saída' }
   }
 
   return (
     <div style={{ padding: '32px', maxWidth: '1600px', margin: '0 auto' }}>
-      {/* Header Card */}
       <div style={{
         backgroundColor: 'white',
         borderRadius: '12px',
@@ -1082,14 +817,12 @@ export default function LancamentosPage() {
           </button>
         </div>
 
-        {/* Filtros - Linha 1 */}
         <div style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
           gap: '12px',
           marginBottom: '12px'
         }}>
-          {/* Período Início */}
           <div>
             <label style={{
               display: 'block',
@@ -1115,7 +848,6 @@ export default function LancamentosPage() {
             />
           </div>
 
-          {/* Período Fim */}
           <div>
             <label style={{
               display: 'block',
@@ -1141,7 +873,6 @@ export default function LancamentosPage() {
             />
           </div>
 
-          {/* Tipo */}
           <div>
             <label style={{
               display: 'block',
@@ -1166,12 +897,11 @@ export default function LancamentosPage() {
               }}
             >
               <option value="">Todos</option>
-              <option value="RECEITA">Receita</option>
-              <option value="DESPESA">Despesa</option>
+              <option value="Entrada">Entrada</option>
+              <option value="Saida">Saída</option>
             </select>
           </div>
 
-          {/* Status */}
           <div>
             <label style={{
               display: 'block',
@@ -1202,7 +932,6 @@ export default function LancamentosPage() {
             </select>
           </div>
 
-          {/* Empresa */}
           <div>
             <label style={{
               display: 'block',
@@ -1233,209 +962,6 @@ export default function LancamentosPage() {
             </select>
           </div>
 
-          {/* Projeto */}
-          <div>
-            <label style={{
-              display: 'block',
-              fontSize: '12px',
-              fontWeight: '500',
-              color: '#374151',
-              marginBottom: '6px'
-            }}>
-              Projeto
-            </label>
-            <select
-              value={selectedProjetoFilter}
-              onChange={(e) => setSelectedProjetoFilter(e.target.value)}
-              disabled={!selectedEmpresaFilter}
-              style={{
-                width: '100%',
-                padding: '8px 10px',
-                border: '1px solid #e5e7eb',
-                borderRadius: '8px',
-                fontSize: '14px',
-                outline: 'none',
-                cursor: selectedEmpresaFilter ? 'pointer' : 'not-allowed',
-                opacity: selectedEmpresaFilter ? 1 : 0.6
-              }}
-            >
-              <option value="">Todos</option>
-              {projetos.map((proj) => (
-                <option key={proj.id} value={proj.id}>{proj.nome}</option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        {/* Filtros - Linha 2: Plano de Contas */}
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-          gap: '12px',
-          marginBottom: '12px'
-        }}>
-          {/* Tipo Plano */}
-          <div>
-            <label style={{
-              display: 'block',
-              fontSize: '12px',
-              fontWeight: '500',
-              color: '#374151',
-              marginBottom: '6px'
-            }}>
-              Tipo (Plano)
-            </label>
-            <select
-              value={selectedTipoPlanoFilter}
-              onChange={(e) => setSelectedTipoPlanoFilter(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '8px 10px',
-                border: '1px solid #e5e7eb',
-                borderRadius: '8px',
-                fontSize: '14px',
-                outline: 'none',
-                cursor: 'pointer'
-              }}
-            >
-              <option value="">Todos</option>
-              {tipos.map((tipo) => (
-                <option key={tipo.id} value={tipo.id}>{tipo.nome}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Grupo */}
-          <div>
-            <label style={{
-              display: 'block',
-              fontSize: '12px',
-              fontWeight: '500',
-              color: '#374151',
-              marginBottom: '6px'
-            }}>
-              Grupo
-            </label>
-            <select
-              value={selectedGrupoFilter}
-              onChange={(e) => setSelectedGrupoFilter(e.target.value)}
-              disabled={!selectedTipoPlanoFilter}
-              style={{
-                width: '100%',
-                padding: '8px 10px',
-                border: '1px solid #e5e7eb',
-                borderRadius: '8px',
-                fontSize: '14px',
-                outline: 'none',
-                cursor: selectedTipoPlanoFilter ? 'pointer' : 'not-allowed',
-                opacity: selectedTipoPlanoFilter ? 1 : 0.6
-              }}
-            >
-              <option value="">Todos</option>
-              {grupos.map((grupo) => (
-                <option key={grupo.id} value={grupo.id}>{grupo.nome}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Categoria */}
-          <div>
-            <label style={{
-              display: 'block',
-              fontSize: '12px',
-              fontWeight: '500',
-              color: '#374151',
-              marginBottom: '6px'
-            }}>
-              Categoria
-            </label>
-            <select
-              value={selectedCategoriaFilter}
-              onChange={(e) => setSelectedCategoriaFilter(e.target.value)}
-              disabled={!selectedGrupoFilter}
-              style={{
-                width: '100%',
-                padding: '8px 10px',
-                border: '1px solid #e5e7eb',
-                borderRadius: '8px',
-                fontSize: '14px',
-                outline: 'none',
-                cursor: selectedGrupoFilter ? 'pointer' : 'not-allowed',
-                opacity: selectedGrupoFilter ? 1 : 0.6
-              }}
-            >
-              <option value="">Todas</option>
-              {categorias.map((cat) => (
-                <option key={cat.id} value={cat.id}>{cat.nome}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Subcategoria */}
-          <div>
-            <label style={{
-              display: 'block',
-              fontSize: '12px',
-              fontWeight: '500',
-              color: '#374151',
-              marginBottom: '6px'
-            }}>
-              Subcategoria
-            </label>
-            <select
-              value={selectedSubcategoriaFilter}
-              onChange={(e) => setSelectedSubcategoriaFilter(e.target.value)}
-              disabled={!selectedCategoriaFilter}
-              style={{
-                width: '100%',
-                padding: '8px 10px',
-                border: '1px solid #e5e7eb',
-                borderRadius: '8px',
-                fontSize: '14px',
-                outline: 'none',
-                cursor: selectedCategoriaFilter ? 'pointer' : 'not-allowed',
-                opacity: selectedCategoriaFilter ? 1 : 0.6
-              }}
-            >
-              <option value="">Todas</option>
-              {subcategorias.map((sub) => (
-                <option key={sub.id} value={sub.id}>{sub.nome}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Contraparte */}
-          <div>
-            <label style={{
-              display: 'block',
-              fontSize: '12px',
-              fontWeight: '500',
-              color: '#374151',
-              marginBottom: '6px'
-            }}>
-              Contraparte
-            </label>
-            <select
-              value={selectedContraparteFilter}
-              onChange={(e) => setSelectedContraparteFilter(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '8px 10px',
-                border: '1px solid #e5e7eb',
-                borderRadius: '8px',
-                fontSize: '14px',
-                outline: 'none',
-                cursor: 'pointer'
-              }}
-            >
-              <option value="">Todas</option>
-              {contrapartes.map((cp) => (
-                <option key={cp.id} value={cp.id}>{cp.nome}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Busca */}
           <div>
             <label style={{
               display: 'block',
@@ -1476,7 +1002,817 @@ export default function LancamentosPage() {
         </div>
       </div>
 
-      {/* Table Card */}
+      {showModal && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '20px',
+            overflowY: 'auto',
+            backdropFilter: 'blur(4px)'
+          }}
+          onClick={closeModal}
+        >
+          <div
+            style={{
+              backgroundColor: 'white',
+              borderRadius: '12px',
+              width: '100%',
+              maxWidth: '900px',
+              maxHeight: '90vh',
+              overflow: 'auto',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+              margin: '20px 0'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{
+              position: 'sticky',
+              top: 0,
+              backgroundColor: 'white',
+              borderBottom: '1px solid #e5e7eb',
+              padding: '16px 20px',
+              borderTopLeftRadius: '12px',
+              borderTopRightRadius: '12px',
+              zIndex: 10
+            }}>
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}>
+                <h2 style={{
+                  fontSize: '20px',
+                  fontWeight: '600',
+                  color: '#1f2937',
+                  margin: 0
+                }}>
+                  {editingId ? 'Editar Lançamento' : 'Novo Lançamento'}
+                </h2>
+                <button
+                  onClick={closeModal}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    fontSize: '24px',
+                    color: '#9ca3af',
+                    cursor: 'pointer',
+                    padding: '0',
+                    width: '32px',
+                    height: '32px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderRadius: '6px',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => {
+                    e.currentTarget.style.backgroundColor = '#f3f4f6'
+                    e.currentTarget.style.color = '#6b7280'
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent'
+                    e.currentTarget.style.color = '#9ca3af'
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+
+            <div style={{ padding: '18px' }}>
+              <form onSubmit={handleSubmit(onSubmit, onSubmitError)}>
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: '100px 1fr 1fr 1fr 1fr 1fr',
+                  gap: '12px',
+                  marginBottom: '14px'
+                }}>
+                  <div>
+                    <label style={{
+                      display: 'block',
+                      fontSize: '13px',
+                      fontWeight: '500',
+                      color: '#374151',
+                      marginBottom: '6px'
+                    }}>
+                      Tipo *
+                    </label>
+                    <select
+                      {...register('tipo')}
+                      style={{
+                        width: '100%',
+                        padding: '9px 10px',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '8px',
+                        fontSize: '13px',
+                        outline: 'none',
+                        cursor: 'pointer'
+                      }}
+                      onFocus={(e) => {
+                        e.currentTarget.style.borderColor = '#1555D6'
+                        e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                      }}
+                      onBlur={(e) => {
+                        e.currentTarget.style.borderColor = '#e5e7eb'
+                        e.currentTarget.style.boxShadow = 'none'
+                      }}
+                    >
+                      <option value="Entrada">Entrada</option>
+                      <option value="Saida">Saída</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label style={{
+                      display: 'block',
+                      fontSize: '13px',
+                      fontWeight: '500',
+                      color: '#374151',
+                      marginBottom: '6px'
+                    }}>
+                      Empresa *
+                    </label>
+                    <select
+                      {...register('empresa_id')}
+                      style={{
+                        width: '100%',
+                        padding: '9px 10px',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '8px',
+                        fontSize: '13px',
+                        outline: 'none',
+                        cursor: 'pointer'
+                      }}
+                      onFocus={(e) => {
+                        e.currentTarget.style.borderColor = '#1555D6'
+                        e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                      }}
+                      onBlur={(e) => {
+                        e.currentTarget.style.borderColor = '#e5e7eb'
+                        e.currentTarget.style.boxShadow = 'none'
+                      }}
+                    >
+                      <option value="">Selecione</option>
+                      {empresas.map((emp) => (
+                        <option key={emp.id} value={emp.id}>{emp.nome}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label style={{
+                      display: 'block',
+                      fontSize: '13px',
+                      fontWeight: '500',
+                      color: '#374151',
+                      marginBottom: '6px'
+                    }}>
+                      Projeto *
+                    </label>
+                    <select
+                      {...register('projeto_id')}
+                      disabled={!selectedEmpresaId}
+                      style={{
+                        width: '100%',
+                        padding: '9px 10px',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '8px',
+                        fontSize: '13px',
+                        outline: 'none',
+                        cursor: selectedEmpresaId ? 'pointer' : 'not-allowed',
+                        opacity: selectedEmpresaId ? 1 : 0.6
+                      }}
+                      onFocus={(e) => {
+                        if (selectedEmpresaId) {
+                          e.currentTarget.style.borderColor = '#1555D6'
+                          e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                        }
+                      }}
+                      onBlur={(e) => {
+                        e.currentTarget.style.borderColor = '#e5e7eb'
+                        e.currentTarget.style.boxShadow = 'none'
+                      }}
+                    >
+                      <option value="">Selecione</option>
+                      {projetos.map((proj) => (
+                        <option key={proj.id} value={proj.id}>{proj.nome}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label style={{
+                      display: 'block',
+                      fontSize: '13px',
+                      fontWeight: '500',
+                      color: '#374151',
+                      marginBottom: '6px'
+                    }}>
+                      Subprojeto
+                    </label>
+                    <select
+                      {...register('subprojeto_id')}
+                      disabled={!selectedProjetoId || subprojetos.length === 0}
+                      style={{
+                        width: '100%',
+                        padding: '9px 10px',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '8px',
+                        fontSize: '13px',
+                        outline: 'none',
+                        cursor: (selectedProjetoId && subprojetos.length > 0) ? 'pointer' : 'not-allowed',
+                        opacity: (selectedProjetoId && subprojetos.length > 0) ? 1 : 0.6
+                      }}
+                      onFocus={(e) => {
+                        if (selectedProjetoId && subprojetos.length > 0) {
+                          e.currentTarget.style.borderColor = '#1555D6'
+                          e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                        }
+                      }}
+                      onBlur={(e) => {
+                        e.currentTarget.style.borderColor = '#e5e7eb'
+                        e.currentTarget.style.boxShadow = 'none'
+                      }}
+                    >
+                      <option value="">Selecione</option>
+                      {subprojetos.map((sub) => (
+                        <option key={sub.id} value={sub.id}>{sub.nome}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label style={{
+                      display: 'block',
+                      fontSize: '13px',
+                      fontWeight: '500',
+                      color: '#374151',
+                      marginBottom: '6px'
+                    }}>
+                      Conta Bancária *
+                    </label>
+                    <select
+                      {...register('banco_conta_id')}
+                      disabled={!selectedEmpresaId}
+                      style={{
+                        width: '100%',
+                        padding: '9px 10px',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '8px',
+                        fontSize: '13px',
+                        outline: 'none',
+                        cursor: selectedEmpresaId ? 'pointer' : 'not-allowed',
+                        opacity: selectedEmpresaId ? 1 : 0.6
+                      }}
+                      onFocus={(e) => {
+                        if (selectedEmpresaId) {
+                          e.currentTarget.style.borderColor = '#1555D6'
+                          e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                        }
+                      }}
+                      onBlur={(e) => {
+                        e.currentTarget.style.borderColor = '#e5e7eb'
+                        e.currentTarget.style.boxShadow = 'none'
+                      }}
+                    >
+                      <option value="">Selecione</option>
+                      {bancosContas.map((bc) => (
+                        <option key={bc.id} value={bc.id}>
+                          {bc.banco_nome} - {bc.numero_conta}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label style={{
+                      display: 'block',
+                      fontSize: '13px',
+                      fontWeight: '500',
+                      color: '#374151',
+                      marginBottom: '6px'
+                    }}>
+                      Contraparte *
+                    </label>
+                    <select
+                      {...register('contraparte_id')}
+                      style={{
+                        width: '100%',
+                        padding: '9px 10px',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '8px',
+                        fontSize: '13px',
+                        outline: 'none',
+                        cursor: 'pointer'
+                      }}
+                      onFocus={(e) => {
+                        e.currentTarget.style.borderColor = '#1555D6'
+                        e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                      }}
+                      onBlur={(e) => {
+                        e.currentTarget.style.borderColor = '#e5e7eb'
+                        e.currentTarget.style.boxShadow = 'none'
+                      }}
+                    >
+                      <option value="">Selecione</option>
+                      {contrapartes.map((cp) => (
+                        <option key={cp.id} value={cp.id}>{cp.nome}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div style={{
+                  borderTop: '1px solid #e5e7eb',
+                  margin: '16px 0',
+                  paddingTop: '16px'
+                }}>
+                  <h3 style={{
+                    fontSize: '16px',
+                    fontWeight: '600',
+                    color: '#1f2937',
+                    marginTop: 0,
+                    marginBottom: '14px'
+                  }}>
+                    Plano de Contas
+                  </h3>
+                </div>
+
+                <div style={{ marginBottom: '14px' }}>
+                  <PlanoContaPicker
+                     value={watch('plano_conta_id')}
+                     onChange={(id) => setValue('plano_conta_id', id)}
+                     sentidoFilter={selectedTipoLancamento}
+                     error={errors.plano_conta_id?.message}
+                />
+                </div>
+
+                <div style={{
+                  borderTop: '1px solid #e5e7eb',
+                  margin: '16px 0',
+                  paddingTop: '16px'
+                }}>
+                  <h3 style={{
+                    fontSize: '16px',
+                    fontWeight: '600',
+                    color: '#1f2937',
+                    marginTop: 0,
+                    marginBottom: '14px'
+                  }}>
+                    Datas, Documentos e Valores
+                  </h3>
+                </div>
+
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 1fr 1fr 0.8fr 0.6fr',
+                  gap: '12px',
+                  marginBottom: '14px'
+                }}>
+                  <div>
+                    <label style={{
+                      display: 'block',
+                      fontSize: '13px',
+                      fontWeight: '500',
+                      color: '#374151',
+                      marginBottom: '6px'
+                    }}>
+                      Data Emissão *
+                    </label>
+                    <input
+                      {...register('data_emissao')}
+                      type="date"
+                      style={{
+                        width: '100%',
+                        padding: '9px 10px',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '8px',
+                        fontSize: '13px',
+                        outline: 'none'
+                      }}
+                      onFocus={(e) => {
+                        e.currentTarget.style.borderColor = '#1555D6'
+                        e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                      }}
+                      onBlur={(e) => {
+                        e.currentTarget.style.borderColor = '#e5e7eb'
+                        e.currentTarget.style.boxShadow = 'none'
+                      }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{
+                      display: 'block',
+                      fontSize: '13px',
+                      fontWeight: '500',
+                      color: '#374151',
+                      marginBottom: '6px'
+                    }}>
+                      Data Vencimento *
+                    </label>
+                    <input
+                      {...register('data_vencimento')}
+                      type="date"
+                      style={{
+                        width: '100%',
+                        padding: '9px 10px',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '8px',
+                        fontSize: '13px',
+                        outline: 'none'
+                      }}
+                      onFocus={(e) => {
+                        e.currentTarget.style.borderColor = '#1555D6'
+                        e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                      }}
+                      onBlur={(e) => {
+                        e.currentTarget.style.borderColor = '#e5e7eb'
+                        e.currentTarget.style.boxShadow = 'none'
+                      }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{
+                      display: 'block',
+                      fontSize: '13px',
+                      fontWeight: '500',
+                      color: '#374151',
+                      marginBottom: '6px'
+                    }}>
+                      Valor Bruto *
+                    </label>
+                    <div style={{ position: 'relative' }}>
+                      <span style={{
+                        position: 'absolute',
+                        left: '10px',
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        fontSize: '13px',
+                        color: '#6b7280',
+                        fontWeight: '500'
+                      }}>
+                        R$
+                      </span>
+                      <input
+                        type="text"
+                        value={valorBrutoFormatado}
+                        onChange={(e) => {
+                          const formatted = formatCurrencyInput(e.target.value)
+                          setValorBrutoFormatado(formatted)
+                          const numericValue = parseCurrencyInput(formatted)
+                          setValorBruto(numericValue)
+                          setValue('valor_bruto', numericValue)
+                        }}
+                        style={{
+                          width: '100%',
+                          padding: '9px 10px 9px 32px',
+                          border: '1px solid #e5e7eb',
+                          borderRadius: '8px',
+                          fontSize: '13px',
+                          outline: 'none',
+                          textAlign: 'right'
+                        }}
+                        placeholder="0,00"
+                        onFocus={(e) => {
+                          e.currentTarget.style.borderColor = '#1555D6'
+                          e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                        }}
+                        onBlur={(e) => {
+                          e.currentTarget.style.borderColor = '#e5e7eb'
+                          e.currentTarget.style.boxShadow = 'none'
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label style={{
+                      display: 'block',
+                      fontSize: '13px',
+                      fontWeight: '500',
+                      color: '#374151',
+                      marginBottom: '6px'
+                    }}>
+                      Tipo Doc
+                    </label>
+                    <input
+                      {...register('documento_tipo')}
+                      type="text"
+                      placeholder="NF, Boleto..."
+                      style={{
+                        width: '100%',
+                        padding: '9px 10px',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '8px',
+                        fontSize: '13px',
+                        outline: 'none'
+                      }}
+                      onFocus={(e) => {
+                        e.currentTarget.style.borderColor = '#1555D6'
+                        e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                      }}
+                      onBlur={(e) => {
+                        e.currentTarget.style.borderColor = '#e5e7eb'
+                        e.currentTarget.style.boxShadow = 'none'
+                      }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{
+                      display: 'block',
+                      fontSize: '13px',
+                      fontWeight: '500',
+                      color: '#374151',
+                      marginBottom: '6px'
+                    }}>
+                      Nº Doc
+                    </label>
+                    <input
+                      {...register('documento_numero')}
+                      type="text"
+                      placeholder="123456"
+                      style={{
+                        width: '100%',
+                        padding: '9px 10px',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '8px',
+                        fontSize: '13px',
+                        outline: 'none'
+                      }}
+                      onFocus={(e) => {
+                        e.currentTarget.style.borderColor = '#1555D6'
+                        e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                      }}
+                      onBlur={(e) => {
+                        e.currentTarget.style.borderColor = '#e5e7eb'
+                        e.currentTarget.style.boxShadow = 'none'
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ marginBottom: '14px' }}>
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    marginBottom: '10px'
+                  }}>
+                    <label style={{
+                      fontSize: '14px',
+                      fontWeight: '500',
+                      color: '#374151'
+                    }}>
+                      Retenções
+                    </label>
+                    <button
+                      type="button"
+                      onClick={addRetencao}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '6px 12px',
+                        backgroundColor: '#f3f4f6',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '6px',
+                        fontSize: '13px',
+                        fontWeight: '500',
+                        color: '#374151',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s'
+                      }}
+                      onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#e5e7eb'}
+                      onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#f3f4f6'}
+                    >
+                      <Plus size={14} />
+                      Adicionar
+                    </button>
+                  </div>
+
+                  {retencoes.length > 0 && (
+                    <div style={{
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '8px',
+                      overflow: 'hidden'
+                    }}>
+                      {retencoes.map((ret, index) => (
+                        <div
+                          key={index}
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: '140px 1fr 1fr 40px',
+                            gap: '10px',
+                            padding: '10px',
+                            borderBottom: index < retencoes.length - 1 ? '1px solid #e5e7eb' : 'none',
+                            alignItems: 'center'
+                          }}
+                        >
+                          <select
+                            value={ret.imposto}
+                            onChange={(e) => updateRetencao(index, 'imposto', e.target.value)}
+                            style={{
+                              padding: '8px',
+                              border: '1px solid #e5e7eb',
+                              borderRadius: '6px',
+                              fontSize: '13px',
+                              outline: 'none'
+                            }}
+                          >
+                            {IMPOSTOS.map((imp) => (
+                              <option key={imp.value} value={imp.value}>{imp.label}</option>
+                            ))}
+                          </select>
+
+                          <input
+                            type="text"
+                            value={ret.valorFormatado || ''}
+                            onChange={(e) => {
+                              const formatted = formatCurrencyInput(e.target.value)
+                              updateRetencaoValor(index, formatted)
+                            }}
+                            placeholder="0,00"
+                            style={{
+                              padding: '8px',
+                              border: '1px solid #e5e7eb',
+                              borderRadius: '6px',
+                              fontSize: '13px',
+                              outline: 'none'
+                            }}
+                          />
+
+                          <input
+                            type="text"
+                            value={ret.detalhe || ''}
+                            onChange={(e) => updateRetencao(index, 'detalhe', e.target.value)}
+                            placeholder="Detalhe (opcional)"
+                            style={{
+                              padding: '8px',
+                              border: '1px solid #e5e7eb',
+                              borderRadius: '6px',
+                              fontSize: '13px',
+                              outline: 'none'
+                            }}
+                          />
+
+                          <button
+                            type="button"
+                            onClick={() => removeRetencao(index)}
+                            style={{
+                              padding: '6px',
+                              backgroundColor: 'transparent',
+                              border: '1px solid #e5e7eb',
+                              borderRadius: '6px',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              transition: 'all 0.2s'
+                            }}
+                            onMouseOver={(e) => {
+                              e.currentTarget.style.backgroundColor = '#fef2f2'
+                              e.currentTarget.style.borderColor = '#fecaca'
+                            }}
+                            onMouseOut={(e) => {
+                              e.currentTarget.style.backgroundColor = 'transparent'
+                              e.currentTarget.style.borderColor = '#e5e7eb'
+                            }}
+                          >
+                            <X size={14} color="#ef4444" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div style={{
+                  padding: '12px',
+                  backgroundColor: '#f0fdf4',
+                  border: '1px solid #86efac',
+                  borderRadius: '8px',
+                  marginBottom: '14px'
+                }}>
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center'
+                  }}>
+                    <span style={{
+                      fontSize: '14px',
+                      fontWeight: '600',
+                      color: '#065f46'
+                    }}>
+                      Valor Líquido:
+                    </span>
+                    <span style={{
+                      fontSize: '18px',
+                      fontWeight: '700',
+                      color: '#059669'
+                    }}>
+                      {formatCurrencyBRL(valorLiquido)}
+                    </span>
+                  </div>
+                </div>
+
+                <div style={{ marginBottom: '16px' }}>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    color: '#374151',
+                    marginBottom: '6px'
+                  }}>
+                    Observações
+                  </label>
+                  <textarea
+                    {...register('observacoes')}
+                    rows={3}
+                    placeholder="Informações adicionais..."
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '8px',
+                      fontSize: '14px',
+                      outline: 'none',
+                      resize: 'vertical',
+                      fontFamily: 'inherit'
+                    }}
+                    onFocus={(e) => {
+                      e.currentTarget.style.borderColor = '#1555D6'
+                      e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = '#e5e7eb'
+                      e.currentTarget.style.boxShadow = 'none'
+                    }}
+                  />
+                </div>
+
+                <div style={{
+                  display: 'flex',
+                  gap: '12px',
+                  paddingTop: '4px'
+                }}>
+                  <button
+                    type="button"
+                    onClick={closeModal}
+                    style={{
+                      flex: 1,
+                      padding: '12px 24px',
+                      backgroundColor: 'white',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '8px',
+                      fontSize: '14px',
+                      fontWeight: '500',
+                      color: '#374151',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s'
+                    }}
+                    onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#f9fafb'}
+                    onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'white'}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    style={{
+                      flex: 1,
+                      padding: '12px 24px',
+                      backgroundColor: '#1555D6',
+                      border: 'none',
+                      borderRadius: '8px',
+                      fontSize: '14px',
+                      fontWeight: '500',
+                      color: 'white',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s'
+                    }}
+                    onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#1044b5'}
+                    onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#1555D6'}
+                  >
+                    {editingId ? 'Atualizar' : 'Criar'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={{
         backgroundColor: 'white',
         borderRadius: '12px',
@@ -1557,7 +1893,7 @@ export default function LancamentosPage() {
                     color: '#6b7280',
                     textTransform: 'uppercase'
                   }}>
-                    Subcategoria
+                    Plano de Conta
                   </th>
                   <th style={{
                     padding: '12px 16px',
@@ -1662,7 +1998,18 @@ export default function LancamentosPage() {
                         {lanc.empresa_nome}
                       </td>
                       <td style={{ padding: '12px 16px', color: '#374151', fontSize: '13px' }}>
-                        {lanc.subcategoria_nome}
+                        {lanc.plano_conta ? (
+                          <div>
+                            <div style={{ fontFamily: 'monospace', fontWeight: '600', marginBottom: '2px' }}>
+                              {lanc.plano_conta.codigo_conta}
+                            </div>
+                            <div style={{ fontSize: '12px', color: '#6b7280' }}>
+                              {lanc.plano_conta.categoria} - {lanc.plano_conta.subcategoria}
+                            </div>
+                          </div>
+                        ) : (
+                          '-'
+                        )}
                       </td>
                       <td style={{ padding: '12px 16px', color: '#6b7280', fontSize: '13px' }}>
                         {lanc.contraparte_nome || '-'}
@@ -1823,7 +2170,6 @@ export default function LancamentosPage() {
         )}
       </div>
 
-      {/* Delete Confirmation Modal */}
       {deleteConfirm.show && (
         <div
           style={{
@@ -1836,46 +2182,76 @@ export default function LancamentosPage() {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            zIndex: 1000
+            zIndex: 1000,
+            backdropFilter: 'blur(4px)'
           }}
           onClick={() => setDeleteConfirm({ show: false, id: null })}
         >
           <div
             style={{
               backgroundColor: 'white',
-              borderRadius: '12px',
-              padding: '24px',
-              maxWidth: '400px',
-              width: '90%',
-              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)'
+              borderRadius: '16px',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+              padding: '32px',
+              width: '100%',
+              maxWidth: '450px',
+              margin: '16px',
+              animation: 'scaleIn 0.2s ease-out'
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 style={{
-              fontSize: '18px',
-              fontWeight: '600',
-              color: '#1f2937',
-              marginTop: 0,
-              marginBottom: '12px'
+            <div style={{
+              width: '56px',
+              height: '56px',
+              margin: '0 auto 20px',
+              borderRadius: '50%',
+              backgroundColor: '#fee2e2',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
             }}>
-              Confirmar exclusão
-            </h3>
+              <AlertTriangle style={{ width: '28px', height: '28px', color: '#dc2626' }} />
+            </div>
+
+            <h2 style={{
+              fontSize: '20px',
+              fontWeight: '700',
+              color: '#111827',
+              marginBottom: '12px',
+              textAlign: 'center'
+            }}>
+              Excluir Lançamento
+            </h2>
+
             <p style={{
               fontSize: '14px',
               color: '#6b7280',
-              marginBottom: '24px'
+              textAlign: 'center',
+              marginBottom: '8px',
+              lineHeight: '1.5'
             }}>
-              Tem certeza que deseja excluir este lançamento? Esta ação não pode ser desfeita.
+              Tem certeza que deseja excluir este lançamento?
             </p>
+
+            <p style={{
+              fontSize: '13px',
+              color: '#ef4444',
+              textAlign: 'center',
+              marginBottom: '24px',
+              fontWeight: '500'
+            }}>
+              Esta ação não pode ser desfeita.
+            </p>
+
             <div style={{
               display: 'flex',
-              gap: '12px',
-              justifyContent: 'flex-end'
+              gap: '12px'
             }}>
               <button
                 onClick={() => setDeleteConfirm({ show: false, id: null })}
                 style={{
-                  padding: '10px 20px',
+                  flex: 1,
+                  padding: '12px 24px',
                   backgroundColor: 'white',
                   border: '1px solid #e5e7eb',
                   borderRadius: '8px',
@@ -1893,8 +2269,9 @@ export default function LancamentosPage() {
               <button
                 onClick={() => deleteConfirm.id && handleDelete(deleteConfirm.id)}
                 style={{
-                  padding: '10px 20px',
-                  backgroundColor: '#ef4444',
+                  flex: 1,
+                  padding: '12px 24px',
+                  backgroundColor: '#dc2626',
                   border: 'none',
                   borderRadius: '8px',
                   fontSize: '14px',
@@ -1903,17 +2280,16 @@ export default function LancamentosPage() {
                   cursor: 'pointer',
                   transition: 'all 0.2s'
                 }}
-                onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#dc2626'}
-                onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#ef4444'}
+                onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#b91c1c'}
+                onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#dc2626'}
               >
-                Excluir
+                Sim, Excluir
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Liquidar Modal */}
       {liquidarModal.show && (
         <div
           style={{
@@ -1926,7 +2302,8 @@ export default function LancamentosPage() {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            zIndex: 1000
+            zIndex: 1000,
+            backdropFilter: 'blur(4px)'
           }}
           onClick={() => {
             setLiquidarModal({ show: false, id: null })
@@ -1936,27 +2313,44 @@ export default function LancamentosPage() {
           <div
             style={{
               backgroundColor: 'white',
-              borderRadius: '12px',
-              padding: '24px',
-              maxWidth: '400px',
-              width: '90%',
-              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)'
+              borderRadius: '16px',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+              padding: '32px',
+              width: '100%',
+              maxWidth: '450px',
+              margin: '16px',
+              animation: 'scaleIn 0.2s ease-out'
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 style={{
-              fontSize: '18px',
-              fontWeight: '600',
-              color: '#1f2937',
-              marginTop: 0,
-              marginBottom: '12px'
+            <div style={{
+              width: '56px',
+              height: '56px',
+              margin: '0 auto 20px',
+              borderRadius: '50%',
+              backgroundColor: '#d1fae5',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}>
+              <CheckCircle style={{ width: '28px', height: '28px', color: '#10b981' }} />
+            </div>
+
+            <h2 style={{
+              fontSize: '20px',
+              fontWeight: '700',
+              color: '#111827',
+              marginBottom: '12px',
+              textAlign: 'center'
             }}>
               Liquidar Lançamento
-            </h3>
+            </h2>
             <p style={{
               fontSize: '14px',
               color: '#6b7280',
-              marginBottom: '20px'
+              marginBottom: '20px',
+              textAlign: 'center',
+              lineHeight: '1.5'
             }}>
               Confirme a data de pagamento/recebimento:
             </p>
@@ -1983,13 +2377,20 @@ export default function LancamentosPage() {
                   fontSize: '14px',
                   outline: 'none'
                 }}
+                onFocus={(e) => {
+                  e.currentTarget.style.borderColor = '#1555D6'
+                  e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = '#e5e7eb'
+                  e.currentTarget.style.boxShadow = 'none'
+                }}
               />
             </div>
 
             <div style={{
               display: 'flex',
-              gap: '12px',
-              justifyContent: 'flex-end'
+              gap: '12px'
             }}>
               <button
                 onClick={() => {
@@ -1997,7 +2398,8 @@ export default function LancamentosPage() {
                   setDataLiquidacao('')
                 }}
                 style={{
-                  padding: '10px 20px',
+                  flex: 1,
+                  padding: '12px 24px',
                   backgroundColor: 'white',
                   border: '1px solid #e5e7eb',
                   borderRadius: '8px',
@@ -2016,7 +2418,8 @@ export default function LancamentosPage() {
                 onClick={handleLiquidar}
                 disabled={!dataLiquidacao}
                 style={{
-                  padding: '10px 20px',
+                  flex: 1,
+                  padding: '12px 24px',
                   backgroundColor: dataLiquidacao ? '#10b981' : '#d1d5db',
                   border: 'none',
                   borderRadius: '8px',
@@ -2044,921 +2447,6 @@ export default function LancamentosPage() {
         </div>
       )}
 
-      {/* Create/Edit Modal - CONTINUA NO PRÓXIMO COMENTÁRIO */}
-      {showModal && (
-        <div
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.5)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: '20px',
-            overflowY: 'auto'
-          }}
-          onClick={closeModal}
-        >
-          <div
-            style={{
-              backgroundColor: 'white',
-              borderRadius: '12px',
-              width: '100%',
-              maxWidth: '1300px',
-              maxHeight: '90vh',
-              overflow: 'auto',
-              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
-              margin: '20px 0'
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div style={{
-              position: 'sticky',
-              top: 0,
-              backgroundColor: 'white',
-              borderBottom: '1px solid #e5e7eb',
-              padding: '16px 20px',
-              borderTopLeftRadius: '12px',
-              borderTopRightRadius: '12px',
-              zIndex: 10
-            }}>
-              <div style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center'
-              }}>
-                <h2 style={{
-                  fontSize: '20px',
-                  fontWeight: '600',
-                  color: '#1f2937',
-                  margin: 0
-                }}>
-                  {editingId ? 'Editar Lançamento' : 'Novo Lançamento'}
-                </h2>
-                <button
-                  onClick={closeModal}
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    fontSize: '24px',
-                    color: '#9ca3af',
-                    cursor: 'pointer',
-                    padding: '0',
-                    width: '32px',
-                    height: '32px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    borderRadius: '6px',
-                    transition: 'all 0.2s'
-                  }}
-                  onMouseOver={(e) => {
-                    e.currentTarget.style.backgroundColor = '#f3f4f6'
-                    e.currentTarget.style.color = '#6b7280'
-                  }}
-                  onMouseOut={(e) => {
-                    e.currentTarget.style.backgroundColor = 'transparent'
-                    e.currentTarget.style.color = '#9ca3af'
-                  }}
-                >
-                  ×
-                </button>
-              </div>
-            </div>
-
-            {/* Body */}
-            <div style={{ padding: '18px' }}>
-              <form onSubmit={handleSubmit(onSubmit, onSubmitError)}>
-                {/* Grid 5 colunas - Linha 1 */}
-                <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: '120px 1fr 1fr 1fr 1fr',
-                  gap: '12px',
-                  marginBottom: '14px'
-                }}>
-                  {/* Tipo - Menor */}
-                  <div>
-                    <label style={{
-                      display: 'block',
-                      fontSize: '13px',
-                      fontWeight: '500',
-                      color: '#374151',
-                      marginBottom: '6px'
-                    }}>
-                      Tipo *
-                    </label>
-                    <select
-                      {...register('tipo')}
-                      style={{
-                        width: '100%',
-                        padding: '9px 10px',
-                        border: '1px solid #e5e7eb',
-                        borderRadius: '8px',
-                        fontSize: '13px',
-                        outline: 'none',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      <option value="RECEITA">Receita</option>
-                      <option value="DESPESA">Despesa</option>
-                    </select>
-                    {errors.tipo && (
-                      <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '2px', display: 'block' }}>
-                        {errors.tipo.message}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Empresa */}
-                  <div>
-                    <label style={{
-                      display: 'block',
-                      fontSize: '13px',
-                      fontWeight: '500',
-                      color: '#374151',
-                      marginBottom: '6px'
-                    }}>
-                      Empresa *
-                    </label>
-                    <select
-                      {...register('empresa_id')}
-                      style={{
-                        width: '100%',
-                        padding: '9px 10px',
-                        border: '1px solid #e5e7eb',
-                        borderRadius: '8px',
-                        fontSize: '13px',
-                        outline: 'none',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      <option value="">Selecione</option>
-                      {empresas.map((emp) => (
-                        <option key={emp.id} value={emp.id}>{emp.nome}</option>
-                      ))}
-                    </select>
-                    {errors.empresa_id && (
-                      <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '2px', display: 'block' }}>
-                        {errors.empresa_id.message}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Projeto */}
-                  <div>
-                    <label style={{
-                      display: 'block',
-                      fontSize: '13px',
-                      fontWeight: '500',
-                      color: '#374151',
-                      marginBottom: '6px'
-                    }}>
-                      Projeto *
-                    </label>
-                    <select
-                      {...register('projeto_id')}
-                      disabled={!selectedEmpresaId}
-                      style={{
-                        width: '100%',
-                        padding: '9px 10px',
-                        border: '1px solid #e5e7eb',
-                        borderRadius: '8px',
-                        fontSize: '13px',
-                        outline: 'none',
-                        cursor: selectedEmpresaId ? 'pointer' : 'not-allowed',
-                        opacity: selectedEmpresaId ? 1 : 0.6
-                      }}
-                    >
-                      <option value="">Selecione</option>
-                      {projetos.map((proj) => (
-                        <option key={proj.id} value={proj.id}>{proj.nome}</option>
-                      ))}
-                    </select>
-                    {errors.projeto_id && (
-                      <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '2px', display: 'block' }}>
-                        {errors.projeto_id.message}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Conta Bancária */}
-                  <div>
-                    <label style={{
-                      display: 'block',
-                      fontSize: '13px',
-                      fontWeight: '500',
-                      color: '#374151',
-                      marginBottom: '6px'
-                    }}>
-                      Conta Bancária *
-                    </label>
-                    <select
-                      {...register('banco_conta_id')}
-                      disabled={!selectedEmpresaId}
-                      style={{
-                        width: '100%',
-                        padding: '9px 10px',
-                        border: '1px solid #e5e7eb',
-                        borderRadius: '8px',
-                        fontSize: '13px',
-                        outline: 'none',
-                        cursor: selectedEmpresaId ? 'pointer' : 'not-allowed',
-                        opacity: selectedEmpresaId ? 1 : 0.6
-                      }}
-                    >
-                      <option value="">Selecione</option>
-                      {bancosContas.map((bc) => (
-                        <option key={bc.id} value={bc.id}>
-                          {bc.banco_nome} - {bc.numero_conta}
-                        </option>
-                      ))}
-                    </select>
-                    {errors.banco_conta_id && (
-                      <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '2px', display: 'block' }}>
-                        {errors.banco_conta_id.message}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Contraparte */}
-                  <div>
-                    <label style={{
-                      display: 'block',
-                      fontSize: '13px',
-                      fontWeight: '500',
-                      color: '#374151',
-                      marginBottom: '6px'
-                    }}>
-                      Contraparte *
-                    </label>
-                    <select
-                      {...register('contraparte_id')}
-                      style={{
-                        width: '100%',
-                        padding: '9px 10px',
-                        border: '1px solid #e5e7eb',
-                        borderRadius: '8px',
-                        fontSize: '13px',
-                        outline: 'none',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      <option value="">Selecione</option>
-                      {contrapartes.map((cp) => (
-                        <option key={cp.id} value={cp.id}>{cp.nome}</option>
-                      ))}
-                    </select>
-                    {errors.contraparte_id && (
-                      <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '2px', display: 'block' }}>
-                        {errors.contraparte_id.message}
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Separador */}
-                <div style={{
-                  borderTop: '1px solid #e5e7eb',
-                  margin: '16px 0',
-                  paddingTop: '16px'
-                }}>
-                  <h3 style={{
-                    fontSize: '16px',
-                    fontWeight: '600',
-                    color: '#1f2937',
-                    marginTop: 0,
-                    marginBottom: '14px'
-                  }}>
-                    Plano de Contas
-                  </h3>
-                </div>
-
-                {/* Plano de Contas - Grid 4 colunas */}
-                <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(4, 1fr)',
-                  gap: '12px',
-                  marginBottom: '14px'
-                }}>
-                  {/* Tipo Plano */}
-                  <div>
-                    <label style={{
-                      display: 'block',
-                      fontSize: '13px',
-                      fontWeight: '500',
-                      color: '#374151',
-                      marginBottom: '6px'
-                    }}>
-                      Tipo *
-                    </label>
-                    <select
-                      {...register('tipo_plano_id')}
-                      onChange={(e) => {
-                        const tipoPlanoId = e.target.value
-                        setValue('tipo_plano_id', tipoPlanoId)
-                        
-                        // Sincronizar com o campo Tipo (de cima)
-                        if (tipoPlanoId && tipos.length > 0) {
-                          const tipoPlanoSelecionado = tipos.find(t => t.id === tipoPlanoId)
-                          
-                          if (tipoPlanoSelecionado) {
-                            const nomeTipoPlano = tipoPlanoSelecionado.nome.toLowerCase()
-                            
-                            if (nomeTipoPlano === 'receitas') {
-                              setValue('tipo', 'RECEITA')
-                            } else if (nomeTipoPlano === 'despesas') {
-                              setValue('tipo', 'DESPESA')
-                            }
-                          }
-                        }
-                      }}
-                      style={{
-                        width: '100%',
-                        padding: '9px 10px',
-                        border: '1px solid #e5e7eb',
-                        borderRadius: '8px',
-                        fontSize: '13px',
-                        outline: 'none',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      <option value="">Selecione</option>
-                      {tipos.map((tipo) => (
-                        <option key={tipo.id} value={tipo.id}>{tipo.nome}</option>
-                      ))}
-                    </select>
-                    {errors.tipo_plano_id && (
-                      <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '2px', display: 'block' }}>
-                        {errors.tipo_plano_id.message}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Grupo */}
-                  <div>
-                    <label style={{
-                      display: 'block',
-                      fontSize: '13px',
-                      fontWeight: '500',
-                      color: '#374151',
-                      marginBottom: '6px'
-                    }}>
-                      Grupo *
-                    </label>
-                    <select
-                      {...register('grupo_id')}
-                      disabled={!selectedTipoPlanoId}
-                      style={{
-                        width: '100%',
-                        padding: '9px 10px',
-                        border: '1px solid #e5e7eb',
-                        borderRadius: '8px',
-                        fontSize: '13px',
-                        outline: 'none',
-                        cursor: selectedTipoPlanoId ? 'pointer' : 'not-allowed',
-                        opacity: selectedTipoPlanoId ? 1 : 0.6
-                      }}
-                    >
-                      <option value="">Selecione</option>
-                      {grupos.map((grupo) => (
-                        <option key={grupo.id} value={grupo.id}>{grupo.nome}</option>
-                      ))}
-                    </select>
-                    {errors.grupo_id && (
-                      <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '2px', display: 'block' }}>
-                        {errors.grupo_id.message}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Categoria */}
-                  <div>
-                    <label style={{
-                      display: 'block',
-                      fontSize: '13px',
-                      fontWeight: '500',
-                      color: '#374151',
-                      marginBottom: '6px'
-                    }}>
-                      Categoria *
-                    </label>
-                    <select
-                      {...register('categoria_id')}
-                      disabled={!selectedGrupoId}
-                      style={{
-                        width: '100%',
-                        padding: '9px 10px',
-                        border: '1px solid #e5e7eb',
-                        borderRadius: '8px',
-                        fontSize: '13px',
-                        outline: 'none',
-                        cursor: selectedGrupoId ? 'pointer' : 'not-allowed',
-                        opacity: selectedGrupoId ? 1 : 0.6
-                      }}
-                    >
-                      <option value="">Selecione</option>
-                      {categorias.map((cat) => (
-                        <option key={cat.id} value={cat.id}>{cat.nome}</option>
-                      ))}
-                    </select>
-                    {errors.categoria_id && (
-                      <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '2px', display: 'block' }}>
-                        {errors.categoria_id.message}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Subcategoria */}
-                  <div>
-                    <label style={{
-                      display: 'block',
-                      fontSize: '13px',
-                      fontWeight: '500',
-                      color: '#374151',
-                      marginBottom: '6px'
-                    }}>
-                      Subcategoria *
-                    </label>
-                    <select
-                      {...register('subcategoria_id')}
-                      disabled={!selectedCategoriaId}
-                      style={{
-                        width: '100%',
-                        padding: '9px 10px',
-                        border: '1px solid #e5e7eb',
-                        borderRadius: '8px',
-                        fontSize: '13px',
-                        outline: 'none',
-                        cursor: selectedCategoriaId ? 'pointer' : 'not-allowed',
-                        opacity: selectedCategoriaId ? 1 : 0.6
-                      }}
-                    >
-                      <option value="">Selecione</option>
-                      {subcategorias.map((sub) => (
-                        <option key={sub.id} value={sub.id}>{sub.nome}</option>
-                      ))}
-                    </select>
-                    {errors.subcategoria_id && (
-                      <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '2px', display: 'block' }}>
-                        {errors.subcategoria_id.message}
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Separador Valores */}
-                <div style={{
-                  borderTop: '1px solid #e5e7eb',
-                  margin: '16px 0',
-                  paddingTop: '16px'
-                }}>
-                  <h3 style={{
-                    fontSize: '16px',
-                    fontWeight: '600',
-                    color: '#1f2937',
-                    marginTop: 0,
-                    marginBottom: '14px'
-                  }}>
-                    Valores
-                  </h3>
-                </div>
-
-                {/* Seção Unificada: Datas, Documentos e Valores */}
-                <div style={{
-                  borderTop: '1px solid #e5e7eb',
-                  margin: '16px 0',
-                  paddingTop: '16px'
-                }}>
-                  <h3 style={{
-                    fontSize: '16px',
-                    fontWeight: '600',
-                    color: '#1f2937',
-                    marginTop: 0,
-                    marginBottom: '14px'
-                  }}>
-                    Datas, Documentos e Valores
-                  </h3>
-                </div>
-
-                {/* Grid 5 colunas: Data Emissão | Data Vencimento | Valor Bruto | Tipo Doc | Num Doc */}
-                <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: '1fr 1fr 1fr 0.8fr 0.6fr',
-                  gap: '12px',
-                  marginBottom: '14px'
-                }}>
-                  {/* Data Emissão */}
-                  <div>
-                    <label style={{
-                      display: 'block',
-                      fontSize: '13px',
-                      fontWeight: '500',
-                      color: '#374151',
-                      marginBottom: '6px'
-                    }}>
-                      Data Emissão *
-                    </label>
-                    <input
-                      {...register('data_emissao')}
-                      type="date"
-                      style={{
-                        width: '100%',
-                        padding: '9px 10px',
-                        border: '1px solid #e5e7eb',
-                        borderRadius: '8px',
-                        fontSize: '13px',
-                        outline: 'none'
-                      }}
-                    />
-                    {errors.data_emissao && (
-                      <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '2px', display: 'block' }}>
-                        {errors.data_emissao.message}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Data Vencimento */}
-                  <div>
-                    <label style={{
-                      display: 'block',
-                      fontSize: '13px',
-                      fontWeight: '500',
-                      color: '#374151',
-                      marginBottom: '6px'
-                    }}>
-                      Data Vencimento *
-                    </label>
-                    <input
-                      {...register('data_vencimento')}
-                      type="date"
-                      style={{
-                        width: '100%',
-                        padding: '9px 10px',
-                        border: '1px solid #e5e7eb',
-                        borderRadius: '8px',
-                        fontSize: '13px',
-                        outline: 'none'
-                      }}
-                    />
-                    {errors.data_vencimento && (
-                      <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '2px', display: 'block' }}>
-                        {errors.data_vencimento.message}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Valor Bruto */}
-                  <div>
-                    <label style={{
-                      display: 'block',
-                      fontSize: '13px',
-                      fontWeight: '500',
-                      color: '#374151',
-                      marginBottom: '6px'
-                    }}>
-                      Valor Bruto *
-                    </label>
-                    <div style={{ position: 'relative' }}>
-                      <span style={{
-                        position: 'absolute',
-                        left: '10px',
-                        top: '50%',
-                        transform: 'translateY(-50%)',
-                        fontSize: '13px',
-                        color: '#6b7280',
-                        fontWeight: '500'
-                      }}>
-                        R$
-                      </span>
-                      <input
-                        type="text"
-                        value={valorBrutoFormatado}
-                        onChange={(e) => {
-                          const formatted = formatCurrencyInput(e.target.value)
-                          setValorBrutoFormatado(formatted)
-                          const numericValue = parseCurrencyInput(formatted)
-                          setValorBruto(numericValue)
-                          setValue('valor_bruto', numericValue)
-                        }}
-                        style={{
-                          width: '100%',
-                          padding: '9px 10px 9px 32px',
-                          border: '1px solid #e5e7eb',
-                          borderRadius: '8px',
-                          fontSize: '13px',
-                          outline: 'none',
-                          textAlign: 'right'
-                        }}
-                        placeholder="0,00"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Tipo Documento */}
-                  <div>
-                    <label style={{
-                      display: 'block',
-                      fontSize: '13px',
-                      fontWeight: '500',
-                      color: '#374151',
-                      marginBottom: '6px'
-                    }}>
-                      Tipo Doc
-                    </label>
-                    <input
-                      {...register('documento_tipo')}
-                      type="text"
-                      placeholder="NF, Boleto..."
-                      style={{
-                        width: '100%',
-                        padding: '9px 10px',
-                        border: '1px solid #e5e7eb',
-                        borderRadius: '8px',
-                        fontSize: '13px',
-                        outline: 'none'
-                      }}
-                    />
-                  </div>
-
-                  {/* Número Documento */}
-                  <div>
-                    <label style={{
-                      display: 'block',
-                      fontSize: '13px',
-                      fontWeight: '500',
-                      color: '#374151',
-                      marginBottom: '6px'
-                    }}>
-                      Nº Doc
-                    </label>
-                    <input
-                      {...register('documento_numero')}
-                      type="text"
-                      placeholder="123456"
-                      style={{
-                        width: '100%',
-                        padding: '9px 10px',
-                        border: '1px solid #e5e7eb',
-                        borderRadius: '8px',
-                        fontSize: '13px',
-                        outline: 'none'
-                      }}
-                    />
-                  </div>
-                </div>
-
-                {/* Retenções */}
-                <div style={{ marginBottom: '14px' }}>
-                  <div style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    marginBottom: '10px'
-                  }}>
-                    <label style={{
-                      fontSize: '14px',
-                      fontWeight: '500',
-                      color: '#374151'
-                    }}>
-                      Retenções
-                    </label>
-                    <button
-                      type="button"
-                      onClick={addRetencao}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '6px',
-                        padding: '6px 12px',
-                        backgroundColor: '#f3f4f6',
-                        border: '1px solid #e5e7eb',
-                        borderRadius: '6px',
-                        fontSize: '13px',
-                        fontWeight: '500',
-                        color: '#374151',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s'
-                      }}
-                      onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#e5e7eb'}
-                      onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#f3f4f6'}
-                    >
-                      <Plus size={14} />
-                      Adicionar
-                    </button>
-                  </div>
-
-                  {retencoes.length > 0 && (
-                    <div style={{
-                      border: '1px solid #e5e7eb',
-                      borderRadius: '8px',
-                      overflow: 'hidden'
-                    }}>
-                      {retencoes.map((ret, index) => (
-                        <div
-                          key={index}
-                          style={{
-                            display: 'grid',
-                            gridTemplateColumns: '140px 1fr 1fr 40px',
-                            gap: '10px',
-                            padding: '10px',
-                            borderBottom: index < retencoes.length - 1 ? '1px solid #e5e7eb' : 'none',
-                            alignItems: 'center'
-                          }}
-                        >
-                          <select
-                            value={ret.imposto}
-                            onChange={(e) => updateRetencao(index, 'imposto', e.target.value)}
-                            style={{
-                              padding: '8px',
-                              border: '1px solid #e5e7eb',
-                              borderRadius: '6px',
-                              fontSize: '13px',
-                              outline: 'none'
-                            }}
-                          >
-                            {IMPOSTOS.map((imp) => (
-                              <option key={imp.value} value={imp.value}>{imp.label}</option>
-                            ))}
-                          </select>
-
-                          <input
-                            type="text"
-                            value={ret.valorFormatado || ''}
-                            onChange={(e) => {
-                              const formatted = formatCurrencyInput(e.target.value)
-                              updateRetencaoValor(index, formatted)
-                            }}
-                            placeholder="0,00"
-                            style={{
-                              padding: '8px',
-                              border: '1px solid #e5e7eb',
-                              borderRadius: '6px',
-                              fontSize: '13px',
-                              outline: 'none'
-                            }}
-                          />
-
-                          <input
-                            type="text"
-                            value={ret.detalhe}
-                            onChange={(e) => updateRetencao(index, 'detalhe', e.target.value)}
-                            placeholder="Detalhe (opcional)"
-                            style={{
-                              padding: '8px',
-                              border: '1px solid #e5e7eb',
-                              borderRadius: '6px',
-                              fontSize: '13px',
-                              outline: 'none'
-                            }}
-                          />
-
-                          <button
-                            type="button"
-                            onClick={() => removeRetencao(index)}
-                            style={{
-                              padding: '6px',
-                              backgroundColor: 'transparent',
-                              border: '1px solid #e5e7eb',
-                              borderRadius: '6px',
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              transition: 'all 0.2s'
-                            }}
-                            onMouseOver={(e) => {
-                              e.currentTarget.style.backgroundColor = '#fef2f2'
-                              e.currentTarget.style.borderColor = '#fecaca'
-                            }}
-                            onMouseOut={(e) => {
-                              e.currentTarget.style.backgroundColor = 'transparent'
-                              e.currentTarget.style.borderColor = '#e5e7eb'
-                            }}
-                          >
-                            <X size={14} color="#ef4444" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* Valor Líquido */}
-                <div style={{
-                  padding: '12px',
-                  backgroundColor: '#f0fdf4',
-                  border: '1px solid #86efac',
-                  borderRadius: '8px',
-                  marginBottom: '14px'
-                }}>
-                  <div style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center'
-                  }}>
-                    <span style={{
-                      fontSize: '14px',
-                      fontWeight: '600',
-                      color: '#065f46'
-                    }}>
-                      Valor Líquido:
-                    </span>
-                    <span style={{
-                      fontSize: '18px',
-                      fontWeight: '700',
-                      color: '#059669'
-                    }}>
-                      {formatCurrencyBRL(valorLiquido)}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Observações */}
-                <div style={{ marginBottom: '16px' }}>
-                  <label style={{
-                    display: 'block',
-                    fontSize: '14px',
-                    fontWeight: '500',
-                    color: '#374151',
-                    marginBottom: '6px'
-                  }}>
-                    Observações
-                  </label>
-                  <textarea
-                    {...register('observacoes')}
-                    rows={3}
-                    placeholder="Informações adicionais..."
-                    style={{
-                      width: '100%',
-                      padding: '10px 12px',
-                      border: '1px solid #e5e7eb',
-                      borderRadius: '8px',
-                      fontSize: '14px',
-                      outline: 'none',
-                      resize: 'vertical',
-                      fontFamily: 'inherit'
-                    }}
-                  />
-                </div>
-
-                {/* Buttons */}
-                <div style={{
-                  display: 'flex',
-                  gap: '12px',
-                  paddingTop: '4px'
-                }}>
-                  <button
-                    type="button"
-                    onClick={closeModal}
-                    style={{
-                      flex: 1,
-                      padding: '12px 24px',
-                      backgroundColor: 'white',
-                      border: '1px solid #e5e7eb',
-                      borderRadius: '8px',
-                      fontSize: '14px',
-                      fontWeight: '500',
-                      color: '#374151',
-                      cursor: 'pointer',
-                      transition: 'all 0.2s'
-                    }}
-                    onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#f9fafb'}
-                    onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'white'}
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="submit"
-                    style={{
-                      flex: 1,
-                      padding: '12px 24px',
-                      backgroundColor: '#1555D6',
-                      border: 'none',
-                      borderRadius: '8px',
-                      fontSize: '14px',
-                      fontWeight: '500',
-                      color: 'white',
-                      cursor: 'pointer',
-                      transition: 'all 0.2s'
-                    }}
-                    onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#1044b5'}
-                    onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#1555D6'}
-                  >
-                    {editingId ? 'Atualizar' : 'Criar'}
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Toast Notifications */}
       <div style={{
         position: 'fixed',
         top: '50%',

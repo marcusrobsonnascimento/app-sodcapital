@@ -2,19 +2,54 @@
 
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
-import { formatDate } from '@/lib/utils'
-import { Plus, Pencil, Trash2, Search, CheckCircle, AlertTriangle, XCircle, Filter } from 'lucide-react'
+import { Plus, Pencil, Trash2, Search, CheckCircle, AlertTriangle, XCircle } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
-import { 
-  PlanoContaFluxo, 
-  PlanoContaFluxoForm, 
-  TipoFluxo, 
-  Sentido,
-  derivarSentidoDoCodigo,
-  validarCodigoConta 
-} from '../types/plano-contas'
+
+// Types
+export type Sentido = 'Entrada' | 'Saida'
+
+export interface PlanoContaFluxo {
+  id: string
+  codigo_conta: string
+  tipo_fluxo: string
+  grupo: string
+  categoria: string
+  subcategoria: string
+  dre_grupo: string | null
+  sentido: Sentido | null
+  ativo: boolean
+  created_at?: string
+  updated_at?: string
+}
+
+// Funções auxiliares
+export function derivarSentidoDoCodigo(codigo: string): Sentido | null {
+  if (!codigo) return null
+  return codigo.startsWith('1.') ? 'Entrada' : 'Saida'
+}
+
+export function validarCodigoConta(codigo: string): boolean {
+  const pattern = /^\d\.\d{2}\.\d{2}(\.\d{2,3})?$/
+  return pattern.test(codigo)
+}
+
+export function formatTitleCase(text: string): string {
+  if (!text) return ''
+  
+  return text
+    .toLowerCase()
+    .split(' ')
+    .map(word => {
+      if (word.length === 0) return word
+      if (word.length > 2) {
+        return word.charAt(0).toUpperCase() + word.slice(1)
+      }
+      return word.toLowerCase()
+    })
+    .join(' ')
+}
 
 // Toast notification system
 type ToastType = 'success' | 'warning' | 'error'
@@ -30,21 +65,24 @@ const planoContaSchema = z.object({
     .min(1, 'Código é obrigatório')
     .refine(
       (val) => validarCodigoConta(val),
-      { message: 'Formato inválido. Use: 1.01.01 ou 1.01.01.01' }
+      { message: 'Formato inválido. Use: 1.01.01 ou 1.01.01.01 ou 1.01.01.077' }
     ),
-  tipo_fluxo: z.enum(['Operacional', 'Investimento', 'Financiamento'], {
-    errorMap: () => ({ message: 'Selecione um tipo de fluxo' })
-  }),
-  grupo: z.string().optional(),
+  tipo_fluxo: z.string().min(1, 'Tipo de fluxo é obrigatório'),
+  grupo: z.string()
+    .min(1, 'Grupo é obrigatório')
+    .max(100, 'Grupo deve ter no máximo 100 caracteres')
+    .transform(val => formatTitleCase(val)),
   categoria: z.string()
     .min(1, 'Categoria é obrigatória')
     .max(100, 'Categoria deve ter no máximo 100 caracteres')
-    .transform(val => val.toUpperCase()),
+    .transform(val => formatTitleCase(val)),
   subcategoria: z.string()
     .min(1, 'Subcategoria é obrigatória')
     .max(100, 'Subcategoria deve ter no máximo 100 caracteres')
-    .transform(val => val.toUpperCase()),
-  dre_grupo: z.string().optional(),
+    .transform(val => formatTitleCase(val)),
+  dre_grupo: z.string()
+    .optional()
+    .transform(val => val ? formatTitleCase(val) : val),
   ativo: z.boolean().default(true)
 })
 
@@ -59,10 +97,15 @@ export default function PlanoContasPage() {
   const [deletingConta, setDeletingConta] = useState<PlanoContaFluxo | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
-  const [tipoFluxoFilter, setTipoFluxoFilter] = useState<TipoFluxo | 'TODOS'>('TODOS')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [tipoFluxoFilter, setTipoFluxoFilter] = useState<string>('TODOS')
   const [sentidoFilter, setSentidoFilter] = useState<Sentido | 'TODOS'>('TODOS')
   const [toasts, setToasts] = useState<Toast[]>([])
   const [toastIdCounter, setToastIdCounter] = useState(0)
+  const [gruposDisponiveis, setGruposDisponiveis] = useState<string[]>([])
+  const [categoriasDisponiveis, setCategoriasDisponiveis] = useState<string[]>([])
+  const [tiposFluxoDisponiveis, setTiposFluxoDisponiveis] = useState<string[]>([])
+  const [checkingDependencies, setCheckingDependencies] = useState(false)
 
   const { register, handleSubmit, reset, formState: { errors }, setValue, watch } = useForm<PlanoContaFormData>({
     resolver: zodResolver(planoContaSchema),
@@ -73,7 +116,6 @@ export default function PlanoContasPage() {
 
   const codigoValue = watch('codigo_conta')
 
-  // Toast functions
   const showToast = (message: string, type: ToastType) => {
     const id = toastIdCounter
     setToastIdCounter(prev => prev + 1)
@@ -83,7 +125,7 @@ export default function PlanoContasPage() {
     
     setTimeout(() => {
       setToasts(prev => prev.filter(toast => toast.id !== id))
-    }, 3000)
+    }, 4000)
   }
 
   const getToastStyles = (type: ToastType) => {
@@ -110,7 +152,16 @@ export default function PlanoContasPage() {
   }
 
   useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      setDebouncedSearch(searchTerm)
+    }, 300)
+
+    return () => clearTimeout(timeoutId)
+  }, [searchTerm])
+
+  useEffect(() => {
     loadContas()
+    loadAutocompleteData()
   }, [])
 
   const loadContas = async () => {
@@ -130,14 +181,175 @@ export default function PlanoContasPage() {
     }
   }
 
+  const loadAutocompleteData = async () => {
+    try {
+      const { data: gruposData, error: gruposError } = await supabase
+        .from('plano_contas_fluxo')
+        .select('grupo')
+        .not('grupo', 'is', null)
+        .order('grupo')
+
+      if (!gruposError && gruposData) {
+        const grupos = Array.from(new Set(gruposData.map(item => item.grupo).filter(Boolean))) as string[]
+        setGruposDisponiveis(grupos)
+      }
+
+      const { data: categoriasData, error: categoriasError } = await supabase
+        .from('plano_contas_fluxo')
+        .select('categoria')
+        .order('categoria')
+
+      if (!categoriasError && categoriasData) {
+        const categorias = Array.from(new Set(categoriasData.map(item => item.categoria).filter(Boolean))) as string[]
+        setCategoriasDisponiveis(categorias)
+      }
+
+      const { data: tiposData, error: tiposError } = await supabase
+        .from('plano_contas_fluxo')
+        .select('tipo_fluxo')
+        .order('tipo_fluxo')
+
+      if (!tiposError && tiposData) {
+        const tipos = Array.from(new Set(tiposData.map(item => item.tipo_fluxo).filter(Boolean))) as string[]
+        setTiposFluxoDisponiveis(tipos)
+      }
+    } catch (error) {
+      console.error('Erro ao carregar dados de autocomplete:', error)
+    }
+  }
+
+  const verificarVinculos = async (planoContaId: string): Promise<{ temVinculo: boolean; mensagem: string }> => {
+    try {
+      const { data: lancamentos, error: errorLancamentos } = await supabase
+        .from('lancamentos')
+        .select('id')
+        .eq('plano_conta_id', planoContaId)
+        .limit(1)
+
+      if (errorLancamentos) {
+        console.error('Erro ao verificar lançamentos:', errorLancamentos)
+        throw errorLancamentos
+      }
+
+      if (lancamentos && lancamentos.length > 0) {
+        return {
+          temVinculo: true,
+          mensagem: 'Esta conta não pode ser excluída porque possui lançamentos vinculados.'
+        }
+      }
+
+      const contaParaExcluir = contas.find(c => c.id === planoContaId)
+      if (contaParaExcluir) {
+        const { data: contasBancarias, error: errorContas } = await supabase
+          .from('bancos_contas')
+          .select('id')
+          .eq('conta_contabil_codigo', contaParaExcluir.codigo_conta)
+          .limit(1)
+
+        if (errorContas) {
+          console.error('Erro ao verificar contas bancárias:', errorContas)
+          throw errorContas
+        }
+
+        if (contasBancarias && contasBancarias.length > 0) {
+          return {
+            temVinculo: true,
+            mensagem: 'Esta conta não pode ser excluída porque possui contas bancárias vinculadas.'
+          }
+        }
+      }
+
+      return { temVinculo: false, mensagem: '' }
+    } catch (error) {
+      console.error('Erro ao verificar vínculos:', error)
+      throw error
+    }
+  }
+
+  const verificarCodigoDuplicado = async (codigo: string, idAtual?: string): Promise<boolean> => {
+    try {
+      let query = supabase
+        .from('plano_contas_fluxo')
+        .select('id')
+        .eq('codigo_conta', codigo)
+        .limit(1)
+
+      if (idAtual) {
+        query = query.neq('id', idAtual)
+      }
+
+      const { data, error } = await query
+
+      if (error) throw error
+      return data && data.length > 0
+    } catch (error) {
+      console.error('Erro ao verificar código duplicado:', error)
+      throw error
+    }
+  }
+
+  const verificarCombinacaoDuplicada = async (
+    tipo_fluxo: string,
+    grupo: string,
+    categoria: string,
+    subcategoria: string,
+    idAtual?: string
+  ): Promise<boolean> => {
+    try {
+      let query = supabase
+        .from('plano_contas_fluxo')
+        .select('id')
+        .eq('tipo_fluxo', tipo_fluxo)
+        .eq('grupo', grupo)
+        .eq('categoria', categoria)
+        .eq('subcategoria', subcategoria)
+        .limit(1)
+
+      if (idAtual) {
+        query = query.neq('id', idAtual)
+      }
+
+      const { data, error } = await query
+
+      if (error) throw error
+      return data && data.length > 0
+    } catch (error) {
+      console.error('Erro ao verificar combinação duplicada:', error)
+      throw error
+    }
+  }
+
+  const handleFormatInput = (fieldName: 'grupo' | 'categoria' | 'subcategoria' | 'dre_grupo', value: string) => {
+    const formatted = formatTitleCase(value)
+    setValue(fieldName, formatted)
+  }
+
   const onSubmit = async (data: PlanoContaFormData) => {
     try {
-      // Derivar sentido do código
+      const codigoDuplicado = await verificarCodigoDuplicado(data.codigo_conta, editingId || undefined)
+      if (codigoDuplicado) {
+        showToast('Código da conta já existe. Use um código diferente.', 'warning')
+        return
+      }
+
+      const combinacaoDuplicada = await verificarCombinacaoDuplicada(
+        data.tipo_fluxo,
+        data.grupo,
+        data.categoria,
+        data.subcategoria,
+        editingId || undefined
+      )
+      if (combinacaoDuplicada) {
+        showToast('Já existe uma conta com essa combinação de Tipo de Fluxo, Grupo, Categoria e Subcategoria.', 'warning')
+        return
+      }
+
       const sentido = derivarSentidoDoCodigo(data.codigo_conta)
       
       const payload = {
         ...data,
         sentido,
+        dre_grupo: data.dre_grupo || null,
         updated_at: new Date().toISOString()
       }
 
@@ -151,7 +363,8 @@ export default function PlanoContasPage() {
           console.error('Erro detalhado ao atualizar:', error)
           
           if (error.code === '23505') {
-            throw new Error('Já existe uma conta com esse código')
+            showToast('Código já existe', 'warning')
+            return
           }
           
           throw new Error(`Erro ao atualizar conta: ${error.message}`)
@@ -166,7 +379,8 @@ export default function PlanoContasPage() {
           console.error('Erro detalhado ao criar:', error)
           
           if (error.code === '23505') {
-            throw new Error('Já existe uma conta com esse código')
+            showToast('Código já existe', 'warning')
+            return
           }
           
           throw new Error(`Erro ao criar conta: ${error.message}`)
@@ -175,6 +389,7 @@ export default function PlanoContasPage() {
       }
 
       loadContas()
+      loadAutocompleteData()
       closeModal()
     } catch (err: any) {
       console.error('Erro ao salvar conta:', err)
@@ -188,6 +403,8 @@ export default function PlanoContasPage() {
       showToast(errors.codigo_conta.message, 'warning')
     } else if (errors.tipo_fluxo) {
       showToast(errors.tipo_fluxo.message, 'warning')
+    } else if (errors.grupo) {
+      showToast(errors.grupo.message, 'warning')
     } else if (errors.categoria) {
       showToast(errors.categoria.message, 'warning')
     } else if (errors.subcategoria) {
@@ -209,10 +426,26 @@ export default function PlanoContasPage() {
     setShowModal(true)
   }
 
-  const openDeleteModal = (conta: PlanoContaFluxo) => {
-    setDeleteId(conta.id)
-    setDeletingConta(conta)
-    setShowDeleteModal(true)
+  const openDeleteModal = async (conta: PlanoContaFluxo) => {
+    setCheckingDependencies(true)
+    
+    try {
+      const { temVinculo, mensagem } = await verificarVinculos(conta.id)
+      
+      if (temVinculo) {
+        showToast(mensagem, 'warning')
+        setCheckingDependencies(false)
+        return
+      }
+
+      setDeleteId(conta.id)
+      setDeletingConta(conta)
+      setShowDeleteModal(true)
+    } catch (error) {
+      showToast('Erro ao verificar dependências da conta', 'error')
+    } finally {
+      setCheckingDependencies(false)
+    }
   }
 
   const closeDeleteModal = () => {
@@ -233,6 +466,7 @@ export default function PlanoContasPage() {
       if (error) throw error
       showToast('Conta excluída com sucesso!', 'success')
       loadContas()
+      loadAutocompleteData()
       closeDeleteModal()
     } catch (err) {
       console.error('Erro ao excluir conta:', err)
@@ -246,7 +480,7 @@ export default function PlanoContasPage() {
     setEditingId(null)
     reset({
       codigo_conta: '',
-      tipo_fluxo: 'Operacional',
+      tipo_fluxo: tiposFluxoDisponiveis[0] || '',
       grupo: '',
       categoria: '',
       subcategoria: '',
@@ -257,10 +491,10 @@ export default function PlanoContasPage() {
 
   const filteredContas = contas.filter(c => {
     const matchesSearch = 
-      c.codigo_conta.includes(searchTerm) ||
-      c.categoria.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      c.subcategoria.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (c.grupo && c.grupo.toLowerCase().includes(searchTerm.toLowerCase()))
+      c.codigo_conta.includes(debouncedSearch) ||
+      c.categoria.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
+      c.subcategoria.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
+      (c.grupo && c.grupo.toLowerCase().includes(debouncedSearch.toLowerCase()))
     
     const matchesTipoFluxo = tipoFluxoFilter === 'TODOS' || c.tipo_fluxo === tipoFluxoFilter
     const matchesSentido = sentidoFilter === 'TODOS' || c.sentido === sentidoFilter
@@ -274,12 +508,41 @@ export default function PlanoContasPage() {
     return { bg: '#f3f4f6', color: '#6b7280' }
   }
 
-  const getTipoFluxoBadgeColor = (tipo: TipoFluxo) => {
-    switch (tipo) {
-      case 'Operacional': return { bg: '#dbeafe', color: '#1d4ed8' }
-      case 'Investimento': return { bg: '#fef3c7', color: '#b45309' }
-      case 'Financiamento': return { bg: '#e0e7ff', color: '#6366f1' }
+  const getTipoFluxoBadgeColor = (tipo: string) => {
+    const cores: Record<string, { bg: string; color: string }> = {
+      'Operacional': { bg: '#dbeafe', color: '#1e40af' },
+      'Operacionais': { bg: '#bfdbfe', color: '#1e3a8a' },
+      'Outras Operacionais': { bg: '#93c5fd', color: '#1e3a8a' },
+      'Investimento (Operacional)': { bg: '#7dd3fc', color: '#0c4a6e' },
+      'Investimento': { bg: '#d1fae5', color: '#065f46' },
+      'Investimentos': { bg: '#a7f3d0', color: '#064e3b' },
+      'Investimentos (Não Operacional)': { bg: '#6ee7b7', color: '#064e3b' },
+      'Financiamento': { bg: '#e0e7ff', color: '#4338ca' },
+      'Financiamentos': { bg: '#c7d2fe', color: '#3730a3' },
+      'Não Operacional': { bg: '#fed7aa', color: '#c2410c' },
+      'Não Operacionais': { bg: '#fdba74', color: '#9a3412' },
+      'Outras Não Operacionais': { bg: '#fb923c', color: '#7c2d12' },
+      'Impostos': { bg: '#cbd5e1', color: '#334155' },
+      'Imposto': { bg: '#94a3b8', color: '#1e293b' },
+      'Tributário': { bg: '#64748b', color: '#0f172a' },
+      'Tributos': { bg: '#94a3b8', color: '#1e293b' },
+      'Receita': { bg: '#a7f3d0', color: '#047857' },
+      'Receitas': { bg: '#6ee7b7', color: '#065f46' },
+      'Despesa': { bg: '#fecaca', color: '#b91c1c' },
+      'Despesas': { bg: '#fca5a5', color: '#991b1b' },
+      'Custo': { bg: '#fde68a', color: '#b45309' },
+      'Custos': { bg: '#fcd34d', color: '#92400e' },
+      'Ativo': { bg: '#99f6e4', color: '#115e59' },
+      'Ativos': { bg: '#5eead4', color: '#134e4a' },
+      'Passivo': { bg: '#fbcfe8', color: '#9f1239' },
+      'Passivos': { bg: '#f9a8d4', color: '#881337' },
+      'Patrimônio': { bg: '#ddd6fe', color: '#6b21a8' },
+      'Patrimônio Líquido': { bg: '#c4b5fd', color: '#5b21b6' },
+      'SG&A': { bg: '#fce7f3', color: '#be185d' },
+      'default': { bg: '#f3f4f6', color: '#6b7280' }
     }
+    
+    return cores[tipo] || cores['default']
   }
 
   if (loading) {
@@ -289,7 +552,9 @@ export default function PlanoContasPage() {
         alignItems: 'center',
         justifyContent: 'center',
         height: '100%',
-        minHeight: '400px'
+        minHeight: '400px',
+        flexDirection: 'column',
+        gap: '16px'
       }}>
         <div style={{
           width: '48px',
@@ -299,20 +564,21 @@ export default function PlanoContasPage() {
           borderRadius: '50%',
           animation: 'spin 1s linear infinite'
         }}></div>
+        <div style={{ fontSize: '14px', color: '#6b7280' }}>
+          Carregando plano de contas...
+        </div>
       </div>
     )
   }
 
   return (
     <div style={{ padding: '32px', backgroundColor: '#f9fafb', minHeight: '100vh' }}>
-      {/* Main Content */}
       <div style={{
         backgroundColor: 'white',
         borderRadius: '16px',
         boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
         overflow: 'hidden'
       }}>
-        {/* Header */}
         <div style={{
           padding: '32px',
           borderBottom: '1px solid #e5e7eb'
@@ -363,9 +629,7 @@ export default function PlanoContasPage() {
             </button>
           </div>
 
-          {/* Search and Filters */}
           <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-            {/* Search Bar */}
             <div style={{ position: 'relative', flex: '1', minWidth: '250px' }}>
               <Search style={{
                 position: 'absolute',
@@ -378,7 +642,7 @@ export default function PlanoContasPage() {
               }} />
               <input
                 type="text"
-                placeholder="Buscar por código, categoria ou subcategoria..."
+                placeholder="Buscar por código, grupo, categoria ou subcategoria..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 style={{
@@ -401,10 +665,9 @@ export default function PlanoContasPage() {
               />
             </div>
 
-            {/* Tipo Fluxo Filter */}
             <select
               value={tipoFluxoFilter}
-              onChange={(e) => setTipoFluxoFilter(e.target.value as TipoFluxo | 'TODOS')}
+              onChange={(e) => setTipoFluxoFilter(e.target.value)}
               style={{
                 padding: '12px 16px',
                 border: '1px solid #e5e7eb',
@@ -416,12 +679,11 @@ export default function PlanoContasPage() {
               }}
             >
               <option value="TODOS">Todos os Tipos</option>
-              <option value="Operacional">Operacional</option>
-              <option value="Investimento">Investimento</option>
-              <option value="Financiamento">Financiamento</option>
+              {tiposFluxoDisponiveis.map((tipo) => (
+                <option key={tipo} value={tipo}>{tipo}</option>
+              ))}
             </select>
 
-            {/* Sentido Filter */}
             <select
               value={sentidoFilter}
               onChange={(e) => setSentidoFilter(e.target.value as Sentido | 'TODOS')}
@@ -442,7 +704,6 @@ export default function PlanoContasPage() {
           </div>
         </div>
 
-        {/* Table */}
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -457,6 +718,17 @@ export default function PlanoContasPage() {
                   letterSpacing: '0.5px'
                 }}>
                   Código
+                </th>
+                <th style={{
+                  padding: '12px 24px',
+                  textAlign: 'left',
+                  fontSize: '12px',
+                  fontWeight: '600',
+                  color: '#6b7280',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px'
+                }}>
+                  Grupo
                 </th>
                 <th style={{
                   padding: '12px 24px',
@@ -529,13 +801,17 @@ export default function PlanoContasPage() {
             <tbody>
               {filteredContas.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{
+                  <td colSpan={8} style={{
                     padding: '48px 24px',
                     textAlign: 'center',
                     color: '#9ca3af',
                     fontSize: '14px'
                   }}>
-                    Nenhuma conta encontrada
+                    <div>
+                      <div style={{ fontSize: '48px', marginBottom: '16px' }}>📊</div>
+                      <div style={{ fontWeight: '600', marginBottom: '8px' }}>Nenhuma conta encontrada</div>
+                      <div style={{ fontSize: '13px' }}>Clique em "Nova Conta" para começar</div>
+                    </div>
                   </td>
                 </tr>
               ) : (
@@ -561,6 +837,14 @@ export default function PlanoContasPage() {
                         fontFamily: 'monospace'
                       }}>
                         {conta.codigo_conta}
+                      </td>
+                      <td style={{
+                        padding: '16px 24px',
+                        fontSize: '14px',
+                        color: '#374151',
+                        fontWeight: '500'
+                      }}>
+                        {conta.grupo}
                       </td>
                       <td style={{
                         padding: '16px 24px',
@@ -642,15 +926,21 @@ export default function PlanoContasPage() {
                           </button>
                           <button
                             onClick={() => openDeleteModal(conta)}
+                            disabled={checkingDependencies}
                             style={{
                               padding: '8px',
                               backgroundColor: 'transparent',
                               border: 'none',
                               borderRadius: '6px',
-                              cursor: 'pointer',
-                              transition: 'background-color 0.2s'
+                              cursor: checkingDependencies ? 'wait' : 'pointer',
+                              transition: 'background-color 0.2s',
+                              opacity: checkingDependencies ? 0.5 : 1
                             }}
-                            onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#fee2e2'}
+                            onMouseOver={(e) => {
+                              if (!checkingDependencies) {
+                                e.currentTarget.style.backgroundColor = '#fee2e2'
+                              }
+                            }}
                             onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                           >
                             <Trash2 style={{ width: '16px', height: '16px', color: '#dc2626' }} />
@@ -666,7 +956,6 @@ export default function PlanoContasPage() {
         </div>
       </div>
 
-      {/* Modal de Edição/Criação */}
       {showModal && (
         <div
           style={{
@@ -705,7 +994,6 @@ export default function PlanoContasPage() {
             </h2>
 
             <form onSubmit={handleSubmit(onSubmit, onSubmitError)} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-              {/* Código da Conta */}
               <div>
                 <label style={{
                   display: 'block',
@@ -728,7 +1016,7 @@ export default function PlanoContasPage() {
                     transition: 'all 0.2s',
                     fontFamily: 'monospace'
                   }}
-                  placeholder="1.01.01.01"
+                  placeholder="1.01.01.077"
                   onFocus={(e) => {
                     e.currentTarget.style.borderColor = '#1555D6'
                     e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
@@ -738,18 +1026,18 @@ export default function PlanoContasPage() {
                     e.currentTarget.style.boxShadow = 'none'
                   }}
                 />
-                {codigoValue && (
+                {codigoValue && validarCodigoConta(codigoValue) && (
                   <p style={{
                     marginTop: '4px',
                     fontSize: '12px',
-                    color: '#6b7280'
+                    color: derivarSentidoDoCodigo(codigoValue) === 'Entrada' ? '#10b981' : '#ef4444',
+                    fontWeight: '500'
                   }}>
-                    Sentido derivado: <strong>{derivarSentidoDoCodigo(codigoValue) || 'Nenhum'}</strong>
+                    Sentido: {derivarSentidoDoCodigo(codigoValue)}
                   </p>
                 )}
               </div>
 
-              {/* Tipo de Fluxo */}
               <div>
                 <label style={{
                   display: 'block',
@@ -773,13 +1061,16 @@ export default function PlanoContasPage() {
                     backgroundColor: 'white'
                   }}
                 >
-                  <option value="Operacional">Operacional</option>
-                  <option value="Investimento">Investimento</option>
-                  <option value="Financiamento">Financiamento</option>
+                  {tiposFluxoDisponiveis.length === 0 ? (
+                    <option value="">Carregando...</option>
+                  ) : (
+                    tiposFluxoDisponiveis.map((tipo) => (
+                      <option key={tipo} value={tipo}>{tipo}</option>
+                    ))
+                  )}
                 </select>
               </div>
 
-              {/* Grupo (opcional) */}
               <div>
                 <label style={{
                   display: 'block',
@@ -788,10 +1079,12 @@ export default function PlanoContasPage() {
                   color: '#374151',
                   marginBottom: '8px'
                 }}>
-                  Grupo (opcional)
+                  Grupo *
                 </label>
                 <input
                   {...register('grupo')}
+                  list="grupos-list"
+                  onChange={(e) => handleFormatInput('grupo', e.target.value)}
                   style={{
                     width: '100%',
                     padding: '12px 16px',
@@ -799,10 +1092,9 @@ export default function PlanoContasPage() {
                     borderRadius: '8px',
                     fontSize: '14px',
                     outline: 'none',
-                    transition: 'all 0.2s',
-                    textTransform: 'uppercase'
+                    transition: 'all 0.2s'
                   }}
-                  placeholder="GRUPO"
+                  placeholder="Ex: Custo Fixo"
                   onFocus={(e) => {
                     e.currentTarget.style.borderColor = '#1555D6'
                     e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
@@ -812,9 +1104,13 @@ export default function PlanoContasPage() {
                     e.currentTarget.style.boxShadow = 'none'
                   }}
                 />
+                <datalist id="grupos-list">
+                  {gruposDisponiveis.map(grupo => (
+                    <option key={grupo} value={grupo} />
+                  ))}
+                </datalist>
               </div>
 
-              {/* Categoria */}
               <div>
                 <label style={{
                   display: 'block',
@@ -827,6 +1123,8 @@ export default function PlanoContasPage() {
                 </label>
                 <input
                   {...register('categoria')}
+                  list="categorias-list"
+                  onChange={(e) => handleFormatInput('categoria', e.target.value)}
                   style={{
                     width: '100%',
                     padding: '12px 16px',
@@ -834,10 +1132,9 @@ export default function PlanoContasPage() {
                     borderRadius: '8px',
                     fontSize: '14px',
                     outline: 'none',
-                    transition: 'all 0.2s',
-                    textTransform: 'uppercase'
+                    transition: 'all 0.2s'
                   }}
-                  placeholder="CATEGORIA"
+                  placeholder="Ex: Despesas Administrativas"
                   onFocus={(e) => {
                     e.currentTarget.style.borderColor = '#1555D6'
                     e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
@@ -847,9 +1144,13 @@ export default function PlanoContasPage() {
                     e.currentTarget.style.boxShadow = 'none'
                   }}
                 />
+                <datalist id="categorias-list">
+                  {categoriasDisponiveis.map(categoria => (
+                    <option key={categoria} value={categoria} />
+                  ))}
+                </datalist>
               </div>
 
-              {/* Subcategoria */}
               <div>
                 <label style={{
                   display: 'block',
@@ -862,6 +1163,7 @@ export default function PlanoContasPage() {
                 </label>
                 <input
                   {...register('subcategoria')}
+                  onChange={(e) => handleFormatInput('subcategoria', e.target.value)}
                   style={{
                     width: '100%',
                     padding: '12px 16px',
@@ -869,10 +1171,9 @@ export default function PlanoContasPage() {
                     borderRadius: '8px',
                     fontSize: '14px',
                     outline: 'none',
-                    transition: 'all 0.2s',
-                    textTransform: 'uppercase'
+                    transition: 'all 0.2s'
                   }}
-                  placeholder="SUBCATEGORIA"
+                  placeholder="Ex: Aluguel de Escritório"
                   onFocus={(e) => {
                     e.currentTarget.style.borderColor = '#1555D6'
                     e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
@@ -884,7 +1185,6 @@ export default function PlanoContasPage() {
                 />
               </div>
 
-              {/* DRE Grupo (opcional) */}
               <div>
                 <label style={{
                   display: 'block',
@@ -897,6 +1197,7 @@ export default function PlanoContasPage() {
                 </label>
                 <input
                   {...register('dre_grupo')}
+                  onChange={(e) => handleFormatInput('dre_grupo', e.target.value)}
                   style={{
                     width: '100%',
                     padding: '12px 16px',
@@ -904,10 +1205,9 @@ export default function PlanoContasPage() {
                     borderRadius: '8px',
                     fontSize: '14px',
                     outline: 'none',
-                    transition: 'all 0.2s',
-                    textTransform: 'uppercase'
+                    transition: 'all 0.2s'
                   }}
-                  placeholder="DRE GRUPO"
+                  placeholder="Ex: Custos Operacionais"
                   onFocus={(e) => {
                     e.currentTarget.style.borderColor = '#1555D6'
                     e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
@@ -919,7 +1219,6 @@ export default function PlanoContasPage() {
                 />
               </div>
 
-              {/* Ativo */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <input
                   type="checkbox"
@@ -945,7 +1244,6 @@ export default function PlanoContasPage() {
                 </label>
               </div>
 
-              {/* Buttons */}
               <div style={{
                 display: 'flex',
                 gap: '12px',
@@ -996,7 +1294,6 @@ export default function PlanoContasPage() {
         </div>
       )}
 
-      {/* Modal de Confirmação de Exclusão */}
       {showDeleteModal && (
         <div
           style={{
@@ -1137,7 +1434,6 @@ export default function PlanoContasPage() {
         </div>
       )}
 
-      {/* Toast Notifications */}
       <div style={{
         position: 'fixed',
         top: '50%',
