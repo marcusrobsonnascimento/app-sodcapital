@@ -1893,7 +1893,7 @@ export default function LancamentosPage() {
                     color: '#6b7280',
                     textTransform: 'uppercase'
                   }}>
-                    Plano de Conta
+                    Código Financeiro
                   </th>
                   <th style={{
                     padding: '12px 16px',
@@ -2000,11 +2000,11 @@ export default function LancamentosPage() {
                       <td style={{ padding: '12px 16px', color: '#374151', fontSize: '13px' }}>
                         {lanc.plano_conta ? (
                           <div>
-                            <div style={{ fontFamily: 'monospace', fontWeight: '600', marginBottom: '2px' }}>
+                            <div style={{ fontFamily: 'monospace', fontWeight: '600', marginBottom: '4px' }}>
                               {lanc.plano_conta.codigo_conta}
                             </div>
-                            <div style={{ fontSize: '12px', color: '#6b7280' }}>
-                              {lanc.plano_conta.categoria} - {lanc.plano_conta.subcategoria}
+                            <div style={{ fontSize: '11px', color: '#6b7280' }}>
+                              Plano Contábil: 1.00.000.001 - Descrição: Em Desenvolvimento
                             </div>
                           </div>
                         ) : (

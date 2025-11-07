@@ -396,7 +396,7 @@ export default function PlanoContaPicker({ value, onChange, sentidoFilter, error
         </div>
       </div>
 
-      {/* Preview do código selecionado */}
+      {/* Preview do código selecionado - ATUALIZADO */}
       {value && (
         <div
           style={{
@@ -404,10 +404,13 @@ export default function PlanoContaPicker({ value, onChange, sentidoFilter, error
             padding: '12px',
             backgroundColor: '#f0f9ff',
             border: '1px solid #bfdbfe',
-            borderRadius: '8px'
+            borderRadius: '8px',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center'
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div>
             <span
               style={{
                 fontSize: '12px',
@@ -415,7 +418,7 @@ export default function PlanoContaPicker({ value, onChange, sentidoFilter, error
                 color: '#1e40af'
               }}
             >
-              Código:
+              Código Financeiro:{' '}
             </span>
             <span
               style={{
@@ -426,6 +429,36 @@ export default function PlanoContaPicker({ value, onChange, sentidoFilter, error
               }}
             >
               {todasContas.find((c) => c.id === value)?.codigo_conta}
+            </span>
+          </div>
+          <div>
+            <span
+              style={{
+                fontSize: '12px',
+                fontWeight: '500',
+                color: '#1e40af'
+              }}
+            >
+              Plano Contábil:{' '}
+            </span>
+            <span
+              style={{
+                fontSize: '14px',
+                fontWeight: '700',
+                color: '#1e3a8a',
+                fontFamily: 'monospace'
+              }}
+            >
+              1.00.000.001
+            </span>
+            <span
+              style={{
+                fontSize: '12px',
+                fontWeight: '500',
+                color: '#1e40af'
+              }}
+            >
+              {' '}- Descrição: Em Desenvolvimento
             </span>
           </div>
         </div>
