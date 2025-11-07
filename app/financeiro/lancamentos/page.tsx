@@ -766,8 +766,8 @@ export default function LancamentosPage() {
 
   const getTipoBadge = (tipo: string) => {
     return tipo === 'Entrada'
-      ? { bg: '#d1fae5', color: '#065f46', label: 'Entrada' }
-      : { bg: '#fee2e2', color: '#991b1b', label: 'Saída' }
+      ? { bg: '#d1fae5', color: '#065f46', label: 'Recebimento' }
+      : { bg: '#fee2e2', color: '#991b1b', label: 'Pagamento' }
   }
 
   return (
@@ -897,8 +897,8 @@ export default function LancamentosPage() {
               }}
             >
               <option value="">Todos</option>
-              <option value="Entrada">Entrada</option>
-              <option value="Saida">Saída</option>
+              <option value="Entrada">Recebimento</option>
+              <option value="Saida">Pagamento</option>
             </select>
           </div>
 
@@ -1092,45 +1092,10 @@ export default function LancamentosPage() {
               <form onSubmit={handleSubmit(onSubmit, onSubmitError)}>
                 <div style={{
                   display: 'grid',
-                  gridTemplateColumns: '100px 1fr 1fr 1fr 1fr 1fr',
+                  gridTemplateColumns: '1fr 1fr 1fr 120px 1fr 1fr',
                   gap: '12px',
                   marginBottom: '14px'
                 }}>
-                  <div>
-                    <label style={{
-                      display: 'block',
-                      fontSize: '13px',
-                      fontWeight: '500',
-                      color: '#374151',
-                      marginBottom: '6px'
-                    }}>
-                      Tipo *
-                    </label>
-                    <select
-                      {...register('tipo')}
-                      style={{
-                        width: '100%',
-                        padding: '9px 10px',
-                        border: '1px solid #e5e7eb',
-                        borderRadius: '8px',
-                        fontSize: '13px',
-                        outline: 'none',
-                        cursor: 'pointer'
-                      }}
-                      onFocus={(e) => {
-                        e.currentTarget.style.borderColor = '#1555D6'
-                        e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
-                      }}
-                      onBlur={(e) => {
-                        e.currentTarget.style.borderColor = '#e5e7eb'
-                        e.currentTarget.style.boxShadow = 'none'
-                      }}
-                    >
-                      <option value="Entrada">Entrada</option>
-                      <option value="Saida">Saída</option>
-                    </select>
-                  </div>
-
                   <div>
                     <label style={{
                       display: 'block',
@@ -1247,6 +1212,41 @@ export default function LancamentosPage() {
                       {subprojetos.map((sub) => (
                         <option key={sub.id} value={sub.id}>{sub.nome}</option>
                       ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label style={{
+                      display: 'block',
+                      fontSize: '13px',
+                      fontWeight: '500',
+                      color: '#374151',
+                      marginBottom: '6px'
+                    }}>
+                      Tipo *
+                    </label>
+                    <select
+                      {...register('tipo')}
+                      style={{
+                        width: '100%',
+                        padding: '9px 10px',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '8px',
+                        fontSize: '13px',
+                        outline: 'none',
+                        cursor: 'pointer'
+                      }}
+                      onFocus={(e) => {
+                        e.currentTarget.style.borderColor = '#1555D6'
+                        e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                      }}
+                      onBlur={(e) => {
+                        e.currentTarget.style.borderColor = '#e5e7eb'
+                        e.currentTarget.style.boxShadow = 'none'
+                      }}
+                    >
+                      <option value="Entrada">Recebimento</option>
+                      <option value="Saida">Pagamento</option>
                     </select>
                   </div>
 
