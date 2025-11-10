@@ -227,7 +227,9 @@ export default function ProjetosPage() {
 
   const onSubmit = async (data: ProjetoForm) => {
     try {
-      if (data.projeto_pai_id === editingId) {
+      // ✅ CORREÇÃO: Só valida se estiver EDITANDO (editingId não é null)
+      // Ao criar novo projeto, editingId é null, então essa validação é pulada
+      if (editingId && data.projeto_pai_id === editingId) {
         showToast('Projeto não pode ser pai de si mesmo', 'warning')
         return
       }
