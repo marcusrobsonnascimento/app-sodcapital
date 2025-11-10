@@ -6,11 +6,10 @@ import { Plus, Pencil, Trash2, Search, CheckCircle, AlertTriangle, XCircle } fro
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
-
 // Types
-export type Sentido = 'Entrada' | 'Saida'
+type Sentido = 'Entrada' | 'Saida'
 
-export interface PlanoContaFluxo {
+interface PlanoContaFluxo {
   id: string
   codigo_conta: string
   tipo_fluxo: string
@@ -25,17 +24,17 @@ export interface PlanoContaFluxo {
 }
 
 // Funções auxiliares
-export function derivarSentidoDoCodigo(codigo: string): Sentido | null {
+const derivarSentidoDoCodigo = (codigo: string): Sentido | null => {
   if (!codigo) return null
   return codigo.startsWith('1.') ? 'Entrada' : 'Saida'
 }
 
-export function validarCodigoConta(codigo: string): boolean {
+const validarCodigoConta = (codigo: string): boolean => {
   const pattern = /^\d\.\d{2}\.\d{2}(\.\d{2,3})?$/
   return pattern.test(codigo)
 }
 
-export function formatTitleCase(text: string): string {
+const formatTitleCase = (text: string): string => {
   if (!text) return ''
   
   return text

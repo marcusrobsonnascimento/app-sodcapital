@@ -74,6 +74,7 @@ interface Lancamento {
   valor_liquido: number
   data_emissao: string | null
   data_vencimento: string
+  data_previsao_pagamento: string | null
   data_liquidacao: string | null
   status: 'ABERTO' | 'PAGO_RECEBIDO' | 'CANCELADO'
   documento_tipo: string | null
@@ -129,6 +130,7 @@ const lancamentoSchema = z.object({
   valor_bruto: z.coerce.number().min(0.01, 'Valor bruto é obrigatório'),
   data_emissao: z.string().min(1, 'Data de emissão é obrigatória'),
   data_vencimento: z.string().min(1, 'Data de vencimento é obrigatória'),
+  data_previsao_pagamento: z.string().optional(),
   documento_tipo: z.string().optional(),
   documento_numero: z.string().optional(),
   observacoes: z.string().optional()
@@ -198,6 +200,7 @@ export default function LancamentosPage() {
       valor_bruto: 0,
       data_emissao: '',
       data_vencimento: '',
+      data_previsao_pagamento: '',
       documento_tipo: '',
       documento_numero: '',
       observacoes: ''
@@ -465,6 +468,7 @@ export default function LancamentosPage() {
         valor_liquido: valorLiquido,
         data_emissao: data.data_emissao || null,
         data_vencimento: data.data_vencimento,
+        data_previsao_pagamento: data.data_previsao_pagamento || null,
         data_liquidacao: null,
         status: 'ABERTO' as const,
         documento_tipo: data.documento_tipo || null,
@@ -582,6 +586,7 @@ export default function LancamentosPage() {
       setValue('valor_bruto', lancamento.valor_bruto)
       setValue('data_emissao', formatDateForInput(lancamento.data_emissao))
       setValue('data_vencimento', formatDateForInput(lancamento.data_vencimento))
+      setValue('data_previsao_pagamento', formatDateForInput(lancamento.data_previsao_pagamento))
       setValue('documento_tipo', lancamento.documento_tipo || '')
       setValue('documento_numero', lancamento.documento_numero || '')
       setValue('observacoes', lancamento.observacoes || '')
@@ -685,6 +690,7 @@ export default function LancamentosPage() {
       valor_bruto: 0,
       data_emissao: '',
       data_vencimento: '',
+      data_previsao_pagamento: '',
       documento_tipo: '',
       documento_numero: '',
       observacoes: ''
@@ -1374,7 +1380,7 @@ export default function LancamentosPage() {
 
                 <div style={{
                   display: 'grid',
-                  gridTemplateColumns: '1fr 1fr 1fr 0.8fr 0.6fr',
+                  gridTemplateColumns: '1fr 1fr 1fr 1fr 0.8fr 0.6fr',
                   gap: '12px',
                   marginBottom: '14px'
                 }}>
@@ -1422,6 +1428,38 @@ export default function LancamentosPage() {
                     </label>
                     <input
                       {...register('data_vencimento')}
+                      type="date"
+                      style={{
+                        width: '100%',
+                        padding: '9px 10px',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '8px',
+                        fontSize: '13px',
+                        outline: 'none'
+                      }}
+                      onFocus={(e) => {
+                        e.currentTarget.style.borderColor = '#1555D6'
+                        e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                      }}
+                      onBlur={(e) => {
+                        e.currentTarget.style.borderColor = '#e5e7eb'
+                        e.currentTarget.style.boxShadow = 'none'
+                      }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{
+                      display: 'block',
+                      fontSize: '13px',
+                      fontWeight: '500',
+                      color: '#374151',
+                      marginBottom: '6px'
+                    }}>
+                      Previsão Pgto
+                    </label>
+                    <input
+                      {...register('data_previsao_pagamento')}
                       type="date"
                       style={{
                         width: '100%',
