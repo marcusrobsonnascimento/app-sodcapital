@@ -6,32 +6,33 @@ import { Plus, Pencil, Trash2, Search, CheckCircle, AlertTriangle, XCircle } fro
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
+
 // Types
 type Sentido = 'Entrada' | 'Saida'
 
 interface PlanoContaFluxo {
   id: string
   codigo_conta: string
+  sentido: Sentido
+  classificacao: string
   tipo_fluxo: string
   grupo: string
   categoria: string
   subcategoria: string
-  dre_grupo: string | null
-  sentido: Sentido | null
+  cod_cont: string | null
+  conta_cont: string | null
   ativo: boolean
   created_at?: string
   updated_at?: string
 }
 
-// Funções auxiliares
-const derivarSentidoDoCodigo = (codigo: string): Sentido | null => {
-  if (!codigo) return null
-  return codigo.startsWith('1.') ? 'Entrada' : 'Saida'
-}
+// Toast notification system
+type ToastType = 'success' | 'warning' | 'error'
 
-const validarCodigoConta = (codigo: string): boolean => {
-  const pattern = /^\d\.\d{2}\.\d{2}(\.\d{2,3})?$/
-  return pattern.test(codigo)
+interface Toast {
+  id: number
+  message: string
+  type: ToastType
 }
 
 const formatTitleCase = (text: string): string => {
@@ -50,22 +51,13 @@ const formatTitleCase = (text: string): string => {
     .join(' ')
 }
 
-// Toast notification system
-type ToastType = 'success' | 'warning' | 'error'
-
-interface Toast {
-  id: number
-  message: string
-  type: ToastType
-}
-
 const planoContaSchema = z.object({
-  codigo_conta: z.string()
-    .min(1, 'Código é obrigatório')
-    .refine(
-      (val) => validarCodigoConta(val),
-      { message: 'Formato inválido. Use: 1.01.01 ou 1.01.01.01 ou 1.01.01.077' }
-    ),
+  codigo_conta: z.string().min(1, 'Código é obrigatório'),
+  sentido: z.enum(['Entrada', 'Saida'], { required_error: 'Sentido é obrigatório' }),
+  classificacao: z.string()
+    .min(1, 'Classificação é obrigatória')
+    .max(100, 'Classificação deve ter no máximo 100 caracteres')
+    .transform(val => formatTitleCase(val)),
   tipo_fluxo: z.string().min(1, 'Tipo de fluxo é obrigatório'),
   grupo: z.string()
     .min(1, 'Grupo é obrigatório')
@@ -79,7 +71,9 @@ const planoContaSchema = z.object({
     .min(1, 'Subcategoria é obrigatória')
     .max(100, 'Subcategoria deve ter no máximo 100 caracteres')
     .transform(val => formatTitleCase(val)),
-  dre_grupo: z.string()
+  cod_cont: z.string().optional(),
+  conta_cont: z.string()
+    .max(60, 'Conta contábil deve ter no máximo 60 caracteres')
     .optional()
     .transform(val => val ? formatTitleCase(val) : val),
   ativo: z.boolean().default(true)
@@ -98,12 +92,14 @@ export default function PlanoContasPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [tipoFluxoFilter, setTipoFluxoFilter] = useState<string>('TODOS')
+  const [classificacaoFilter, setClassificacaoFilter] = useState<string>('TODOS')
   const [sentidoFilter, setSentidoFilter] = useState<Sentido | 'TODOS'>('TODOS')
   const [toasts, setToasts] = useState<Toast[]>([])
   const [toastIdCounter, setToastIdCounter] = useState(0)
   const [gruposDisponiveis, setGruposDisponiveis] = useState<string[]>([])
   const [categoriasDisponiveis, setCategoriasDisponiveis] = useState<string[]>([])
   const [tiposFluxoDisponiveis, setTiposFluxoDisponiveis] = useState<string[]>([])
+  const [classificacoesDisponiveis, setClassificacoesDisponiveis] = useState<string[]>([])
   const [checkingDependencies, setCheckingDependencies] = useState(false)
 
   const { register, handleSubmit, reset, formState: { errors }, setValue, watch } = useForm<PlanoContaFormData>({
@@ -112,8 +108,6 @@ export default function PlanoContasPage() {
       ativo: true
     }
   })
-
-  const codigoValue = watch('codigo_conta')
 
   const showToast = (message: string, type: ToastType) => {
     const id = toastIdCounter
@@ -212,6 +206,16 @@ export default function PlanoContasPage() {
         const tipos = Array.from(new Set(tiposData.map(item => item.tipo_fluxo).filter(Boolean))) as string[]
         setTiposFluxoDisponiveis(tipos)
       }
+
+      const { data: classifData, error: classifError } = await supabase
+        .from('plano_contas_fluxo')
+        .select('classificacao')
+        .order('classificacao')
+
+      if (!classifError && classifData) {
+        const classif = Array.from(new Set(classifData.map(item => item.classificacao).filter(Boolean))) as string[]
+        setClassificacoesDisponiveis(classif)
+      }
     } catch (error) {
       console.error('Erro ao carregar dados de autocomplete:', error)
     }
@@ -265,33 +269,12 @@ export default function PlanoContasPage() {
     }
   }
 
-  const verificarCodigoDuplicado = async (codigo: string, idAtual?: string): Promise<boolean> => {
-    try {
-      let query = supabase
-        .from('plano_contas_fluxo')
-        .select('id')
-        .eq('codigo_conta', codigo)
-        .limit(1)
-
-      if (idAtual) {
-        query = query.neq('id', idAtual)
-      }
-
-      const { data, error } = await query
-
-      if (error) throw error
-      return data && data.length > 0
-    } catch (error) {
-      console.error('Erro ao verificar código duplicado:', error)
-      throw error
-    }
-  }
-
   const verificarCombinacaoDuplicada = async (
     tipo_fluxo: string,
     grupo: string,
     categoria: string,
     subcategoria: string,
+    sentido: Sentido,
     idAtual?: string
   ): Promise<boolean> => {
     try {
@@ -302,6 +285,7 @@ export default function PlanoContasPage() {
         .eq('grupo', grupo)
         .eq('categoria', categoria)
         .eq('subcategoria', subcategoria)
+        .eq('sentido', sentido)
         .limit(1)
 
       if (idAtual) {
@@ -318,37 +302,37 @@ export default function PlanoContasPage() {
     }
   }
 
-  const handleFormatInput = (fieldName: 'grupo' | 'categoria' | 'subcategoria' | 'dre_grupo', value: string) => {
+  const handleFormatInput = (fieldName: keyof PlanoContaFormData, value: string) => {
     const formatted = formatTitleCase(value)
-    setValue(fieldName, formatted)
+    setValue(fieldName, formatted as any)
   }
 
   const onSubmit = async (data: PlanoContaFormData) => {
     try {
-      const codigoDuplicado = await verificarCodigoDuplicado(data.codigo_conta, editingId || undefined)
-      if (codigoDuplicado) {
-        showToast('Código da conta já existe. Use um código diferente.', 'warning')
-        return
-      }
-
       const combinacaoDuplicada = await verificarCombinacaoDuplicada(
         data.tipo_fluxo,
         data.grupo,
         data.categoria,
         data.subcategoria,
+        data.sentido,
         editingId || undefined
       )
       if (combinacaoDuplicada) {
-        showToast('Já existe uma conta com essa combinação de Tipo de Fluxo, Grupo, Categoria e Subcategoria.', 'warning')
+        showToast('Já existe uma conta com essa combinação de Tipo de Fluxo, Grupo, Categoria, Subcategoria e Sentido.', 'warning')
         return
       }
 
-      const sentido = derivarSentidoDoCodigo(data.codigo_conta)
-      
       const payload = {
-        ...data,
-        sentido,
-        dre_grupo: data.dre_grupo || null,
+        codigo_conta: data.codigo_conta,
+        sentido: data.sentido,
+        classificacao: data.classificacao,
+        tipo_fluxo: data.tipo_fluxo,
+        grupo: data.grupo,
+        categoria: data.categoria,
+        subcategoria: data.subcategoria,
+        cod_cont: data.cod_cont || null,
+        conta_cont: data.conta_cont || null,
+        ativo: data.ativo,
         updated_at: new Date().toISOString()
       }
 
@@ -362,7 +346,7 @@ export default function PlanoContasPage() {
           console.error('Erro detalhado ao atualizar:', error)
           
           if (error.code === '23505') {
-            showToast('Código já existe', 'warning')
+            showToast('Combinação já existe', 'warning')
             return
           }
           
@@ -378,7 +362,7 @@ export default function PlanoContasPage() {
           console.error('Erro detalhado ao criar:', error)
           
           if (error.code === '23505') {
-            showToast('Código já existe', 'warning')
+            showToast('Combinação já existe', 'warning')
             return
           }
           
@@ -400,6 +384,10 @@ export default function PlanoContasPage() {
   const onSubmitError = (errors: any) => {
     if (errors.codigo_conta) {
       showToast(errors.codigo_conta.message, 'warning')
+    } else if (errors.sentido) {
+      showToast(errors.sentido.message, 'warning')
+    } else if (errors.classificacao) {
+      showToast(errors.classificacao.message, 'warning')
     } else if (errors.tipo_fluxo) {
       showToast(errors.tipo_fluxo.message, 'warning')
     } else if (errors.grupo) {
@@ -415,11 +403,14 @@ export default function PlanoContasPage() {
     setEditingId(conta.id)
     reset({
       codigo_conta: conta.codigo_conta,
+      sentido: conta.sentido,
+      classificacao: conta.classificacao,
       tipo_fluxo: conta.tipo_fluxo,
-      grupo: conta.grupo || '',
+      grupo: conta.grupo,
       categoria: conta.categoria,
       subcategoria: conta.subcategoria,
-      dre_grupo: conta.dre_grupo || '',
+      cod_cont: conta.cod_cont || '',
+      conta_cont: conta.conta_cont || '',
       ativo: conta.ativo
     })
     setShowModal(true)
@@ -479,11 +470,14 @@ export default function PlanoContasPage() {
     setEditingId(null)
     reset({
       codigo_conta: '',
+      sentido: 'Entrada',
+      classificacao: '',
       tipo_fluxo: tiposFluxoDisponiveis[0] || '',
       grupo: '',
       categoria: '',
       subcategoria: '',
-      dre_grupo: '',
+      cod_cont: '',
+      conta_cont: '',
       ativo: true
     })
   }
@@ -493,15 +487,17 @@ export default function PlanoContasPage() {
       c.codigo_conta.includes(debouncedSearch) ||
       c.categoria.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
       c.subcategoria.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
-      (c.grupo && c.grupo.toLowerCase().includes(debouncedSearch.toLowerCase()))
+      c.grupo.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
+      c.classificacao.toLowerCase().includes(debouncedSearch.toLowerCase())
     
     const matchesTipoFluxo = tipoFluxoFilter === 'TODOS' || c.tipo_fluxo === tipoFluxoFilter
+    const matchesClassificacao = classificacaoFilter === 'TODOS' || c.classificacao === classificacaoFilter
     const matchesSentido = sentidoFilter === 'TODOS' || c.sentido === sentidoFilter
 
-    return matchesSearch && matchesTipoFluxo && matchesSentido
+    return matchesSearch && matchesTipoFluxo && matchesClassificacao && matchesSentido
   })
 
-  const getSentidoBadgeColor = (sentido: Sentido | null) => {
+  const getSentidoBadgeColor = (sentido: Sentido) => {
     if (sentido === 'Entrada') return { bg: '#dcfce7', color: '#16a34a' }
     if (sentido === 'Saida') return { bg: '#fee2e2', color: '#dc2626' }
     return { bg: '#f3f4f6', color: '#6b7280' }
@@ -509,39 +505,29 @@ export default function PlanoContasPage() {
 
   const getTipoFluxoBadgeColor = (tipo: string) => {
     const cores: Record<string, { bg: string; color: string }> = {
-      'Operacional': { bg: '#dbeafe', color: '#1e40af' },
-      'Operacionais': { bg: '#bfdbfe', color: '#1e3a8a' },
-      'Outras Operacionais': { bg: '#93c5fd', color: '#1e3a8a' },
-      'Investimento (Operacional)': { bg: '#7dd3fc', color: '#0c4a6e' },
-      'Investimento': { bg: '#d1fae5', color: '#065f46' },
-      'Investimentos': { bg: '#a7f3d0', color: '#064e3b' },
-      'Investimentos (Não Operacional)': { bg: '#6ee7b7', color: '#064e3b' },
-      'Financiamento': { bg: '#e0e7ff', color: '#4338ca' },
-      'Financiamentos': { bg: '#c7d2fe', color: '#3730a3' },
-      'Não Operacional': { bg: '#fed7aa', color: '#c2410c' },
-      'Não Operacionais': { bg: '#fdba74', color: '#9a3412' },
-      'Outras Não Operacionais': { bg: '#fb923c', color: '#7c2d12' },
-      'Impostos': { bg: '#cbd5e1', color: '#334155' },
-      'Imposto': { bg: '#94a3b8', color: '#1e293b' },
-      'Tributário': { bg: '#64748b', color: '#0f172a' },
-      'Tributos': { bg: '#94a3b8', color: '#1e293b' },
-      'Receita': { bg: '#a7f3d0', color: '#047857' },
-      'Receitas': { bg: '#6ee7b7', color: '#065f46' },
-      'Despesa': { bg: '#fecaca', color: '#b91c1c' },
-      'Despesas': { bg: '#fca5a5', color: '#991b1b' },
-      'Custo': { bg: '#fde68a', color: '#b45309' },
-      'Custos': { bg: '#fcd34d', color: '#92400e' },
-      'Ativo': { bg: '#99f6e4', color: '#115e59' },
-      'Ativos': { bg: '#5eead4', color: '#134e4a' },
-      'Passivo': { bg: '#fbcfe8', color: '#9f1239' },
-      'Passivos': { bg: '#f9a8d4', color: '#881337' },
-      'Patrimônio': { bg: '#ddd6fe', color: '#6b21a8' },
-      'Patrimônio Líquido': { bg: '#c4b5fd', color: '#5b21b6' },
-      'SG&A': { bg: '#fce7f3', color: '#be185d' },
+      'Negócios': { bg: '#dbeafe', color: '#1e40af' },
+      'Corporativo': { bg: '#e0e7ff', color: '#4338ca' },
       'default': { bg: '#f3f4f6', color: '#6b7280' }
     }
     
     return cores[tipo] || cores['default']
+  }
+
+  const getClassificacaoBadgeColor = (classif: string) => {
+    const cores: Record<string, { bg: string; color: string }> = {
+      'Operacionais': { bg: '#d1fae5', color: '#065f46' },
+      'Não Operacionais': { bg: '#fed7aa', color: '#c2410c' },
+      'Investimentos (Não Operacional)': { bg: '#a7f3d0', color: '#064e3b' },
+      'Financiamento': { bg: '#e0e7ff', color: '#4338ca' },
+      'Investimento (Operacional)': { bg: '#7dd3fc', color: '#0c4a6e' },
+      'Impostos': { bg: '#cbd5e1', color: '#334155' },
+      'SG&A': { bg: '#fce7f3', color: '#be185d' },
+      'Outras Operacionais': { bg: '#93c5fd', color: '#1e3a8a' },
+      'Outras Não Operacionais': { bg: '#fb923c', color: '#7c2d12' },
+      'default': { bg: '#f3f4f6', color: '#6b7280' }
+    }
+    
+    return cores[classif] || cores['default']
   }
 
   if (loading) {
@@ -576,7 +562,8 @@ export default function PlanoContasPage() {
         backgroundColor: 'white',
         borderRadius: '16px',
         boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
-        overflow: 'hidden'
+        overflow: 'hidden',
+        maxWidth: '100%'
       }}>
         <div style={{
           padding: '32px',
@@ -641,7 +628,7 @@ export default function PlanoContasPage() {
               }} />
               <input
                 type="text"
-                placeholder="Buscar por código, grupo, categoria ou subcategoria..."
+                placeholder="Buscar por código, grupo, categoria, subcategoria ou classificação..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 style={{
@@ -684,6 +671,25 @@ export default function PlanoContasPage() {
             </select>
 
             <select
+              value={classificacaoFilter}
+              onChange={(e) => setClassificacaoFilter(e.target.value)}
+              style={{
+                padding: '12px 16px',
+                border: '1px solid #e5e7eb',
+                borderRadius: '8px',
+                fontSize: '14px',
+                outline: 'none',
+                cursor: 'pointer',
+                backgroundColor: 'white'
+              }}
+            >
+              <option value="TODOS">Todas as Classificações</option>
+              {classificacoesDisponiveis.map((classif) => (
+                <option key={classif} value={classif}>{classif}</option>
+              ))}
+            </select>
+
+            <select
               value={sentidoFilter}
               onChange={(e) => setSentidoFilter(e.target.value as Sentido | 'TODOS')}
               style={{
@@ -703,95 +709,115 @@ export default function PlanoContasPage() {
           </div>
         </div>
 
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <div style={{ width: '100%' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
             <thead>
               <tr style={{ backgroundColor: '#f9fafb', borderBottom: '1px solid #e5e7eb' }}>
                 <th style={{
-                  padding: '12px 24px',
+                  padding: '12px 16px',
                   textAlign: 'left',
-                  fontSize: '12px',
+                  fontSize: '11px',
                   fontWeight: '600',
                   color: '#6b7280',
                   textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
+                  letterSpacing: '0.5px',
+                  width: '10%'
                 }}>
                   Código
                 </th>
                 <th style={{
-                  padding: '12px 24px',
+                  padding: '12px 16px',
                   textAlign: 'left',
-                  fontSize: '12px',
+                  fontSize: '11px',
                   fontWeight: '600',
                   color: '#6b7280',
                   textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
-                }}>
-                  Grupo
-                </th>
-                <th style={{
-                  padding: '12px 24px',
-                  textAlign: 'left',
-                  fontSize: '12px',
-                  fontWeight: '600',
-                  color: '#6b7280',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
-                }}>
-                  Categoria
-                </th>
-                <th style={{
-                  padding: '12px 24px',
-                  textAlign: 'left',
-                  fontSize: '12px',
-                  fontWeight: '600',
-                  color: '#6b7280',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
-                }}>
-                  Subcategoria
-                </th>
-                <th style={{
-                  padding: '12px 24px',
-                  textAlign: 'left',
-                  fontSize: '12px',
-                  fontWeight: '600',
-                  color: '#6b7280',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
-                }}>
-                  Tipo Fluxo
-                </th>
-                <th style={{
-                  padding: '12px 24px',
-                  textAlign: 'left',
-                  fontSize: '12px',
-                  fontWeight: '600',
-                  color: '#6b7280',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
+                  letterSpacing: '0.5px',
+                  width: '7%'
                 }}>
                   Sentido
                 </th>
                 <th style={{
-                  padding: '12px 24px',
+                  padding: '12px 16px',
                   textAlign: 'left',
-                  fontSize: '12px',
+                  fontSize: '11px',
                   fontWeight: '600',
                   color: '#6b7280',
                   textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
+                  letterSpacing: '0.5px',
+                  width: '12%'
+                }}>
+                  Classificação
+                </th>
+                <th style={{
+                  padding: '12px 16px',
+                  textAlign: 'left',
+                  fontSize: '11px',
+                  fontWeight: '600',
+                  color: '#6b7280',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px',
+                  width: '9%'
+                }}>
+                  Tipo Fluxo
+                </th>
+                <th style={{
+                  padding: '12px 16px',
+                  textAlign: 'left',
+                  fontSize: '11px',
+                  fontWeight: '600',
+                  color: '#6b7280',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px',
+                  width: '15%'
+                }}>
+                  Grupo
+                </th>
+                <th style={{
+                  padding: '12px 16px',
+                  textAlign: 'left',
+                  fontSize: '11px',
+                  fontWeight: '600',
+                  color: '#6b7280',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px',
+                  width: '15%'
+                }}>
+                  Categoria
+                </th>
+                <th style={{
+                  padding: '12px 16px',
+                  textAlign: 'left',
+                  fontSize: '11px',
+                  fontWeight: '600',
+                  color: '#6b7280',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px',
+                  width: '20%'
+                }}>
+                  Subcategoria
+                </th>
+                <th style={{
+                  padding: '12px 16px',
+                  textAlign: 'left',
+                  fontSize: '11px',
+                  fontWeight: '600',
+                  color: '#6b7280',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px',
+                  width: '7%'
                 }}>
                   Status
                 </th>
                 <th style={{
-                  padding: '12px 24px',
+                  padding: '12px 16px',
                   textAlign: 'right',
-                  fontSize: '12px',
+                  fontSize: '11px',
                   fontWeight: '600',
                   color: '#6b7280',
                   textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
+                  letterSpacing: '0.5px',
+                  width: '5%'
                 }}>
                   Ações
                 </th>
@@ -800,7 +826,7 @@ export default function PlanoContasPage() {
             <tbody>
               {filteredContas.length === 0 ? (
                 <tr>
-                  <td colSpan={8} style={{
+                  <td colSpan={9} style={{
                     padding: '48px 24px',
                     textAlign: 'center',
                     color: '#9ca3af',
@@ -817,6 +843,7 @@ export default function PlanoContasPage() {
                 filteredContas.map((conta) => {
                   const sentidoColors = getSentidoBadgeColor(conta.sentido)
                   const tipoColors = getTipoFluxoBadgeColor(conta.tipo_fluxo)
+                  const classifColors = getClassificacaoBadgeColor(conta.classificacao)
                   
                   return (
                     <tr
@@ -829,51 +856,15 @@ export default function PlanoContasPage() {
                       onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                     >
                       <td style={{
-                        padding: '16px 24px',
-                        fontSize: '14px',
+                        padding: '14px 16px',
+                        fontSize: '13px',
                         fontWeight: '600',
                         color: '#111827',
                         fontFamily: 'monospace'
                       }}>
                         {conta.codigo_conta}
                       </td>
-                      <td style={{
-                        padding: '16px 24px',
-                        fontSize: '14px',
-                        color: '#374151',
-                        fontWeight: '500'
-                      }}>
-                        {conta.grupo}
-                      </td>
-                      <td style={{
-                        padding: '16px 24px',
-                        fontSize: '14px',
-                        color: '#111827'
-                      }}>
-                        {conta.categoria}
-                      </td>
-                      <td style={{
-                        padding: '16px 24px',
-                        fontSize: '14px',
-                        color: '#6b7280'
-                      }}>
-                        {conta.subcategoria}
-                      </td>
-                      <td style={{ padding: '16px 24px' }}>
-                        <span style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          padding: '4px 12px',
-                          fontSize: '12px',
-                          fontWeight: '500',
-                          borderRadius: '12px',
-                          backgroundColor: tipoColors.bg,
-                          color: tipoColors.color
-                        }}>
-                          {conta.tipo_fluxo}
-                        </span>
-                      </td>
-                      <td style={{ padding: '16px 24px' }}>
+                      <td style={{ padding: '14px 16px' }}>
                         <span style={{
                           display: 'inline-flex',
                           alignItems: 'center',
@@ -884,15 +875,65 @@ export default function PlanoContasPage() {
                           backgroundColor: sentidoColors.bg,
                           color: sentidoColors.color
                         }}>
-                          {conta.sentido || '-'}
+                          {conta.sentido}
                         </span>
                       </td>
-                      <td style={{ padding: '16px 24px' }}>
+                      <td style={{ padding: '14px 16px' }}>
                         <span style={{
                           display: 'inline-flex',
                           alignItems: 'center',
-                          padding: '4px 12px',
-                          fontSize: '12px',
+                          padding: '4px 10px',
+                          fontSize: '11px',
+                          fontWeight: '500',
+                          borderRadius: '12px',
+                          backgroundColor: classifColors.bg,
+                          color: classifColors.color
+                        }}>
+                          {conta.classificacao}
+                        </span>
+                      </td>
+                      <td style={{ padding: '14px 16px' }}>
+                        <span style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          padding: '4px 10px',
+                          fontSize: '11px',
+                          fontWeight: '500',
+                          borderRadius: '12px',
+                          backgroundColor: tipoColors.bg,
+                          color: tipoColors.color
+                        }}>
+                          {conta.tipo_fluxo}
+                        </span>
+                      </td>
+                      <td style={{
+                        padding: '14px 16px',
+                        fontSize: '13px',
+                        color: '#374151',
+                        fontWeight: '500'
+                      }}>
+                        {conta.grupo}
+                      </td>
+                      <td style={{
+                        padding: '14px 16px',
+                        fontSize: '13px',
+                        color: '#111827'
+                      }}>
+                        {conta.categoria}
+                      </td>
+                      <td style={{
+                        padding: '14px 16px',
+                        fontSize: '13px',
+                        color: '#6b7280'
+                      }}>
+                        {conta.subcategoria}
+                      </td>
+                      <td style={{ padding: '14px 16px' }}>
+                        <span style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          padding: '4px 10px',
+                          fontSize: '11px',
                           fontWeight: '500',
                           borderRadius: '12px',
                           backgroundColor: conta.ativo ? '#dcfce7' : '#f3f4f6',
@@ -901,7 +942,7 @@ export default function PlanoContasPage() {
                           {conta.ativo ? 'Ativa' : 'Inativa'}
                         </span>
                       </td>
-                      <td style={{ padding: '16px 24px' }}>
+                      <td style={{ padding: '14px 16px' }}>
                         <div style={{
                           display: 'flex',
                           alignItems: 'center',
@@ -976,7 +1017,7 @@ export default function PlanoContasPage() {
               boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
               padding: '32px',
               width: '100%',
-              maxWidth: '600px',
+              maxWidth: '700px',
               margin: '16px',
               maxHeight: '90vh',
               overflowY: 'auto'
@@ -993,81 +1034,143 @@ export default function PlanoContasPage() {
             </h2>
 
             <form onSubmit={handleSubmit(onSubmit, onSubmitError)} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-              <div>
-                <label style={{
-                  display: 'block',
-                  fontSize: '14px',
-                  fontWeight: '500',
-                  color: '#374151',
-                  marginBottom: '8px'
-                }}>
-                  Código da Conta *
-                </label>
-                <input
-                  {...register('codigo_conta')}
-                  style={{
-                    width: '100%',
-                    padding: '12px 16px',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: '8px',
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                <div>
+                  <label style={{
+                    display: 'block',
                     fontSize: '14px',
-                    outline: 'none',
-                    transition: 'all 0.2s',
-                    fontFamily: 'monospace'
-                  }}
-                  placeholder="1.01.01.077"
-                  onFocus={(e) => {
-                    e.currentTarget.style.borderColor = '#1555D6'
-                    e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
-                  }}
-                  onBlur={(e) => {
-                    e.currentTarget.style.borderColor = '#e5e7eb'
-                    e.currentTarget.style.boxShadow = 'none'
-                  }}
-                />
-                {codigoValue && validarCodigoConta(codigoValue) && (
-                  <p style={{
-                    marginTop: '4px',
-                    fontSize: '12px',
-                    color: derivarSentidoDoCodigo(codigoValue) === 'Entrada' ? '#10b981' : '#ef4444',
-                    fontWeight: '500'
+                    fontWeight: '500',
+                    color: '#374151',
+                    marginBottom: '8px'
                   }}>
-                    Sentido: {derivarSentidoDoCodigo(codigoValue)}
-                  </p>
-                )}
+                    Código da Conta *
+                  </label>
+                  <input
+                    {...register('codigo_conta')}
+                    style={{
+                      width: '100%',
+                      padding: '12px 16px',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '8px',
+                      fontSize: '14px',
+                      outline: 'none',
+                      transition: 'all 0.2s',
+                      fontFamily: 'monospace'
+                    }}
+                    placeholder="1.01.01.01.001"
+                    onFocus={(e) => {
+                      e.currentTarget.style.borderColor = '#1555D6'
+                      e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = '#e5e7eb'
+                      e.currentTarget.style.boxShadow = 'none'
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    color: '#374151',
+                    marginBottom: '8px'
+                  }}>
+                    Sentido *
+                  </label>
+                  <select
+                    {...register('sentido')}
+                    style={{
+                      width: '100%',
+                      padding: '12px 16px',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '8px',
+                      fontSize: '14px',
+                      outline: 'none',
+                      cursor: 'pointer',
+                      backgroundColor: 'white'
+                    }}
+                  >
+                    <option value="Entrada">Entrada</option>
+                    <option value="Saida">Saída</option>
+                  </select>
+                </div>
               </div>
 
-              <div>
-                <label style={{
-                  display: 'block',
-                  fontSize: '14px',
-                  fontWeight: '500',
-                  color: '#374151',
-                  marginBottom: '8px'
-                }}>
-                  Tipo de Fluxo *
-                </label>
-                <select
-                  {...register('tipo_fluxo')}
-                  style={{
-                    width: '100%',
-                    padding: '12px 16px',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: '8px',
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                <div>
+                  <label style={{
+                    display: 'block',
                     fontSize: '14px',
-                    outline: 'none',
-                    cursor: 'pointer',
-                    backgroundColor: 'white'
-                  }}
-                >
-                  {tiposFluxoDisponiveis.length === 0 ? (
-                    <option value="">Carregando...</option>
-                  ) : (
-                    tiposFluxoDisponiveis.map((tipo) => (
-                      <option key={tipo} value={tipo}>{tipo}</option>
-                    ))
-                  )}
-                </select>
+                    fontWeight: '500',
+                    color: '#374151',
+                    marginBottom: '8px'
+                  }}>
+                    Classificação *
+                  </label>
+                  <input
+                    {...register('classificacao')}
+                    list="classificacoes-list"
+                    onChange={(e) => handleFormatInput('classificacao', e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '12px 16px',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '8px',
+                      fontSize: '14px',
+                      outline: 'none',
+                      transition: 'all 0.2s'
+                    }}
+                    placeholder="Ex: Operacionais"
+                    onFocus={(e) => {
+                      e.currentTarget.style.borderColor = '#1555D6'
+                      e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = '#e5e7eb'
+                      e.currentTarget.style.boxShadow = 'none'
+                    }}
+                  />
+                  <datalist id="classificacoes-list">
+                    {classificacoesDisponiveis.map(classif => (
+                      <option key={classif} value={classif} />
+                    ))}
+                  </datalist>
+                </div>
+
+                <div>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    color: '#374151',
+                    marginBottom: '8px'
+                  }}>
+                    Tipo de Fluxo *
+                  </label>
+                  <select
+                    {...register('tipo_fluxo')}
+                    style={{
+                      width: '100%',
+                      padding: '12px 16px',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '8px',
+                      fontSize: '14px',
+                      outline: 'none',
+                      cursor: 'pointer',
+                      backgroundColor: 'white'
+                    }}
+                  >
+                    {tiposFluxoDisponiveis.length === 0 ? (
+                      <option value="">Carregando...</option>
+                    ) : (
+                      tiposFluxoDisponiveis.map((tipo) => (
+                        <option key={tipo} value={tipo}>{tipo}</option>
+                      ))
+                    )}
+                  </select>
+                </div>
               </div>
 
               <div>
@@ -1093,7 +1196,7 @@ export default function PlanoContasPage() {
                     outline: 'none',
                     transition: 'all 0.2s'
                   }}
-                  placeholder="Ex: Custo Fixo"
+                  placeholder="Ex: Imobiliário"
                   onFocus={(e) => {
                     e.currentTarget.style.borderColor = '#1555D6'
                     e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
@@ -1133,7 +1236,7 @@ export default function PlanoContasPage() {
                     outline: 'none',
                     transition: 'all 0.2s'
                   }}
-                  placeholder="Ex: Despesas Administrativas"
+                  placeholder="Ex: Compra e Venda"
                   onFocus={(e) => {
                     e.currentTarget.style.borderColor = '#1555D6'
                     e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
@@ -1172,7 +1275,7 @@ export default function PlanoContasPage() {
                     outline: 'none',
                     transition: 'all 0.2s'
                   }}
-                  placeholder="Ex: Aluguel de Escritório"
+                  placeholder="Ex: Venda À Vista"
                   onFocus={(e) => {
                     e.currentTarget.style.borderColor = '#1555D6'
                     e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
@@ -1184,38 +1287,74 @@ export default function PlanoContasPage() {
                 />
               </div>
 
-              <div>
-                <label style={{
-                  display: 'block',
-                  fontSize: '14px',
-                  fontWeight: '500',
-                  color: '#374151',
-                  marginBottom: '8px'
-                }}>
-                  DRE Grupo (opcional)
-                </label>
-                <input
-                  {...register('dre_grupo')}
-                  onChange={(e) => handleFormatInput('dre_grupo', e.target.value)}
-                  style={{
-                    width: '100%',
-                    padding: '12px 16px',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: '8px',
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '20px' }}>
+                <div>
+                  <label style={{
+                    display: 'block',
                     fontSize: '14px',
-                    outline: 'none',
-                    transition: 'all 0.2s'
-                  }}
-                  placeholder="Ex: Custos Operacionais"
-                  onFocus={(e) => {
-                    e.currentTarget.style.borderColor = '#1555D6'
-                    e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
-                  }}
-                  onBlur={(e) => {
-                    e.currentTarget.style.borderColor = '#e5e7eb'
-                    e.currentTarget.style.boxShadow = 'none'
-                  }}
-                />
+                    fontWeight: '500',
+                    color: '#374151',
+                    marginBottom: '8px'
+                  }}>
+                    Cód. Contábil
+                  </label>
+                  <input
+                    {...register('cod_cont')}
+                    style={{
+                      width: '100%',
+                      padding: '12px 16px',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '8px',
+                      fontSize: '14px',
+                      outline: 'none',
+                      transition: 'all 0.2s',
+                      fontFamily: 'monospace'
+                    }}
+                    placeholder="1.00.000.001"
+                    onFocus={(e) => {
+                      e.currentTarget.style.borderColor = '#1555D6'
+                      e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = '#e5e7eb'
+                      e.currentTarget.style.boxShadow = 'none'
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    color: '#374151',
+                    marginBottom: '8px'
+                  }}>
+                    Descrição Contábil
+                  </label>
+                  <input
+                    {...register('conta_cont')}
+                    onChange={(e) => handleFormatInput('conta_cont', e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '12px 16px',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '8px',
+                      fontSize: '14px',
+                      outline: 'none',
+                      transition: 'all 0.2s'
+                    }}
+                    placeholder="Ex: Receita de Vendas"
+                    onFocus={(e) => {
+                      e.currentTarget.style.borderColor = '#1555D6'
+                      e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = '#e5e7eb'
+                      e.currentTarget.style.boxShadow = 'none'
+                    }}
+                  />
+                </div>
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>

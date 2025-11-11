@@ -6,11 +6,14 @@ import { supabase } from '@/lib/supabaseClient'
 interface PlanoContaFluxo {
   id: string
   codigo_conta: string
-  tipo_fluxo: 'Operacional' | 'Investimento' | 'Financiamento'
+  sentido: 'Entrada' | 'Saida'
+  classificacao: string
+  tipo_fluxo: string
   grupo: string
   categoria: string
   subcategoria: string
-  sentido: 'Entrada' | 'Saida' | null
+  cod_cont: string | null
+  conta_cont: string | null
 }
 
 interface PlanoContaPickerProps {
@@ -67,7 +70,10 @@ export default function PlanoContaPicker({ value, onChange, sentidoFilter, error
         .from('plano_contas_fluxo')
         .select('*')
         .eq('ativo', true)
-        .order('codigo_conta', { ascending: true })
+        .order('tipo_fluxo', { ascending: true })
+        .order('grupo', { ascending: true })
+        .order('categoria', { ascending: true })
+        .order('subcategoria', { ascending: true })
 
       if (error) throw error
       setTodasContas(data || [])
@@ -86,7 +92,7 @@ export default function PlanoContaPicker({ value, onChange, sentidoFilter, error
     }
 
     // Extrair tipos de fluxo únicos
-    const tipos = Array.from(new Set(contasFiltradas.map(c => c.tipo_fluxo)))
+    const tipos = Array.from(new Set(contasFiltradas.map(c => c.tipo_fluxo))).sort()
     setTiposFluxoDisponiveis(tipos)
 
     // Resetar seleções
@@ -396,7 +402,7 @@ export default function PlanoContaPicker({ value, onChange, sentidoFilter, error
         </div>
       </div>
 
-      {/* Preview do código selecionado - ATUALIZADO */}
+      {/* Preview do código selecionado */}
       {value && (
         <div
           style={{
@@ -449,7 +455,7 @@ export default function PlanoContaPicker({ value, onChange, sentidoFilter, error
                 fontFamily: 'monospace'
               }}
             >
-              1.00.000.001
+              {todasContas.find((c) => c.id === value)?.cod_cont || '1.00.000.001'}
             </span>
             <span
               style={{
@@ -458,7 +464,7 @@ export default function PlanoContaPicker({ value, onChange, sentidoFilter, error
                 color: '#1e40af'
               }}
             >
-              {' '}- Descrição: Em Desenvolvimento
+              {' '}- {todasContas.find((c) => c.id === value)?.conta_cont || 'Em Desenvolvimento'}
             </span>
           </div>
         </div>
