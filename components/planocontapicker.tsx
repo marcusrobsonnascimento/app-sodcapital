@@ -51,16 +51,23 @@ export default function PlanoContaPicker({ value, onChange, sentidoFilter, error
     }
   }, [sentidoFilter, todasContas])
 
-  // Quando value mudar externamente (edição), preencher os campos
+  // Quando value mudar externamente (edição), preencher os campos E carregar as opções
   useEffect(() => {
     if (value && todasContas.length > 0) {
       const conta = todasContas.find(c => c.id === value)
       if (conta) {
+        // Preencher os valores
         setTipoFluxoSelecionado(conta.tipo_fluxo)
         setGrupoSelecionado(conta.grupo)
         setCategoriaSelecionada(conta.categoria)
         setSubcategoriaSelecionada(conta.subcategoria)
+        
+        // Carregar as opções para cada nível
+        carregarOpcoesParaEdicao(conta)
       }
+    } else if (!value) {
+      // Se não há value, resetar tudo
+      resetarSelecoes()
     }
   }, [value, todasContas])
 
@@ -84,6 +91,57 @@ export default function PlanoContaPicker({ value, onChange, sentidoFilter, error
     }
   }
 
+  const carregarOpcoesParaEdicao = (conta: PlanoContaFluxo) => {
+    // Carregar tipos de fluxo disponíveis
+    let contasFiltradas = todasContas
+    if (sentidoFilter) {
+      contasFiltradas = todasContas.filter(c => c.sentido === sentidoFilter)
+    }
+    const tipos = Array.from(new Set(contasFiltradas.map(c => c.tipo_fluxo))).sort()
+    setTiposFluxoDisponiveis(tipos)
+
+    // Carregar grupos disponíveis para o tipo selecionado
+    let contasPorTipo = todasContas.filter(c => c.tipo_fluxo === conta.tipo_fluxo)
+    if (sentidoFilter) {
+      contasPorTipo = contasPorTipo.filter(c => c.sentido === sentidoFilter)
+    }
+    const grupos = Array.from(new Set(contasPorTipo.map(c => c.grupo))).sort()
+    setGruposDisponiveis(grupos)
+
+    // Carregar categorias disponíveis para o grupo selecionado
+    let contasPorGrupo = todasContas.filter(
+      c => c.tipo_fluxo === conta.tipo_fluxo && c.grupo === conta.grupo
+    )
+    if (sentidoFilter) {
+      contasPorGrupo = contasPorGrupo.filter(c => c.sentido === sentidoFilter)
+    }
+    const categorias = Array.from(new Set(contasPorGrupo.map(c => c.categoria))).sort()
+    setCategoriasDisponiveis(categorias)
+
+    // Carregar subcategorias disponíveis para a categoria selecionada
+    let contasPorCategoria = todasContas.filter(
+      c =>
+        c.tipo_fluxo === conta.tipo_fluxo &&
+        c.grupo === conta.grupo &&
+        c.categoria === conta.categoria
+    )
+    if (sentidoFilter) {
+      contasPorCategoria = contasPorCategoria.filter(c => c.sentido === sentidoFilter)
+    }
+    const subcategorias = Array.from(new Set(contasPorCategoria.map(c => c.subcategoria))).sort()
+    setSubcategoriasDisponiveis(subcategorias)
+  }
+
+  const resetarSelecoes = () => {
+    setTipoFluxoSelecionado('')
+    setGrupoSelecionado('')
+    setCategoriaSelecionada('')
+    setSubcategoriaSelecionada('')
+    setGruposDisponiveis([])
+    setCategoriasDisponiveis([])
+    setSubcategoriasDisponiveis([])
+  }
+
   const aplicarFiltroSentido = () => {
     let contasFiltradas = todasContas
 
@@ -95,14 +153,10 @@ export default function PlanoContaPicker({ value, onChange, sentidoFilter, error
     const tipos = Array.from(new Set(contasFiltradas.map(c => c.tipo_fluxo))).sort()
     setTiposFluxoDisponiveis(tipos)
 
-    // Resetar seleções
-    setTipoFluxoSelecionado('')
-    setGrupoSelecionado('')
-    setCategoriaSelecionada('')
-    setSubcategoriaSelecionada('')
-    setGruposDisponiveis([])
-    setCategoriasDisponiveis([])
-    setSubcategoriasDisponiveis([])
+    // Resetar seleções apenas se não houver value
+    if (!value) {
+      resetarSelecoes()
+    }
   }
 
   const handleTipoFluxoChange = (tipo: string) => {

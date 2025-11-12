@@ -22,6 +22,8 @@ interface BancoConta {
   banco_id: string
   agencia: string
   numero_conta: string
+  tipo_conta: string
+  tipo_empresa: string
   pix_chave: string
   moeda: string
   saldo_inicial: number
@@ -48,8 +50,10 @@ interface Banco {
 const bancoContaSchema = z.object({
   empresa_id: z.string().min(1, 'Empresa é obrigatória'),
   banco_id: z.string().min(1, 'Banco é obrigatório'),
-  agencia: z.string().optional(),
-  numero_conta: z.string().optional(),
+  agencia: z.string().min(1, 'Agência é obrigatória'),
+  numero_conta: z.string().min(1, 'Número da conta é obrigatório'),
+  tipo_conta: z.string().min(1, 'Tipo de conta é obrigatório'),
+  tipo_empresa: z.string().min(1, 'Tipo de empresa é obrigatório'),
   pix_chave: z.string().optional(),
   moeda: z.string().default('BRL'),
   saldo_inicial: z.number().default(0),
@@ -77,6 +81,8 @@ export default function BancosContasPage() {
     defaultValues: {
       moeda: 'BRL',
       saldo_inicial: 0,
+      tipo_conta: '',
+      tipo_empresa: '',
       ativo: true
     }
   })
@@ -146,7 +152,7 @@ export default function BancosContasPage() {
           empresas (nome),
           bancos (nome, codigo)
         `)
-        .order('created_at', { ascending: false })
+        .order('empresas(nome)', { ascending: true })
 
       if (error) {
         console.error('Erro ao carregar contas:', error)
@@ -154,7 +160,13 @@ export default function BancosContasPage() {
         throw error
       }
 
-      setContas(data || [])
+      const sortedData = (data || []).sort((a, b) => {
+        const nomeA = a.empresas?.nome || ''
+        const nomeB = b.empresas?.nome || ''
+        return nomeA.localeCompare(nomeB, 'pt-BR')
+      })
+
+      setContas(sortedData)
       
     } catch (err: any) {
       console.error('Erro na função loadContas:', err)
@@ -218,12 +230,32 @@ export default function BancosContasPage() {
 
   const onSubmit = async (data: BancoContaForm) => {
     try {
-      // Buscar informações do banco selecionado
+      const { data: contaExistente, error: checkError } = await supabase
+        .from('bancos_contas')
+        .select('id')
+        .eq('banco_id', data.banco_id)
+        .eq('agencia', data.agencia)
+        .eq('numero_conta', data.numero_conta)
+        .eq('tipo_conta', data.tipo_conta)
+        .eq('tipo_empresa', data.tipo_empresa)
+        .neq('id', editingId || '00000000-0000-0000-0000-000000000000')
+        .limit(1)
+
+      if (checkError) {
+        console.error('Erro ao verificar duplicidade:', checkError)
+        showToast('Erro ao verificar duplicidade', 'error')
+        return
+      }
+
+      if (contaExistente && contaExistente.length > 0) {
+        showToast('Já existe uma conta com este banco, agência, número, tipo de conta e tipo de empresa', 'warning')
+        return
+      }
+
       const bancoSelecionado = bancos.find(b => b.id === data.banco_id)
       
       const payload = {
         ...data,
-        // Se estiver editando, usa o saldo inicial original (não permite alteração)
         saldo_inicial: editingId ? saldoInicialOriginal : data.saldo_inicial,
         banco_nome: bancoSelecionado?.nome || '',
         banco_codigo: bancoSelecionado?.codigo || ''
@@ -264,6 +296,14 @@ export default function BancosContasPage() {
       showToast(errors.empresa_id.message, 'warning')
     } else if (errors.banco_id) {
       showToast(errors.banco_id.message, 'warning')
+    } else if (errors.agencia) {
+      showToast(errors.agencia.message, 'warning')
+    } else if (errors.numero_conta) {
+      showToast(errors.numero_conta.message, 'warning')
+    } else if (errors.tipo_conta) {
+      showToast(errors.tipo_conta.message, 'warning')
+    } else if (errors.tipo_empresa) {
+      showToast(errors.tipo_empresa.message, 'warning')
     }
   }
 
@@ -276,6 +316,8 @@ export default function BancosContasPage() {
       banco_id: conta.banco_id,
       agencia: conta.agencia || '',
       numero_conta: conta.numero_conta || '',
+      tipo_conta: conta.tipo_conta || '',
+      tipo_empresa: conta.tipo_empresa || '',
       pix_chave: conta.pix_chave || '',
       moeda: conta.moeda || 'BRL',
       saldo_inicial: conta.saldo_inicial || 0,
@@ -288,7 +330,6 @@ export default function BancosContasPage() {
 
   const handleDelete = async (id: string) => {
     try {
-      // Verificar se existem lançamentos vinculados a esta conta
       const { data: lancamentos, error: checkError } = await supabase
         .from('lancamentos')
         .select('id')
@@ -331,6 +372,8 @@ export default function BancosContasPage() {
       banco_id: '',
       agencia: '',
       numero_conta: '',
+      tipo_conta: '',
+      tipo_empresa: '',
       pix_chave: '',
       moeda: 'BRL',
       saldo_inicial: 0,
@@ -348,6 +391,8 @@ export default function BancosContasPage() {
       c.bancos?.codigo?.toLowerCase().includes(searchLower) ||
       c.agencia?.toLowerCase().includes(searchLower) ||
       c.numero_conta?.toLowerCase().includes(searchLower) ||
+      c.tipo_conta?.toLowerCase().includes(searchLower) ||
+      c.tipo_empresa?.toLowerCase().includes(searchLower) ||
       c.pix_chave?.toLowerCase().includes(searchLower)
     )
   })
@@ -387,14 +432,12 @@ export default function BancosContasPage() {
 
   return (
     <div style={{ padding: '32px', backgroundColor: '#f9fafb', minHeight: '100vh' }}>
-      {/* Main Content */}
       <div style={{
         backgroundColor: 'white',
         borderRadius: '16px',
         boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
         overflow: 'hidden'
       }}>
-        {/* Header with Title and Button */}
         <div style={{
           padding: '32px',
           borderBottom: '1px solid #e5e7eb'
@@ -445,7 +488,6 @@ export default function BancosContasPage() {
             </button>
           </div>
 
-          {/* Search Bar */}
           <div style={{ position: 'relative' }}>
             <Search style={{
               position: 'absolute',
@@ -458,7 +500,7 @@ export default function BancosContasPage() {
             }} />
             <input
               type="text"
-              placeholder="Buscar por empresa, banco, agência, conta ou PIX..."
+              placeholder="Buscar por empresa, banco, agência, conta, tipo ou PIX..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               style={{
@@ -482,7 +524,6 @@ export default function BancosContasPage() {
           </div>
         </div>
 
-        {/* Table */}
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -529,7 +570,18 @@ export default function BancosContasPage() {
                   textTransform: 'uppercase',
                   letterSpacing: '0.5px'
                 }}>
-                  Chave PIX
+                  Tipo Conta
+                </th>
+                <th style={{
+                  padding: '12px 24px',
+                  textAlign: 'left',
+                  fontSize: '12px',
+                  fontWeight: '600',
+                  color: '#6b7280',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px'
+                }}>
+                  Tipo Empresa
                 </th>
                 <th style={{
                   padding: '12px 24px',
@@ -571,7 +623,7 @@ export default function BancosContasPage() {
             <tbody>
               {filteredContas.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{
+                  <td colSpan={8} style={{
                     padding: '48px 24px',
                     textAlign: 'center',
                     color: '#9ca3af',
@@ -581,7 +633,7 @@ export default function BancosContasPage() {
                       <div>
                         <div style={{ fontSize: '48px', marginBottom: '16px' }}>💳</div>
                         <div style={{ fontWeight: '600', marginBottom: '8px' }}>Nenhuma conta cadastrada</div>
-                        <div style={{ fontSize: '13px' }}>Clique em "Nova Conta" para começar</div>
+                        <div style={{ fontSize: '13px' }}>Clique em &quot;Nova Conta&quot; para começar</div>
                       </div>
                     ) : (
                       <div>
@@ -639,13 +691,33 @@ export default function BancosContasPage() {
                         '-'
                       )}
                     </td>
-                    <td style={{
-                      padding: '16px 24px',
-                      fontSize: '13px',
-                      color: '#6b7280',
-                      fontFamily: 'monospace'
-                    }}>
-                      {conta.pix_chave || '-'}
+                    <td style={{ padding: '16px 24px' }}>
+                      <span style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        padding: '4px 12px',
+                        fontSize: '12px',
+                        fontWeight: '500',
+                        borderRadius: '12px',
+                        backgroundColor: '#ede9fe',
+                        color: '#7c3aed'
+                      }}>
+                        {conta.tipo_conta || '-'}
+                      </span>
+                    </td>
+                    <td style={{ padding: '16px 24px' }}>
+                      <span style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        padding: '4px 12px',
+                        fontSize: '12px',
+                        fontWeight: '500',
+                        borderRadius: '12px',
+                        backgroundColor: '#dbeafe',
+                        color: '#1d4ed8'
+                      }}>
+                        {conta.tipo_empresa || '-'}
+                      </span>
                     </td>
                     <td style={{
                       padding: '16px 24px',
@@ -717,7 +789,6 @@ export default function BancosContasPage() {
         </div>
       </div>
 
-      {/* Modal */}
       {showModal && (
         <div
           style={{
@@ -737,7 +808,7 @@ export default function BancosContasPage() {
               backgroundColor: 'white',
               borderRadius: '16px',
               boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
-              padding: '32px',
+              padding: '24px',
               width: '100%',
               maxWidth: '600px',
               margin: '16px',
@@ -747,23 +818,22 @@ export default function BancosContasPage() {
             onClick={(e) => e.stopPropagation()}
           >
             <h2 style={{
-              fontSize: '24px',
+              fontSize: '22px',
               fontWeight: '700',
               color: '#111827',
-              marginBottom: '24px'
+              marginBottom: '20px'
             }}>
               {editingId ? 'Editar Conta Bancária' : 'Nova Conta Bancária'}
             </h2>
 
-            <form onSubmit={handleSubmit(onSubmit, onSubmitError)} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-              {/* Empresa */}
+            <form onSubmit={handleSubmit(onSubmit, onSubmitError)} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div>
                 <label style={{
                   display: 'block',
-                  fontSize: '14px',
+                  fontSize: '13px',
                   fontWeight: '500',
                   color: '#374151',
-                  marginBottom: '8px'
+                  marginBottom: '6px'
                 }}>
                   Empresa *
                 </label>
@@ -771,7 +841,7 @@ export default function BancosContasPage() {
                   {...register('empresa_id')}
                   style={{
                     width: '100%',
-                    padding: '12px 16px',
+                    padding: '10px 12px',
                     border: '1px solid #e5e7eb',
                     borderRadius: '8px',
                     fontSize: '14px',
@@ -797,86 +867,66 @@ export default function BancosContasPage() {
                     </option>
                   ))}
                 </select>
-                {empresas.length === 0 && (
-                  <p style={{
-                    fontSize: '12px',
-                    color: '#dc2626',
-                    marginTop: '4px'
-                  }}>
-                    Cadastre empresas antes de criar uma conta bancária
-                  </p>
-                )}
               </div>
 
-              {/* Banco */}
-              <div>
-                <label style={{
-                  display: 'block',
-                  fontSize: '14px',
-                  fontWeight: '500',
-                  color: '#374151',
-                  marginBottom: '8px'
-                }}>
-                  Banco *
-                </label>
-                <select
-                  {...register('banco_id')}
-                  style={{
-                    width: '100%',
-                    padding: '12px 16px',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: '8px',
-                    fontSize: '14px',
-                    outline: 'none',
-                    transition: 'all 0.2s',
-                    cursor: 'pointer'
-                  }}
-                  onFocus={(e) => {
-                    e.currentTarget.style.borderColor = '#1555D6'
-                    e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
-                  }}
-                  onBlur={(e) => {
-                    e.currentTarget.style.borderColor = '#e5e7eb'
-                    e.currentTarget.style.boxShadow = 'none'
-                  }}
-                >
-                  <option value="">
-                    {bancos.length === 0 ? 'Nenhum banco cadastrado' : 'Selecione um banco'}
-                  </option>
-                  {bancos.map(banco => (
-                    <option key={banco.id} value={banco.id}>
-                      {banco.codigo} - {banco.nome}
-                    </option>
-                  ))}
-                </select>
-                {bancos.length === 0 && (
-                  <p style={{
-                    fontSize: '12px',
-                    color: '#dc2626',
-                    marginTop: '4px'
-                  }}>
-                    Cadastre bancos antes de criar uma conta bancária
-                  </p>
-                )}
-              </div>
-
-              {/* Agência e Conta */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1.2fr', gap: '12px' }}>
                 <div>
                   <label style={{
                     display: 'block',
-                    fontSize: '14px',
+                    fontSize: '13px',
                     fontWeight: '500',
                     color: '#374151',
-                    marginBottom: '8px'
+                    marginBottom: '6px'
                   }}>
-                    Agência
+                    Banco *
+                  </label>
+                  <select
+                    {...register('banco_id')}
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '8px',
+                      fontSize: '14px',
+                      outline: 'none',
+                      transition: 'all 0.2s',
+                      cursor: 'pointer'
+                    }}
+                    onFocus={(e) => {
+                      e.currentTarget.style.borderColor = '#1555D6'
+                      e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = '#e5e7eb'
+                      e.currentTarget.style.boxShadow = 'none'
+                    }}
+                  >
+                    <option value="">
+                      {bancos.length === 0 ? 'Nenhum banco cadastrado' : 'Selecione um banco'}
+                    </option>
+                    {bancos.map(banco => (
+                      <option key={banco.id} value={banco.id}>
+                        {banco.codigo} - {banco.nome}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '13px',
+                    fontWeight: '500',
+                    color: '#374151',
+                    marginBottom: '6px'
+                  }}>
+                    Agência *
                   </label>
                   <input
                     {...register('agencia')}
                     style={{
                       width: '100%',
-                      padding: '12px 16px',
+                      padding: '10px 12px',
                       border: '1px solid #e5e7eb',
                       borderRadius: '8px',
                       fontSize: '14px',
@@ -898,18 +948,18 @@ export default function BancosContasPage() {
                 <div>
                   <label style={{
                     display: 'block',
-                    fontSize: '14px',
+                    fontSize: '13px',
                     fontWeight: '500',
                     color: '#374151',
-                    marginBottom: '8px'
+                    marginBottom: '6px'
                   }}>
-                    Número da Conta
+                    Número da Conta *
                   </label>
                   <input
                     {...register('numero_conta')}
                     style={{
                       width: '100%',
-                      padding: '12px 16px',
+                      padding: '10px 12px',
                       border: '1px solid #e5e7eb',
                       borderRadius: '8px',
                       fontSize: '14px',
@@ -929,14 +979,95 @@ export default function BancosContasPage() {
                 </div>
               </div>
 
-              {/* Chave PIX */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '13px',
+                    fontWeight: '500',
+                    color: '#374151',
+                    marginBottom: '6px'
+                  }}>
+                    Tipo de Conta *
+                  </label>
+                  <select
+                    {...register('tipo_conta')}
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '8px',
+                      fontSize: '14px',
+                      outline: 'none',
+                      transition: 'all 0.2s',
+                      cursor: 'pointer'
+                    }}
+                    onFocus={(e) => {
+                      e.currentTarget.style.borderColor = '#1555D6'
+                      e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = '#e5e7eb'
+                      e.currentTarget.style.boxShadow = 'none'
+                    }}
+                  >
+                    <option value="">Selecione...</option>
+                    <option value="CC">Conta Corrente (CC)</option>
+                    <option value="CDB">CDB</option>
+                    <option value="OPC">Operações (OPC)</option>
+                    <option value="PEND">Pendente</option>
+                    <option value="INV FAC">Investimento FAC</option>
+                    <option value="BLOQ">Bloqueada</option>
+                    <option value="TECH CC">Conta Corrente Tech</option>
+                    <option value="SHP">Shopping</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '13px',
+                    fontWeight: '500',
+                    color: '#374151',
+                    marginBottom: '6px'
+                  }}>
+                    Tipo de Empresa *
+                  </label>
+                  <select
+                    {...register('tipo_empresa')}
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '8px',
+                      fontSize: '14px',
+                      outline: 'none',
+                      transition: 'all 0.2s',
+                      cursor: 'pointer'
+                    }}
+                    onFocus={(e) => {
+                      e.currentTarget.style.borderColor = '#1555D6'
+                      e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = '#e5e7eb'
+                      e.currentTarget.style.boxShadow = 'none'
+                    }}
+                  >
+                    <option value="">Selecione...</option>
+                    <option value="SPE">SPE</option>
+                    <option value="SHOPPING">Shopping</option>
+                  </select>
+                </div>
+              </div>
+
               <div>
                 <label style={{
                   display: 'block',
-                  fontSize: '14px',
+                  fontSize: '13px',
                   fontWeight: '500',
                   color: '#374151',
-                  marginBottom: '8px'
+                  marginBottom: '6px'
                 }}>
                   Chave PIX
                 </label>
@@ -944,7 +1075,7 @@ export default function BancosContasPage() {
                   {...register('pix_chave')}
                   style={{
                     width: '100%',
-                    padding: '12px 16px',
+                    padding: '10px 12px',
                     border: '1px solid #e5e7eb',
                     borderRadius: '8px',
                     fontSize: '14px',
@@ -963,15 +1094,14 @@ export default function BancosContasPage() {
                 />
               </div>
 
-              {/* Moeda e Saldo Inicial */}
-              <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '16px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '12px' }}>
                 <div>
                   <label style={{
                     display: 'block',
-                    fontSize: '14px',
+                    fontSize: '13px',
                     fontWeight: '500',
                     color: '#374151',
-                    marginBottom: '8px'
+                    marginBottom: '6px'
                   }}>
                     Moeda
                   </label>
@@ -979,7 +1109,7 @@ export default function BancosContasPage() {
                     {...register('moeda')}
                     style={{
                       width: '100%',
-                      padding: '12px 16px',
+                      padding: '10px 12px',
                       border: '1px solid #e5e7eb',
                       borderRadius: '8px',
                       fontSize: '14px',
@@ -1005,14 +1135,14 @@ export default function BancosContasPage() {
                 <div>
                   <label style={{
                     display: 'block',
-                    fontSize: '14px',
+                    fontSize: '13px',
                     fontWeight: '500',
                     color: '#374151',
-                    marginBottom: '8px'
+                    marginBottom: '6px'
                   }}>
                     Saldo Inicial
                     {editingId && (
-                      <span style={{ fontSize: '12px', color: '#9ca3af', fontWeight: '400', marginLeft: '8px' }}>
+                      <span style={{ fontSize: '11px', color: '#9ca3af', fontWeight: '400', marginLeft: '8px' }}>
                         (não editável)
                       </span>
                     )}
@@ -1024,7 +1154,7 @@ export default function BancosContasPage() {
                     disabled={!!editingId}
                     style={{
                       width: '100%',
-                      padding: '12px 16px',
+                      padding: '10px 12px',
                       border: '1px solid #e5e7eb',
                       borderRadius: '8px',
                       fontSize: '14px',
@@ -1046,88 +1176,9 @@ export default function BancosContasPage() {
                       e.currentTarget.style.boxShadow = 'none'
                     }}
                   />
-                  {editingId && (
-                    <p style={{
-                      fontSize: '12px',
-                      color: '#6b7280',
-                      marginTop: '4px'
-                    }}>
-                      O saldo inicial não pode ser alterado após a criação da conta
-                    </p>
-                  )}
                 </div>
               </div>
 
-              {/* Conta Contábil */}
-              <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', gap: '16px' }}>
-                <div>
-                  <label style={{
-                    display: 'block',
-                    fontSize: '14px',
-                    fontWeight: '500',
-                    color: '#374151',
-                    marginBottom: '8px'
-                  }}>
-                    Cód. Contábil
-                  </label>
-                  <input
-                    {...register('conta_contabil_codigo')}
-                    style={{
-                      width: '100%',
-                      padding: '12px 16px',
-                      border: '1px solid #e5e7eb',
-                      borderRadius: '8px',
-                      fontSize: '14px',
-                      outline: 'none',
-                      transition: 'all 0.2s'
-                    }}
-                    placeholder="1.1.01.001"
-                    onFocus={(e) => {
-                      e.currentTarget.style.borderColor = '#1555D6'
-                      e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
-                    }}
-                    onBlur={(e) => {
-                      e.currentTarget.style.borderColor = '#e5e7eb'
-                      e.currentTarget.style.boxShadow = 'none'
-                    }}
-                  />
-                </div>
-
-                <div>
-                  <label style={{
-                    display: 'block',
-                    fontSize: '14px',
-                    fontWeight: '500',
-                    color: '#374151',
-                    marginBottom: '8px'
-                  }}>
-                    Descrição Contábil
-                  </label>
-                  <input
-                    {...register('conta_contabil_descricao')}
-                    style={{
-                      width: '100%',
-                      padding: '12px 16px',
-                      border: '1px solid #e5e7eb',
-                      borderRadius: '8px',
-                      fontSize: '14px',
-                      outline: 'none',
-                      transition: 'all 0.2s'
-                    }}
-                    placeholder="Caixa e Equivalentes de Caixa"
-                    onFocus={(e) => {
-                      e.currentTarget.style.borderColor = '#1555D6'
-                      e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
-                    }}
-                    onBlur={(e) => {
-                      e.currentTarget.style.borderColor = '#e5e7eb'
-                      e.currentTarget.style.boxShadow = 'none'
-                    }}
-                  />
-                </div>
-              </div>
-
-              {/* Ativo */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <input
                   type="checkbox"
@@ -1143,7 +1194,7 @@ export default function BancosContasPage() {
                 <label
                   htmlFor="ativo"
                   style={{
-                    fontSize: '14px',
+                    fontSize: '13px',
                     fontWeight: '500',
                     color: '#374151',
                     cursor: 'pointer'
@@ -1153,7 +1204,6 @@ export default function BancosContasPage() {
                 </label>
               </div>
 
-              {/* Buttons */}
               <div style={{
                 display: 'flex',
                 gap: '12px',
@@ -1164,7 +1214,7 @@ export default function BancosContasPage() {
                   onClick={closeModal}
                   style={{
                     flex: 1,
-                    padding: '12px 24px',
+                    padding: '10px 20px',
                     backgroundColor: 'white',
                     border: '1px solid #e5e7eb',
                     borderRadius: '8px',
@@ -1183,7 +1233,7 @@ export default function BancosContasPage() {
                   type="submit"
                   style={{
                     flex: 1,
-                    padding: '12px 24px',
+                    padding: '10px 20px',
                     backgroundColor: '#1555D6',
                     border: 'none',
                     borderRadius: '8px',
@@ -1204,7 +1254,6 @@ export default function BancosContasPage() {
         </div>
       )}
 
-      {/* Toast Notifications */}
       <div style={{
         position: 'fixed',
         top: '50%',

@@ -37,6 +37,11 @@ interface BancoConta {
   empresa_id: string
   banco_nome: string
   numero_conta: string
+  agencia: string
+  nome_banco?: string
+  banco?: string
+  digito_conta?: string
+  tipo_conta: string
 }
 
 interface Contraparte {
@@ -264,20 +269,30 @@ export default function LancamentosPage() {
     if (selectedEmpresaId) {
       loadProjetos(selectedEmpresaId)
       loadBancosContas(selectedEmpresaId)
-      setValue('projeto_id', '')
-      setValue('subprojeto_id', '')
-      setValue('banco_conta_id', '')
-      setSubprojetos([])
+      
+      // Não limpa os campos se estiver editando
+      if (!editingId) {
+        setValue('projeto_id', '')
+        setValue('subprojeto_id', '')
+        setValue('banco_conta_id', '')
+        setSubprojetos([])
+      }
     }
   }, [selectedEmpresaId])
 
   useEffect(() => {
     if (selectedProjetoId) {
       loadSubprojetos(selectedProjetoId)
-      setValue('subprojeto_id', '')
+      
+      // Não limpa o campo se estiver editando
+      if (!editingId) {
+        setValue('subprojeto_id', '')
+      }
     } else {
-      setSubprojetos([])
-      setValue('subprojeto_id', '')
+      if (!editingId) {
+        setSubprojetos([])
+        setValue('subprojeto_id', '')
+      }
     }
   }, [selectedProjetoId])
 
@@ -354,12 +369,33 @@ export default function LancamentosPage() {
     try {
       const { data, error } = await supabase
         .from('bancos_contas')
-        .select('id, empresa_id, banco_nome, numero_conta')
+        .select(`
+          id, 
+          empresa_id, 
+          banco_nome, 
+          agencia, 
+          numero_conta, 
+          tipo_conta,
+          bancos(nome)
+        `)
         .eq('empresa_id', empresaId)
-        .order('banco_nome', { ascending: true })
+        .eq('tipo_conta', 'CC')
+        .eq('ativo', true)
 
       if (error) throw error
-      setBancosContas(data || [])
+      
+      // Mapear para incluir o nome do banco do relacionamento
+      const contasComBanco = (data || []).map((conta: any) => ({
+        ...conta,
+        nome_banco: conta.bancos?.nome || conta.banco_nome || ''
+      }))
+      
+      // Remover duplicados baseado no ID
+      const uniqueContas = contasComBanco.filter((conta, index, self) =>
+        index === self.findIndex((t) => t.id === conta.id)
+      )
+      
+      setBancosContas(uniqueContas)
     } catch (err) {
       console.error('Erro ao carregar contas bancárias:', err)
       showToast('Erro ao carregar contas bancárias', 'error')
@@ -567,20 +603,39 @@ export default function LancamentosPage() {
     try {
       setEditingId(lancamento.id)
 
+      // Primeiro define o tipo
+      setValue('tipo', lancamento.tipo)
+      
+      // Carrega os dados relacionados ANTES de setar os valores
       if (lancamento.empresa_id) {
-        await loadProjetos(lancamento.empresa_id)
-        await loadBancosContas(lancamento.empresa_id)
+        setValue('empresa_id', lancamento.empresa_id)
         
+        // Aguarda o carregamento dos projetos e contas
+        await Promise.all([
+          loadProjetos(lancamento.empresa_id),
+          loadBancosContas(lancamento.empresa_id)
+        ])
+        
+        // Depois de carregar, define o projeto
         if (lancamento.projeto_id) {
+          setValue('projeto_id', lancamento.projeto_id)
+          
+          // Aguarda o carregamento dos subprojetos
           await loadSubprojetos(lancamento.projeto_id)
+          
+          // Depois de carregar, define o subprojeto
+          if (lancamento.subprojeto_id) {
+            setValue('subprojeto_id', lancamento.subprojeto_id)
+          }
+        }
+        
+        // Define a conta bancária depois de carregar as opções
+        if (lancamento.banco_conta_id) {
+          setValue('banco_conta_id', lancamento.banco_conta_id)
         }
       }
 
-      setValue('tipo', lancamento.tipo)
-      setValue('empresa_id', lancamento.empresa_id)
-      setValue('projeto_id', lancamento.projeto_id || '')
-      setValue('subprojeto_id', lancamento.subprojeto_id || '')
-      setValue('banco_conta_id', lancamento.banco_conta_id || '')
+      // Define os outros campos
       setValue('contraparte_id', lancamento.contraparte_id || '')
       setValue('plano_conta_id', lancamento.plano_conta_id)
       setValue('valor_bruto', lancamento.valor_bruto)
@@ -678,6 +733,8 @@ export default function LancamentosPage() {
     setValorBrutoFormatado('')
     setValorLiquido(0)
     setSubprojetos([])
+    setProjetos([])
+    setBancosContas([])
 
     reset({
       tipo: 'Saida',
@@ -706,6 +763,8 @@ export default function LancamentosPage() {
     setValorBrutoFormatado('')
     setValorLiquido(0)
     setSubprojetos([])
+    setProjetos([])
+    setBancosContas([])
     reset()
   }
 
@@ -1293,7 +1352,7 @@ export default function LancamentosPage() {
                       <option value="">Selecione</option>
                       {bancosContas.map((bc) => (
                         <option key={bc.id} value={bc.id}>
-                          {bc.banco_nome} - {bc.numero_conta}
+                          {bc.nome_banco || 'Banco'} - Ag: {bc.agencia} - Conta: {bc.numero_conta}
                         </option>
                       ))}
                     </select>
@@ -1355,6 +1414,7 @@ export default function LancamentosPage() {
 
                 <div style={{ marginBottom: '14px' }}>
                   <PlanoContaPicker
+                     key={`plano-conta-${editingId || 'new'}-${watch('plano_conta_id')}`}
                      value={watch('plano_conta_id')}
                      onChange={(id) => setValue('plano_conta_id', id)}
                      sentidoFilter={selectedTipoLancamento}
@@ -2380,202 +2440,201 @@ export default function LancamentosPage() {
               color: '#111827',
               marginBottom: '12px',
               textAlign: 'center'
-            }}>
-              Liquidar Lançamento
-            </h2>
+              }}>
+            Liquidar Lançamento
+</h2>
             <p style={{
+            fontSize: '14px',
+            color: '#6b7280',
+            marginBottom: '20px',
+            textAlign: 'center',
+            lineHeight: '1.5'
+            }}>
+            Confirme a data de pagamento/recebimento:
+            </p>
+<div style={{ marginBottom: '24px' }}>
+          <label style={{
+            display: 'block',
+            fontSize: '14px',
+            fontWeight: '500',
+            color: '#374151',
+            marginBottom: '8px'
+          }}>
+            Data de Liquidação *
+          </label>
+          <input
+            type="date"
+            value={dataLiquidacao}
+            onChange={(e) => setDataLiquidacao(e.target.value)}
+            style={{
+              width: '100%',
+              padding: '12px 16px',
+              border: '1px solid #e5e7eb',
+              borderRadius: '8px',
               fontSize: '14px',
-              color: '#6b7280',
-              marginBottom: '20px',
-              textAlign: 'center',
+              outline: 'none'
+            }}
+            onFocus={(e) => {
+              e.currentTarget.style.borderColor = '#1555D6'
+              e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+            }}
+            onBlur={(e) => {
+              e.currentTarget.style.borderColor = '#e5e7eb'
+              e.currentTarget.style.boxShadow = 'none'
+            }}
+          />
+        </div>
+
+        <div style={{
+          display: 'flex',
+          gap: '12px'
+        }}>
+          <button
+            onClick={() => {
+              setLiquidarModal({ show: false, id: null })
+              setDataLiquidacao('')
+            }}
+            style={{
+              flex: 1,
+              padding: '12px 24px',
+              backgroundColor: 'white',
+              border: '1px solid #e5e7eb',
+              borderRadius: '8px',
+              fontSize: '14px',
+              fontWeight: '500',
+              color: '#374151',
+              cursor: 'pointer',
+              transition: 'all 0.2s'
+            }}
+            onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#f9fafb'}
+            onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'white'}
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={handleLiquidar}
+            disabled={!dataLiquidacao}
+            style={{
+              flex: 1,
+              padding: '12px 24px',
+              backgroundColor: dataLiquidacao ? '#10b981' : '#d1d5db',
+              border: 'none',
+              borderRadius: '8px',
+              fontSize: '14px',
+              fontWeight: '500',
+              color: 'white',
+              cursor: dataLiquidacao ? 'pointer' : 'not-allowed',
+              transition: 'all 0.2s'
+            }}
+            onMouseOver={(e) => {
+              if (dataLiquidacao) {
+                e.currentTarget.style.backgroundColor = '#059669'
+              }
+            }}
+            onMouseOut={(e) => {
+              if (dataLiquidacao) {
+                e.currentTarget.style.backgroundColor = '#10b981'
+              }
+            }}
+          >
+            Confirmar Liquidação
+          </button>
+        </div>
+      </div>
+    </div>
+  )}
+
+  <div style={{
+    position: 'fixed',
+    top: '50%',
+    left: '50%',
+    transform: 'translate(-50%, -50%)',
+    zIndex: 9999,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px',
+    pointerEvents: 'none'
+  }}>
+    {toasts.map((toast) => {
+      const { borderColor, icon: Icon, iconColor } = getToastStyles(toast.type)
+      return (
+        <div
+          key={toast.id}
+          style={{
+            backgroundColor: 'white',
+            borderTop: `4px solid ${borderColor}`,
+            padding: toast.requiresConfirmation ? '20px' : '16px 20px',
+            borderRadius: '12px',
+            boxShadow: '0 10px 25px rgba(0, 0, 0, 0.15)',
+            display: 'flex',
+            flexDirection: toast.requiresConfirmation ? 'column' : 'row',
+            alignItems: toast.requiresConfirmation ? 'stretch' : 'center',
+            gap: toast.requiresConfirmation ? '16px' : '12px',
+            minWidth: '400px',
+            maxWidth: '600px',
+            animation: 'scaleIn 0.3s ease-out',
+            pointerEvents: toast.requiresConfirmation ? 'auto' : 'none'
+          }}
+        >
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px'
+          }}>
+            <Icon style={{ width: '24px', height: '24px', flexShrink: 0, color: iconColor }} />
+            <span style={{
+              fontSize: '14px',
+              fontWeight: '500',
+              flex: 1,
+              color: '#374151',
               lineHeight: '1.5'
             }}>
-              Confirme a data de pagamento/recebimento:
-            </p>
-
-            <div style={{ marginBottom: '24px' }}>
-              <label style={{
-                display: 'block',
-                fontSize: '14px',
-                fontWeight: '500',
-                color: '#374151',
-                marginBottom: '8px'
-              }}>
-                Data de Liquidação *
-              </label>
-              <input
-                type="date"
-                value={dataLiquidacao}
-                onChange={(e) => setDataLiquidacao(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '12px 16px',
-                  border: '1px solid #e5e7eb',
-                  borderRadius: '8px',
-                  fontSize: '14px',
-                  outline: 'none'
-                }}
-                onFocus={(e) => {
-                  e.currentTarget.style.borderColor = '#1555D6'
-                  e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
-                }}
-                onBlur={(e) => {
-                  e.currentTarget.style.borderColor = '#e5e7eb'
-                  e.currentTarget.style.boxShadow = 'none'
-                }}
-              />
-            </div>
-
-            <div style={{
-              display: 'flex',
-              gap: '12px'
-            }}>
-              <button
-                onClick={() => {
-                  setLiquidarModal({ show: false, id: null })
-                  setDataLiquidacao('')
-                }}
-                style={{
-                  flex: 1,
-                  padding: '12px 24px',
-                  backgroundColor: 'white',
-                  border: '1px solid #e5e7eb',
-                  borderRadius: '8px',
-                  fontSize: '14px',
-                  fontWeight: '500',
-                  color: '#374151',
-                  cursor: 'pointer',
-                  transition: 'all 0.2s'
-                }}
-                onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#f9fafb'}
-                onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'white'}
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={handleLiquidar}
-                disabled={!dataLiquidacao}
-                style={{
-                  flex: 1,
-                  padding: '12px 24px',
-                  backgroundColor: dataLiquidacao ? '#10b981' : '#d1d5db',
-                  border: 'none',
-                  borderRadius: '8px',
-                  fontSize: '14px',
-                  fontWeight: '500',
-                  color: 'white',
-                  cursor: dataLiquidacao ? 'pointer' : 'not-allowed',
-                  transition: 'all 0.2s'
-                }}
-                onMouseOver={(e) => {
-                  if (dataLiquidacao) {
-                    e.currentTarget.style.backgroundColor = '#059669'
-                  }
-                }}
-                onMouseOut={(e) => {
-                  if (dataLiquidacao) {
-                    e.currentTarget.style.backgroundColor = '#10b981'
-                  }
-                }}
-              >
-                Confirmar Liquidação
-              </button>
-            </div>
+              {toast.message}
+            </span>
           </div>
-        </div>
-      )}
-
-      <div style={{
-        position: 'fixed',
-        top: '50%',
-        left: '50%',
-        transform: 'translate(-50%, -50%)',
-        zIndex: 9999,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '12px',
-        pointerEvents: 'none'
-      }}>
-        {toasts.map((toast) => {
-          const { borderColor, icon: Icon, iconColor } = getToastStyles(toast.type)
-          return (
-            <div
-              key={toast.id}
+          
+          {toast.requiresConfirmation && (
+            <button
+              onClick={() => dismissToast(toast.id)}
               style={{
-                backgroundColor: 'white',
-                borderTop: `4px solid ${borderColor}`,
-                padding: toast.requiresConfirmation ? '20px' : '16px 20px',
-                borderRadius: '12px',
-                boxShadow: '0 10px 25px rgba(0, 0, 0, 0.15)',
-                display: 'flex',
-                flexDirection: toast.requiresConfirmation ? 'column' : 'row',
-                alignItems: toast.requiresConfirmation ? 'stretch' : 'center',
-                gap: toast.requiresConfirmation ? '16px' : '12px',
-                minWidth: '400px',
-                maxWidth: '600px',
-                animation: 'scaleIn 0.3s ease-out',
-                pointerEvents: toast.requiresConfirmation ? 'auto' : 'none'
+                padding: '10px 24px',
+                backgroundColor: '#1555D6',
+                border: 'none',
+                borderRadius: '8px',
+                fontSize: '14px',
+                fontWeight: '600',
+                color: 'white',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+                alignSelf: 'center',
+                minWidth: '100px'
               }}
+              onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#1044b5'}
+              onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#1555D6'}
             >
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '12px'
-              }}>
-                <Icon style={{ width: '24px', height: '24px', flexShrink: 0, color: iconColor }} />
-                <span style={{
-                  fontSize: '14px',
-                  fontWeight: '500',
-                  flex: 1,
-                  color: '#374151',
-                  lineHeight: '1.5'
-                }}>
-                  {toast.message}
-                </span>
-              </div>
-              
-              {toast.requiresConfirmation && (
-                <button
-                  onClick={() => dismissToast(toast.id)}
-                  style={{
-                    padding: '10px 24px',
-                    backgroundColor: '#1555D6',
-                    border: 'none',
-                    borderRadius: '8px',
-                    fontSize: '14px',
-                    fontWeight: '600',
-                    color: 'white',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s',
-                    alignSelf: 'center',
-                    minWidth: '100px'
-                  }}
-                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#1044b5'}
-                  onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#1555D6'}
-                >
-                  OK
-                </button>
-              )}
-            </div>
-          )
-        })}
-      </div>
+              OK
+            </button>
+          )}
+        </div>
+      )
+    })}
+  </div>
 
-      <style>{`
-        @keyframes spin {
-          to { transform: rotate(360deg); }
-        }
-        @keyframes scaleIn {
-          from {
-            transform: scale(0.8);
-            opacity: 0;
-          }
-          to {
-            transform: scale(1);
-            opacity: 1;
-          }
-        }
-      `}</style>
-    </div>
-  )
+  <style>{`
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    @keyframes scaleIn {
+      from {
+        transform: scale(0.8);
+        opacity: 0;
+      }
+      to {
+        transform: scale(1);
+        opacity: 1;
+      }
+    }
+  `}</style>
+</div>
+)
 }
