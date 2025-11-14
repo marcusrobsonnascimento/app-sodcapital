@@ -572,6 +572,20 @@ export default function LancamentosPage() {
         }
       }
 
+      // Se estiver editando um lançamento PAGO_RECEBIDO, busca o status original
+      let statusToUse: 'ABERTO' | 'PAGO_RECEBIDO' | 'CANCELADO' = 'ABERTO'
+      if (editingId && isLancamentoPago) {
+        const { data: lancamentoOriginal } = await supabase
+          .from('lancamentos')
+          .select('status')
+          .eq('id', editingId)
+          .single()
+        
+        if (lancamentoOriginal && lancamentoOriginal.status === 'PAGO_RECEBIDO') {
+          statusToUse = 'PAGO_RECEBIDO'
+        }
+      }
+
       const lancamentoData = {
         tipo: data.tipo,
         empresa_id: data.empresa_id,
@@ -586,7 +600,7 @@ export default function LancamentosPage() {
         data_vencimento: data.data_vencimento,
         data_previsao_pagamento: data.data_previsao_pagamento || null,
         data_liquidacao: null,
-        status: 'ABERTO' as const,
+        status: statusToUse,
         documento_tipo: data.documento_tipo || null,
         documento_numero: data.documento_numero || null,
         observacoes: data.observacoes || null

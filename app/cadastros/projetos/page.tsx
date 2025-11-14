@@ -66,6 +66,11 @@ export default function ProjetosPage() {
   const [empresaSelecionadaModal, setEmpresaSelecionadaModal] = useState<string>('')
   const [checkingDependencies, setCheckingDependencies] = useState(false)
 
+  // Novos estados para os filtros
+  const [filtroEmpresa, setFiltroEmpresa] = useState<string>('')
+  const [filtroProjeto, setFiltroProjeto] = useState<string>('')
+  const [filtroSubprojeto, setFiltroSubprojeto] = useState<string>('')
+
   const { register, handleSubmit, reset, formState: { errors }, setValue, watch } = useForm<ProjetoForm>({
     resolver: zodResolver(projetoSchema),
     defaultValues: {
@@ -227,8 +232,6 @@ export default function ProjetosPage() {
 
   const onSubmit = async (data: ProjetoForm) => {
     try {
-      // ✅ CORREÇÃO: Só valida se estiver EDITANDO (editingId não é null)
-      // Ao criar novo projeto, editingId é null, então essa validação é pulada
       if (editingId && data.projeto_pai_id === editingId) {
         showToast('Projeto não pode ser pai de si mesmo', 'warning')
         return
@@ -255,14 +258,15 @@ export default function ProjetosPage() {
           
           throw new Error(`Erro ao atualizar projeto: ${error.message}`)
         }
-        showToast('Projeto atualizado com sucesso!', 'success')
+
+        showToast('Projeto atualizado com sucesso', 'success')
       } else {
         const { error } = await supabase
           .from('projetos')
           .insert([dataToSave])
 
         if (error) {
-          console.error('Erro detalhado ao criar:', error)
+          console.error('Erro detalhado ao inserir:', error)
           
           if (error.code === '23505' && error.message.includes('projetos_org_id_empresa_id_nome_key')) {
             showToast('Já existe projeto cadastrado para essa empresa', 'warning')
@@ -271,73 +275,56 @@ export default function ProjetosPage() {
           
           throw new Error(`Erro ao criar projeto: ${error.message}`)
         }
-        showToast('Projeto criado com sucesso!', 'success')
+
+        showToast('Projeto criado com sucesso', 'success')
       }
 
-      loadData()
       closeModal()
+      loadData()
     } catch (err: any) {
-      console.error('Erro ao salvar projeto:', err)
-      const errorMessage = err.message || 'Erro desconhecido ao salvar projeto'
-      showToast(errorMessage, 'error')
+      console.error('Erro ao salvar:', err)
+      showToast(err.message || 'Erro ao salvar projeto', 'error')
     }
   }
 
-  const onSubmitError = (errors: any) => {
-    if (errors.nome) {
-      showToast(errors.nome.message, 'warning')
-    } else if (errors.empresa_id) {
-      showToast(errors.empresa_id.message, 'warning')
-    } else if (errors.descricao) {
-      showToast(errors.descricao.message, 'warning')
-    }
-  }
-
-  const handleEdit = (projeto: any) => {
+  const handleEdit = (projeto: ProjetoHierarquico) => {
     setEditingId(projeto.id)
-    const nome = projeto.nome || ''
-    const descricao = projeto.descricao || ''
-    
-    setNomeValue(nome)
-    setDescricaoValue(descricao)
     setEmpresaSelecionadaModal(projeto.empresa_id)
-    
-    reset({
-      nome: nome,
-      empresa_id: projeto.empresa_id,
-      projeto_pai_id: projeto.projeto_pai_id || null,
-      descricao: descricao,
-      ativo: projeto.ativo
-    })
+    setValue('nome', projeto.nome)
+    setValue('empresa_id', projeto.empresa_id)
+    setValue('projeto_pai_id', projeto.projeto_pai_id)
+    setValue('descricao', projeto.descricao || '')
+    setValue('ativo', projeto.ativo)
+    setNomeValue(projeto.nome)
+    setDescricaoValue(projeto.descricao || '')
     setShowModal(true)
   }
 
-  const openDeleteModal = async (projeto: ProjetoHierarquico) => {
+  const handleDelete = async (id: string) => {
+    const projeto = projetos.find(p => p.id === id)
+    setDeletingProjeto(projeto || null)
+    setDeleteId(id)
     setCheckingDependencies(true)
-    
+    setShowDeleteModal(true)
+
     try {
-      const { temVinculo, mensagem } = await verificarVinculos(projeto.id)
+      const { temVinculo, mensagem } = await verificarVinculos(id)
       
       if (temVinculo) {
         showToast(mensagem, 'warning')
-        setCheckingDependencies(false)
-        return
+        setShowDeleteModal(false)
+        setDeleteId(null)
+        setDeletingProjeto(null)
       }
-
-      setDeleteId(projeto.id)
-      setDeletingProjeto(projeto)
-      setShowDeleteModal(true)
     } catch (error) {
-      showToast('Erro ao verificar dependências do projeto', 'error')
+      console.error('Erro ao verificar vínculos:', error)
+      showToast('Erro ao verificar vínculos do projeto', 'error')
+      setShowDeleteModal(false)
+      setDeleteId(null)
+      setDeletingProjeto(null)
     } finally {
       setCheckingDependencies(false)
     }
-  }
-
-  const closeDeleteModal = () => {
-    setShowDeleteModal(false)
-    setDeleteId(null)
-    setDeletingProjeto(null)
   }
 
   const confirmDelete = async () => {
@@ -350,379 +337,538 @@ export default function ProjetosPage() {
         .eq('id', deleteId)
 
       if (error) throw error
-      showToast('Projeto excluído com sucesso!', 'success')
+
+      showToast('Projeto excluído com sucesso', 'success')
       loadData()
-      closeDeleteModal()
     } catch (err) {
-      console.error('Erro ao excluir projeto:', err)
+      console.error('Erro ao excluir:', err)
       showToast('Erro ao excluir projeto', 'error')
-      closeDeleteModal()
+    } finally {
+      setShowDeleteModal(false)
+      setDeleteId(null)
+      setDeletingProjeto(null)
     }
   }
 
   const closeModal = () => {
     setShowModal(false)
     setEditingId(null)
+    setEmpresaSelecionadaModal('')
+    reset()
     setNomeValue('')
     setDescricaoValue('')
+  }
+
+  const closeDeleteModal = () => {
+    setShowDeleteModal(false)
+    setDeleteId(null)
+    setDeletingProjeto(null)
+  }
+
+  const openNewProjetoModal = () => {
+    setEditingId(null)
     setEmpresaSelecionadaModal('')
     reset({
-      nome: '',
-      empresa_id: '',
-      projeto_pai_id: null,
-      descricao: '',
-      ativo: true
+      ativo: true,
+      projeto_pai_id: null
     })
+    setNomeValue('')
+    setDescricaoValue('')
+    setShowModal(true)
   }
 
-  const filteredProjetos = projetos.filter(p =>
-    p.nome.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (p.empresas?.nome && p.empresas.nome.toLowerCase().includes(searchTerm.toLowerCase()))
-  )
+  // Obter projetos pai (nível 0) para o filtro - filtrados por empresa se selecionada
+  const projetosPai = projetos.filter(p => {
+    const isProjetoPai = !p.projeto_pai_id
+    const matchEmpresa = !filtroEmpresa || p.empresa_id === filtroEmpresa
+    return isProjetoPai && matchEmpresa
+  })
 
-  const projetosPai = projetos.filter(p => 
-    p.empresa_id === empresaIdWatch && 
-    p.id !== editingId &&
-    p.nivel === 0
-  )
+  // Obter subprojetos baseados no projeto pai selecionado e empresa
+  const subprojetosDisponiveis = projetos.filter(p => {
+    const isSubprojeto = p.projeto_pai_id !== null
+    const matchEmpresa = !filtroEmpresa || p.empresa_id === filtroEmpresa
+    const matchProjetoPai = !filtroProjeto || p.projeto_pai_id === filtroProjeto
+    return isSubprojeto && matchEmpresa && matchProjetoPai
+  })
 
-  if (loading) {
-    return (
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        height: '100%',
-        minHeight: '400px'
-      }}>
-        <div style={{
-          width: '48px',
-          height: '48px',
-          border: '3px solid #e5e7eb',
-          borderTop: '3px solid #1555D6',
-          borderRadius: '50%',
-          animation: 'spin 1s linear infinite'
-        }}></div>
-      </div>
-    )
-  }
+  // Função de filtro combinada
+  const projetosFiltrados = projetos.filter(projeto => {
+    // Filtro de busca por texto
+    const matchSearch = searchTerm === '' || 
+      projeto.nome.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      projeto.empresas?.nome.toLowerCase().includes(searchTerm.toLowerCase())
+
+    // Filtro por empresa
+    const matchEmpresa = !filtroEmpresa || projeto.empresa_id === filtroEmpresa
+
+    // Filtro por projeto pai
+    const matchProjeto = !filtroProjeto || projeto.id === filtroProjeto || projeto.projeto_pai_id === filtroProjeto
+
+    // Filtro por subprojeto
+    const matchSubprojeto = !filtroSubprojeto || projeto.id === filtroSubprojeto
+
+    return matchSearch && matchEmpresa && matchProjeto && matchSubprojeto
+  })
+
+  const projetosParaMostrar = mostrarHierarquia ? projetosFiltrados : projetosFiltrados
+
+  const projetosPaiParaModal = projetos.filter(p => {
+    if (!empresaSelecionadaModal) return false
+    if (editingId && p.id === editingId) return false
+    return p.empresa_id === empresaSelecionadaModal && !p.projeto_pai_id
+  })
 
   return (
-    <div style={{ padding: '32px', backgroundColor: '#f9fafb', minHeight: '100vh' }}>
+    <div style={{ minHeight: '100vh', backgroundColor: '#f8fafc' }}>
       <div style={{
-        backgroundColor: 'white',
-        borderRadius: '16px',
-        boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
-        overflow: 'hidden'
+        maxWidth: '1400px',
+        margin: '0 auto',
+        padding: '32px 24px'
       }}>
         <div style={{
-          padding: '32px',
-          borderBottom: '1px solid #e5e7eb'
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: '32px'
+        }}>
+          <div>
+            <h1 style={{
+              fontSize: '28px',
+              fontWeight: '700',
+              color: '#111827',
+              marginBottom: '8px'
+            }}>
+              Projetos
+            </h1>
+            <p style={{
+              fontSize: '14px',
+              color: '#6b7280'
+            }}>
+              Gerencie os projetos e subprojetos das empresas
+            </p>
+          </div>
+          <button
+            onClick={openNewProjetoModal}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '12px 24px',
+              backgroundColor: '#1555D6',
+              color: 'white',
+              border: 'none',
+              borderRadius: '10px',
+              fontSize: '14px',
+              fontWeight: '600',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+              boxShadow: '0 4px 6px rgba(21, 85, 214, 0.2)'
+            }}
+            onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#1044b5'}
+            onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#1555D6'}
+          >
+            <Plus style={{ width: '18px', height: '18px' }} />
+            Novo Projeto
+          </button>
+        </div>
+
+        <div style={{
+          backgroundColor: 'white',
+          borderRadius: '12px',
+          boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)',
+          overflow: 'hidden'
         }}>
           <div style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'flex-start',
-            marginBottom: '24px'
+            padding: '24px',
+            borderBottom: '1px solid #e5e7eb'
           }}>
-            <div>
-              <h1 style={{
-                fontSize: '28px',
-                fontWeight: '700',
-                color: '#111827',
-                marginBottom: '4px'
-              }}>
-                Projetos
-              </h1>
-              <p style={{
-                fontSize: '14px',
-                color: '#6b7280'
-              }}>
-                Gerencie os projetos e subprojetos das empresas
-              </p>
-            </div>
-            <button
-              onClick={() => setShowModal(true)}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                padding: '12px 20px',
-                backgroundColor: '#1555D6',
-                color: 'white',
-                border: 'none',
-                borderRadius: '8px',
-                fontSize: '14px',
-                fontWeight: '500',
-                cursor: 'pointer',
-                transition: 'all 0.2s'
-              }}
-              onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#1044b5'}
-              onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#1555D6'}
-            >
-              <Plus style={{ width: '20px', height: '20px' }} />
-              Novo Projeto
-            </button>
-          </div>
+            {/* Linha 1: Busca + Empresa */}
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: '2fr 1fr',
+              gap: '12px',
+              marginBottom: '12px'
+            }}>
+              {/* Campo de Busca */}
+              <div style={{ position: 'relative' }}>
+                <Search style={{
+                  position: 'absolute',
+                  left: '12px',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  width: '18px',
+                  height: '18px',
+                  color: '#9ca3af'
+                }} />
+                <input
+                  type="text"
+                  placeholder="Buscar por nome do projeto ou empresa..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px 10px 40px',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: '8px',
+                    fontSize: '14px',
+                    outline: 'none',
+                    transition: 'all 0.2s'
+                  }}
+                  onFocus={(e) => e.currentTarget.style.borderColor = '#1555D6'}
+                  onBlur={(e) => e.currentTarget.style.borderColor = '#e5e7eb'}
+                />
+              </div>
 
-          <div style={{ 
-            display: 'flex', 
-            gap: '12px',
-            marginBottom: '16px'
-          }}>
-            <div style={{ position: 'relative', flex: 1 }}>
-              <Search style={{
-                position: 'absolute',
-                left: '16px',
-                top: '50%',
-                transform: 'translateY(-50%)',
-                width: '20px',
-                height: '20px',
-                color: '#9ca3af'
-              }} />
-              <input
-                type="text"
-                placeholder="Buscar por nome do projeto ou empresa..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+              {/* Filtro por Empresa */}
+              <select
+                value={filtroEmpresa}
+                onChange={(e) => {
+                  setFiltroEmpresa(e.target.value)
+                  setFiltroProjeto('') // Limpa projeto ao trocar empresa
+                  setFiltroSubprojeto('') // Limpa subprojeto ao trocar empresa
+                }}
                 style={{
-                  width: '100%',
-                  padding: '12px 16px 12px 48px',
+                  padding: '10px 12px',
                   border: '1px solid #e5e7eb',
                   borderRadius: '8px',
                   fontSize: '14px',
                   outline: 'none',
-                  transition: 'all 0.2s'
+                  cursor: 'pointer',
+                  backgroundColor: 'white',
+                  color: filtroEmpresa ? '#111827' : '#9ca3af'
                 }}
-                onFocus={(e) => {
-                  e.currentTarget.style.borderColor = '#1555D6'
-                  e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
-                }}
-                onBlur={(e) => {
-                  e.currentTarget.style.borderColor = '#e5e7eb'
-                  e.currentTarget.style.boxShadow = 'none'
-                }}
-              />
+                onFocus={(e) => e.currentTarget.style.borderColor = '#1555D6'}
+                onBlur={(e) => e.currentTarget.style.borderColor = '#e5e7eb'}
+              >
+                <option value="">Todas Empresas</option>
+                {empresas.map(empresa => (
+                  <option key={empresa.id} value={empresa.id}>
+                    {empresa.nome}
+                  </option>
+                ))}
+              </select>
             </div>
 
-            <button
-              onClick={() => setMostrarHierarquia(!mostrarHierarquia)}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                padding: '12px 20px',
-                backgroundColor: mostrarHierarquia ? '#1555D6' : 'white',
-                color: mostrarHierarquia ? 'white' : '#374151',
-                border: '1px solid #e5e7eb',
-                borderRadius: '8px',
-                fontSize: '14px',
-                fontWeight: '500',
-                cursor: 'pointer',
-                transition: 'all 0.2s',
-                whiteSpace: 'nowrap'
-              }}
-              onMouseOver={(e) => {
-                if (mostrarHierarquia) {
-                  e.currentTarget.style.backgroundColor = '#1044b5'
-                } else {
-                  e.currentTarget.style.backgroundColor = '#f9fafb'
-                }
-              }}
-              onMouseOut={(e) => {
-                if (mostrarHierarquia) {
-                  e.currentTarget.style.backgroundColor = '#1555D6'
-                } else {
-                  e.currentTarget.style.backgroundColor = 'white'
-                }
-              }}
-            >
-              <FolderTree style={{ width: '20px', height: '20px' }} />
-              {mostrarHierarquia ? 'Hierarquia ON' : 'Hierarquia OFF'}
-            </button>
-          </div>
-        </div>
+            {/* Linha 2: Projeto + Subprojeto + Hierarquia */}
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr auto',
+              gap: '12px',
+              alignItems: 'center'
+            }}>
+              {/* Filtro por Projeto (Projeto Pai) */}
+              <select
+                value={filtroProjeto}
+                onChange={(e) => {
+                  setFiltroProjeto(e.target.value)
+                  setFiltroSubprojeto('') // Limpa subprojeto ao trocar projeto
+                }}
+                disabled={projetosPai.length === 0}
+                style={{
+                  padding: '10px 12px',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: '8px',
+                  fontSize: '14px',
+                  outline: 'none',
+                  cursor: projetosPai.length === 0 ? 'not-allowed' : 'pointer',
+                  backgroundColor: projetosPai.length === 0 ? '#f9fafb' : 'white',
+                  color: filtroProjeto ? '#111827' : '#9ca3af',
+                  opacity: projetosPai.length === 0 ? 0.6 : 1
+                }}
+                onFocus={(e) => e.currentTarget.style.borderColor = '#1555D6'}
+                onBlur={(e) => e.currentTarget.style.borderColor = '#e5e7eb'}
+              >
+                <option value="">Todos Projetos</option>
+                {projetosPai.map(projeto => (
+                  <option key={projeto.id} value={projeto.id}>
+                    {projeto.nome}
+                  </option>
+                ))}
+              </select>
 
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ backgroundColor: '#f9fafb', borderBottom: '1px solid #e5e7eb' }}>
-                <th style={{
-                  padding: '12px 24px',
-                  textAlign: 'left',
-                  fontSize: '12px',
-                  fontWeight: '600',
-                  color: '#6b7280',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
-                }}>
-                  Nome
-                </th>
-                <th style={{
-                  padding: '12px 24px',
-                  textAlign: 'left',
-                  fontSize: '12px',
-                  fontWeight: '600',
-                  color: '#6b7280',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
-                }}>
-                  Empresa
-                </th>
-                <th style={{
-                  padding: '12px 24px',
-                  textAlign: 'left',
-                  fontSize: '12px',
-                  fontWeight: '600',
-                  color: '#6b7280',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
-                }}>
-                  Descrição
-                </th>
-                <th style={{
-                  padding: '12px 24px',
-                  textAlign: 'left',
-                  fontSize: '12px',
-                  fontWeight: '600',
-                  color: '#6b7280',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
-                }}>
-                  Status
-                </th>
-                <th style={{
-                  padding: '12px 24px',
-                  textAlign: 'right',
-                  fontSize: '12px',
-                  fontWeight: '600',
-                  color: '#6b7280',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
-                }}>
-                  Ações
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredProjetos.length === 0 ? (
-                <tr>
-                  <td colSpan={5} style={{
-                    padding: '48px 24px',
-                    textAlign: 'center',
-                    color: '#9ca3af',
-                    fontSize: '14px'
-                  }}>
-                    Nenhum projeto encontrado
-                  </td>
-                </tr>
-              ) : (
-                filteredProjetos.map((projeto) => (
-                  <tr
-                    key={projeto.id}
-                    style={{
-                      borderBottom: '1px solid #f3f4f6',
-                      transition: 'background-color 0.2s'
-                    }}
-                    onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#f9fafb'}
-                    onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                  >
-                    <td style={{
+              {/* Filtro por Subprojeto */}
+              <select
+                value={filtroSubprojeto}
+                onChange={(e) => setFiltroSubprojeto(e.target.value)}
+                disabled={subprojetosDisponiveis.length === 0}
+                style={{
+                  padding: '10px 12px',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: '8px',
+                  fontSize: '14px',
+                  outline: 'none',
+                  cursor: subprojetosDisponiveis.length === 0 ? 'not-allowed' : 'pointer',
+                  backgroundColor: subprojetosDisponiveis.length === 0 ? '#f9fafb' : 'white',
+                  color: filtroSubprojeto ? '#111827' : '#9ca3af',
+                  opacity: subprojetosDisponiveis.length === 0 ? 0.6 : 1
+                }}
+                onFocus={(e) => e.currentTarget.style.borderColor = '#1555D6'}
+                onBlur={(e) => e.currentTarget.style.borderColor = '#e5e7eb'}
+              >
+                <option value="">Todos Subprojetos</option>
+                {subprojetosDisponiveis.map(subprojeto => (
+                  <option key={subprojeto.id} value={subprojeto.id}>
+                    {subprojeto.nome}
+                  </option>
+                ))}
+              </select>
+
+              {/* Botão Toggle Hierarquia */}
+              <button
+                onClick={() => setMostrarHierarquia(!mostrarHierarquia)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '10px 16px',
+                  backgroundColor: mostrarHierarquia ? '#1555D6' : 'white',
+                  color: mostrarHierarquia ? 'white' : '#374151',
+                  border: '1px solid',
+                  borderColor: mostrarHierarquia ? '#1555D6' : '#e5e7eb',
+                  borderRadius: '8px',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                  whiteSpace: 'nowrap'
+                }}
+                onMouseOver={(e) => {
+                  if (mostrarHierarquia) {
+                    e.currentTarget.style.backgroundColor = '#1044b5'
+                  } else {
+                    e.currentTarget.style.backgroundColor = '#f9fafb'
+                  }
+                }}
+                onMouseOut={(e) => {
+                  if (mostrarHierarquia) {
+                    e.currentTarget.style.backgroundColor = '#1555D6'
+                  } else {
+                    e.currentTarget.style.backgroundColor = 'white'
+                  }
+                }}
+              >
+                <FolderTree style={{ width: '16px', height: '16px' }} />
+                Hierarquia {mostrarHierarquia ? 'ON' : 'OFF'}
+              </button>
+            </div>
+          </div>
+
+          {loading ? (
+            <div style={{
+              display: 'flex',
+              justifyContent: 'center',
+              alignItems: 'center',
+              padding: '80px 20px'
+            }}>
+              <div style={{
+                width: '40px',
+                height: '40px',
+                border: '4px solid #f3f4f6',
+                borderTop: '4px solid #1555D6',
+                borderRadius: '50%',
+                animation: 'spin 1s linear infinite'
+              }} />
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{
+                width: '100%',
+                borderCollapse: 'collapse'
+              }}>
+                <thead>
+                  <tr style={{ backgroundColor: '#f9fafb' }}>
+                    <th style={{
                       padding: '16px 24px',
-                      fontSize: '14px',
-                      fontWeight: '500',
-                      color: '#111827',
-                      fontFamily: 'monospace'
+                      textAlign: 'left',
+                      fontSize: '12px',
+                      fontWeight: '600',
+                      color: '#6b7280',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.05em'
                     }}>
-                      {mostrarHierarquia ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          {projeto.nivel === 0 ? (
-                            <FolderTree style={{ width: '16px', height: '16px', color: '#1555D6', flexShrink: 0 }} />
-                          ) : null}
-                          <span>{projeto.nome_indentado}</span>
-                        </div>
-                      ) : (
-                        projeto.nome
-                      )}
-                    </td>
-                    <td style={{
+                      NOME
+                    </th>
+                    <th style={{
                       padding: '16px 24px',
-                      fontSize: '14px',
-                      color: '#6b7280'
+                      textAlign: 'left',
+                      fontSize: '12px',
+                      fontWeight: '600',
+                      color: '#6b7280',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.05em'
                     }}>
-                      {projeto.empresas?.nome || '-'}
-                    </td>
-                    <td style={{
+                      EMPRESA
+                    </th>
+                    <th style={{
                       padding: '16px 24px',
-                      fontSize: '14px',
-                      color: '#6b7280'
+                      textAlign: 'left',
+                      fontSize: '12px',
+                      fontWeight: '600',
+                      color: '#6b7280',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.05em'
                     }}>
-                      {projeto.descricao || '-'}
-                    </td>
-                    <td style={{ padding: '16px 24px' }}>
-                      <span style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        padding: '4px 12px',
-                        fontSize: '12px',
-                        fontWeight: '500',
-                        borderRadius: '12px',
-                        backgroundColor: projeto.ativo ? '#dcfce7' : '#f3f4f6',
-                        color: projeto.ativo ? '#16a34a' : '#6b7280'
-                      }}>
-                        {projeto.ativo ? 'Ativo' : 'Inativo'}
-                      </span>
-                    </td>
-                    <td style={{ padding: '16px 24px' }}>
-                      <div style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'flex-end',
-                        gap: '8px'
-                      }}>
-                        <button
-                          onClick={() => handleEdit(projeto)}
-                          style={{
-                            padding: '8px',
-                            backgroundColor: 'transparent',
-                            border: 'none',
-                            borderRadius: '6px',
-                            cursor: 'pointer',
-                            transition: 'background-color 0.2s'
-                          }}
-                          onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#f3f4f6'}
-                          onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                        >
-                          <Pencil style={{ width: '16px', height: '16px', color: '#6b7280' }} />
-                        </button>
-                        <button
-                          onClick={() => openDeleteModal(projeto)}
-                          disabled={checkingDependencies}
-                          style={{
-                            padding: '8px',
-                            backgroundColor: 'transparent',
-                            border: 'none',
-                            borderRadius: '6px',
-                            cursor: checkingDependencies ? 'wait' : 'pointer',
-                            transition: 'background-color 0.2s',
-                            opacity: checkingDependencies ? 0.5 : 1
-                          }}
-                          onMouseOver={(e) => {
-                            if (!checkingDependencies) {
-                              e.currentTarget.style.backgroundColor = '#fee2e2'
-                            }
-                          }}
-                          onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                        >
-                          <Trash2 style={{ width: '16px', height: '16px', color: '#dc2626' }} />
-                        </button>
-                      </div>
-                    </td>
+                      DESCRIÇÃO
+                    </th>
+                    <th style={{
+                      padding: '16px 24px',
+                      textAlign: 'left',
+                      fontSize: '12px',
+                      fontWeight: '600',
+                      color: '#6b7280',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.05em'
+                    }}>
+                      STATUS
+                    </th>
+                    <th style={{
+                      padding: '16px 24px',
+                      textAlign: 'right',
+                      fontSize: '12px',
+                      fontWeight: '600',
+                      color: '#6b7280',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.05em'
+                    }}>
+                      AÇÕES
+                    </th>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                </thead>
+                <tbody>
+                  {projetosParaMostrar.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} style={{
+                        padding: '40px',
+                        textAlign: 'center',
+                        color: '#9ca3af',
+                        fontSize: '14px'
+                      }}>
+                        Nenhum projeto encontrado
+                      </td>
+                    </tr>
+                  ) : (
+                    projetosParaMostrar.map((projeto) => (
+                      <tr
+                        key={projeto.id}
+                        style={{
+                          borderBottom: '1px solid #f3f4f6',
+                          transition: 'background-color 0.15s'
+                        }}
+                        onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#f9fafb'}
+                        onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'white'}
+                      >
+                        <td style={{
+                          padding: '16px 24px',
+                          fontSize: '14px',
+                          color: '#111827',
+                          fontWeight: '500'
+                        }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            {mostrarHierarquia && projeto.nivel > 0 && (
+                              <span style={{ 
+                                color: '#9ca3af',
+                                fontSize: '12px',
+                                fontFamily: 'monospace'
+                              }}>
+                                {'└─ '.repeat(projeto.nivel)}
+                              </span>
+                            )}
+                            <span>{projeto.nome}</span>
+                          </div>
+                        </td>
+                        <td style={{
+                          padding: '16px 24px',
+                          fontSize: '14px',
+                          color: '#6b7280'
+                        }}>
+                          {projeto.empresas?.nome || '-'}
+                        </td>
+                        <td style={{
+                          padding: '16px 24px',
+                          fontSize: '14px',
+                          color: '#6b7280'
+                        }}>
+                          {projeto.descricao || '-'}
+                        </td>
+                        <td style={{
+                          padding: '16px 24px'
+                        }}>
+                          <span style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            padding: '4px 12px',
+                            borderRadius: '6px',
+                            fontSize: '12px',
+                            fontWeight: '600',
+                            backgroundColor: projeto.ativo ? '#dcfce7' : '#fee2e2',
+                            color: projeto.ativo ? '#166534' : '#991b1b'
+                          }}>
+                            {projeto.ativo ? 'Ativo' : 'Inativo'}
+                          </span>
+                        </td>
+                        <td style={{
+                          padding: '16px 24px',
+                          textAlign: 'right'
+                        }}>
+                          <div style={{
+                            display: 'flex',
+                            gap: '8px',
+                            justifyContent: 'flex-end'
+                          }}>
+                            <button
+                              onClick={() => handleEdit(projeto)}
+                              style={{
+                                padding: '8px',
+                                backgroundColor: 'transparent',
+                                border: 'none',
+                                borderRadius: '6px',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center'
+                              }}
+                              onMouseOver={(e) => {
+                                e.currentTarget.style.backgroundColor = '#dbeafe'
+                              }}
+                              onMouseOut={(e) => {
+                                e.currentTarget.style.backgroundColor = 'transparent'
+                              }}
+                            >
+                              <Pencil style={{ width: '16px', height: '16px', color: '#1555D6' }} />
+                            </button>
+                            <button
+                              onClick={() => handleDelete(projeto.id)}
+                              style={{
+                                padding: '8px',
+                                backgroundColor: 'transparent',
+                                border: 'none',
+                                borderRadius: '6px',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center'
+                              }}
+                              onMouseOver={(e) => {
+                                e.currentTarget.style.backgroundColor = '#fee2e2'
+                              }}
+                              onMouseOut={(e) => {
+                                e.currentTarget.style.backgroundColor = 'transparent'
+                              }}
+                            >
+                              <Trash2 style={{ width: '16px', height: '16px', color: '#dc2626' }} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </div>
 
@@ -747,10 +893,11 @@ export default function ProjetosPage() {
               boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
               padding: '32px',
               width: '100%',
-              maxWidth: '500px',
+              maxWidth: '600px',
               margin: '16px',
               maxHeight: '90vh',
-              overflowY: 'auto'
+              overflowY: 'auto',
+              animation: 'scaleIn 0.2s ease-out'
             }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -763,95 +910,14 @@ export default function ProjetosPage() {
               {editingId ? 'Editar Projeto' : 'Novo Projeto'}
             </h2>
 
-            <form onSubmit={handleSubmit(onSubmit, onSubmitError)} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            <form onSubmit={handleSubmit(onSubmit)} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
               <div>
                 <label style={{
                   display: 'block',
                   fontSize: '14px',
                   fontWeight: '500',
                   color: '#374151',
-                  marginBottom: '8px'
-                }}>
-                  Nome *
-                </label>
-                <div style={{ position: 'relative' }}>
-                  <input
-                    {...register('nome')}
-                    value={nomeValue}
-                    style={{
-                      width: '100%',
-                      padding: '12px 40px 12px 16px',
-                      border: '1px solid #e5e7eb',
-                      borderRadius: '8px',
-                      fontSize: '14px',
-                      outline: 'none',
-                      transition: 'all 0.2s',
-                      textTransform: 'uppercase'
-                    }}
-                    placeholder="NOME DO PROJETO"
-                    maxLength={50}
-                    onChange={(e) => {
-                      const upperValue = e.target.value.toUpperCase()
-                      setNomeValue(upperValue)
-                      setValue('nome', upperValue)
-                    }}
-                    onFocus={(e) => {
-                      e.currentTarget.style.borderColor = '#1555D6'
-                      e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
-                    }}
-                    onBlur={(e) => {
-                      e.currentTarget.style.borderColor = '#e5e7eb'
-                      e.currentTarget.style.boxShadow = 'none'
-                    }}
-                  />
-                  {nomeValue && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setNomeValue('')
-                        setValue('nome', '')
-                      }}
-                      style={{
-                        position: 'absolute',
-                        right: '12px',
-                        top: '50%',
-                        transform: 'translateY(-50%)',
-                        background: 'none',
-                        border: 'none',
-                        cursor: 'pointer',
-                        padding: '4px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        color: '#9ca3af',
-                        fontSize: '18px',
-                        lineHeight: 1
-                      }}
-                      onMouseOver={(e) => e.currentTarget.style.color = '#6b7280'}
-                      onMouseOut={(e) => e.currentTarget.style.color = '#9ca3af'}
-                    >
-                      ×
-                    </button>
-                  )}
-                </div>
-                <div style={{
-                  display: 'flex',
-                  justifyContent: 'flex-end',
-                  marginTop: '4px',
-                  fontSize: '12px',
-                  color: nomeValue.length >= 50 ? '#ef4444' : '#9ca3af'
-                }}>
-                  {nomeValue.length}/50
-                </div>
-              </div>
-
-              <div>
-                <label style={{
-                  display: 'block',
-                  fontSize: '14px',
-                  fontWeight: '500',
-                  color: '#374151',
-                  marginBottom: '8px'
+                  marginBottom: '6px'
                 }}>
                   Empresa *
                 </label>
@@ -864,29 +930,28 @@ export default function ProjetosPage() {
                   }}
                   style={{
                     width: '100%',
-                    padding: '12px 16px',
-                    border: '1px solid #e5e7eb',
+                    padding: '10px 12px',
+                    border: errors.empresa_id ? '1px solid #ef4444' : '1px solid #e5e7eb',
                     borderRadius: '8px',
                     fontSize: '14px',
                     outline: 'none',
-                    transition: 'all 0.2s',
-                    backgroundColor: 'white',
-                    cursor: 'pointer'
+                    transition: 'all 0.2s'
                   }}
-                  onFocus={(e) => {
-                    e.currentTarget.style.borderColor = '#1555D6'
-                    e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
-                  }}
-                  onBlur={(e) => {
-                    e.currentTarget.style.borderColor = '#e5e7eb'
-                    e.currentTarget.style.boxShadow = 'none'
-                  }}
+                  onFocus={(e) => e.currentTarget.style.borderColor = '#1555D6'}
+                  onBlur={(e) => e.currentTarget.style.borderColor = errors.empresa_id ? '#ef4444' : '#e5e7eb'}
                 >
                   <option value="">Selecione uma empresa</option>
-                  {empresas.map(e => (
-                    <option key={e.id} value={e.id}>{e.nome}</option>
+                  {empresas.map(empresa => (
+                    <option key={empresa.id} value={empresa.id}>
+                      {empresa.nome}
+                    </option>
                   ))}
                 </select>
+                {errors.empresa_id && (
+                  <p style={{ color: '#ef4444', fontSize: '12px', marginTop: '4px' }}>
+                    {errors.empresa_id.message}
+                  </p>
+                )}
               </div>
 
               <div>
@@ -895,52 +960,78 @@ export default function ProjetosPage() {
                   fontSize: '14px',
                   fontWeight: '500',
                   color: '#374151',
-                  marginBottom: '8px'
+                  marginBottom: '6px'
                 }}>
-                  Subprojeto de... (opcional)
+                  Nome do Projeto *
+                </label>
+                <input
+                  {...register('nome')}
+                  value={nomeValue}
+                  onChange={(e) => {
+                    const upper = e.target.value.toUpperCase()
+                    setNomeValue(upper)
+                    setValue('nome', upper)
+                  }}
+                  type="text"
+                  placeholder="Digite o nome do projeto"
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    border: errors.nome ? '1px solid #ef4444' : '1px solid #e5e7eb',
+                    borderRadius: '8px',
+                    fontSize: '14px',
+                    outline: 'none',
+                    transition: 'all 0.2s'
+                  }}
+                  onFocus={(e) => e.currentTarget.style.borderColor = '#1555D6'}
+                  onBlur={(e) => e.currentTarget.style.borderColor = errors.nome ? '#ef4444' : '#e5e7eb'}
+                />
+                {errors.nome && (
+                  <p style={{ color: '#ef4444', fontSize: '12px', marginTop: '4px' }}>
+                    {errors.nome.message}
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label style={{
+                  display: 'block',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  color: '#374151',
+                  marginBottom: '6px'
+                }}>
+                  Projeto Pai (opcional)
                 </label>
                 <select
                   {...register('projeto_pai_id')}
-                  disabled={!empresaIdWatch}
+                  disabled={!empresaSelecionadaModal}
                   style={{
                     width: '100%',
-                    padding: '12px 16px',
+                    padding: '10px 12px',
                     border: '1px solid #e5e7eb',
                     borderRadius: '8px',
                     fontSize: '14px',
                     outline: 'none',
                     transition: 'all 0.2s',
-                    backgroundColor: empresaIdWatch ? 'white' : '#f9fafb',
-                    cursor: empresaIdWatch ? 'pointer' : 'not-allowed',
-                    opacity: empresaIdWatch ? 1 : 0.6
+                    backgroundColor: !empresaSelecionadaModal ? '#f9fafb' : 'white',
+                    cursor: !empresaSelecionadaModal ? 'not-allowed' : 'pointer'
                   }}
-                  onFocus={(e) => {
-                    if (empresaIdWatch) {
-                      e.currentTarget.style.borderColor = '#1555D6'
-                      e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
-                    }
-                  }}
-                  onBlur={(e) => {
-                    e.currentTarget.style.borderColor = '#e5e7eb'
-                    e.currentTarget.style.boxShadow = 'none'
-                  }}
+                  onFocus={(e) => e.currentTarget.style.borderColor = '#1555D6'}
+                  onBlur={(e) => e.currentTarget.style.borderColor = '#e5e7eb'}
                 >
-                  <option value="">Nenhum (projeto raiz)</option>
-                  {projetosPai.map(p => (
-                    <option key={p.id} value={p.id}>{p.nome}</option>
+                  <option value="">Nenhum (Projeto principal)</option>
+                  {projetosPaiParaModal.map(projeto => (
+                    <option key={projeto.id} value={projeto.id}>
+                      {projeto.nome}
+                    </option>
                   ))}
                 </select>
-                <p style={{
-                  marginTop: '4px',
-                  fontSize: '12px',
-                  color: '#6b7280'
-                }}>
-                  {!empresaIdWatch 
-                    ? 'Selecione uma empresa primeiro'
-                    : projetosPai.length === 0
-                    ? 'Nenhum projeto disponível para ser pai'
-                    : 'Deixe vazio para criar um projeto raiz'}
-                </p>
+                {!empresaSelecionadaModal && (
+                  <p style={{ color: '#6b7280', fontSize: '12px', marginTop: '4px' }}>
+                    Selecione uma empresa primeiro
+                  </p>
+                )}
               </div>
 
               <div>
@@ -949,74 +1040,64 @@ export default function ProjetosPage() {
                   fontSize: '14px',
                   fontWeight: '500',
                   color: '#374151',
-                  marginBottom: '8px'
+                  marginBottom: '6px'
                 }}>
                   Descrição
                 </label>
-                <div style={{ position: 'relative' }}>
-                  <textarea
-                    {...register('descricao')}
-                    value={descricaoValue}
-                    style={{
-                      width: '100%',
-                      padding: '12px 16px',
-                      border: '1px solid #e5e7eb',
-                      borderRadius: '8px',
-                      fontSize: '14px',
-                      outline: 'none',
-                      transition: 'all 0.2s',
-                      resize: 'vertical',
-                      minHeight: '80px'
-                    }}
-                    placeholder="Descrição do projeto"
-                    maxLength={200}
-                    onChange={(e) => {
-                      setDescricaoValue(e.target.value)
-                      setValue('descricao', e.target.value)
-                    }}
-                    onFocus={(e) => {
-                      e.currentTarget.style.borderColor = '#1555D6'
-                      e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
-                    }}
-                    onBlur={(e) => {
-                      e.currentTarget.style.borderColor = '#e5e7eb'
-                      e.currentTarget.style.boxShadow = 'none'
-                    }}
-                  />
-                </div>
-                <div style={{
-                  display: 'flex',
-                  justifyContent: 'flex-end',
-                  marginTop: '4px',
-                  fontSize: '12px',
-                  color: descricaoValue.length >= 200 ? '#ef4444' : '#9ca3af'
-                }}>
-                  {descricaoValue.length}/200
-                </div>
+                <textarea
+                  {...register('descricao')}
+                  value={descricaoValue}
+                  onChange={(e) => {
+                    setDescricaoValue(e.target.value)
+                    setValue('descricao', e.target.value)
+                  }}
+                  placeholder="Descrição do projeto (opcional)"
+                  rows={3}
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    border: errors.descricao ? '1px solid #ef4444' : '1px solid #e5e7eb',
+                    borderRadius: '8px',
+                    fontSize: '14px',
+                    outline: 'none',
+                    transition: 'all 0.2s',
+                    resize: 'vertical',
+                    fontFamily: 'inherit'
+                  }}
+                  onFocus={(e) => e.currentTarget.style.borderColor = '#1555D6'}
+                  onBlur={(e) => e.currentTarget.style.borderColor = errors.descricao ? '#ef4444' : '#e5e7eb'}
+                />
+                {errors.descricao && (
+                  <p style={{ color: '#ef4444', fontSize: '12px', marginTop: '4px' }}>
+                    {errors.descricao.message}
+                  </p>
+                )}
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <input
-                  type="checkbox"
-                  {...register('ativo')}
-                  id="ativo"
-                  style={{
-                    width: '18px',
-                    height: '18px',
-                    cursor: 'pointer',
-                    accentColor: '#1555D6'
-                  }}
-                />
-                <label
-                  htmlFor="ativo"
-                  style={{
+              <div>
+                <label style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  cursor: 'pointer',
+                  userSelect: 'none'
+                }}>
+                  <input
+                    type="checkbox"
+                    {...register('ativo')}
+                    style={{
+                      width: '16px',
+                      height: '16px',
+                      cursor: 'pointer'
+                    }}
+                  />
+                  <span style={{
                     fontSize: '14px',
                     fontWeight: '500',
-                    color: '#374151',
-                    cursor: 'pointer'
-                  }}
-                >
-                  Projeto ativo
+                    color: '#374151'
+                  }}>
+                    Projeto ativo
+                  </span>
                 </label>
               </div>
 
