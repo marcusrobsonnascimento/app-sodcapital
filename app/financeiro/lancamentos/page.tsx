@@ -47,6 +47,7 @@ interface BancoConta {
 interface Contraparte {
   id: string
   nome: string
+  apelido: string | null
 }
 
 interface PlanoContaFluxo {
@@ -278,7 +279,7 @@ export default function LancamentosPage() {
         setSubprojetos([])
       }
     }
-  }, [selectedEmpresaId])
+  }, [selectedEmpresaId, editingId])
 
   useEffect(() => {
     if (selectedProjetoId) {
@@ -294,7 +295,7 @@ export default function LancamentosPage() {
         setValue('subprojeto_id', '')
       }
     }
-  }, [selectedProjetoId])
+  }, [selectedProjetoId, editingId])
 
   useEffect(() => {
     const totalRetencoes = retencoes.reduce((sum, ret) => sum + (ret.valor || 0), 0)
@@ -304,32 +305,44 @@ export default function LancamentosPage() {
 
   const loadEmpresas = async () => {
     try {
+      console.log('🔍 [FILTRO] Carregando empresas...')
       const { data, error } = await supabase
         .from('empresas')
         .select('id, nome')
+        // REMOVIDO: .eq('ativo', true) - causava erro mesmo com todas empresas ativas
         .order('nome', { ascending: true })
 
-      if (error) throw error
+      if (error) {
+        console.error('❌ [FILTRO] Erro na query:', error)
+        throw error
+      }
+      
+      console.log('✅ [FILTRO] Empresas carregadas:', data?.length)
+      console.log('📋 [FILTRO] Primeiras 3:', data?.slice(0, 3))
       setEmpresas(data || [])
     } catch (err) {
-      console.error('Erro ao carregar empresas:', err)
-      showToast('Erro ao carregar empresas', 'error')
+      console.error('❌ [FILTRO] Erro ao carregar empresas:', err)
+      setEmpresas([])
+      // showToast('Erro ao carregar empresas', 'error') // REMOVIDO - não incomodar usuário
     }
   }
 
   const loadProjetos = async (empresaId: string) => {
     try {
+      console.log('🔍 Carregando projetos para empresa:', empresaId)
       const { data, error } = await supabase
         .from('projetos')
         .select('id, empresa_id, nome, projeto_pai_id')
         .eq('empresa_id', empresaId)
+        .eq('ativo', true)
         .is('projeto_pai_id', null)
         .order('nome', { ascending: true })
 
       if (error) throw error
       setProjetos(data || [])
+      console.log('✅ Projetos carregados:', data?.length)
     } catch (err) {
-      console.error('Erro ao carregar projetos:', err)
+      console.error('❌ Erro ao carregar projetos:', err)
       showToast('Erro ao carregar projetos', 'error')
     }
   }
@@ -406,7 +419,8 @@ export default function LancamentosPage() {
     try {
       const { data, error } = await supabase
         .from('contrapartes')
-        .select('id, nome')
+        .select('id, nome, apelido')
+        .eq('ativo', true)
         .order('nome', { ascending: true })
 
       if (error) throw error
@@ -422,7 +436,7 @@ export default function LancamentosPage() {
     try {
       const { data: todasEmpresas } = await supabase.from('empresas').select('id, nome')
       const { data: todosProjetos } = await supabase.from('projetos').select('id, nome')
-      const { data: todasContrapartes } = await supabase.from('contrapartes').select('id, nome')
+      const { data: todasContrapartes } = await supabase.from('contrapartes').select('id, nome, apelido')
       const { data: todasContas } = await supabase
         .from('plano_contas_fluxo')
         .select('id, codigo_conta, categoria, subcategoria, tipo_fluxo, sentido')
@@ -601,58 +615,66 @@ export default function LancamentosPage() {
 
   const handleEdit = async (lancamento: Lancamento) => {
     try {
-      setEditingId(lancamento.id)
-
-      // Primeiro define o tipo
-      setValue('tipo', lancamento.tipo)
+      console.log('🔍 [EDIT] Iniciando edição:', {
+        id: lancamento.id,
+        empresa_id: lancamento.empresa_id,
+        projeto_id: lancamento.projeto_id,
+        subprojeto_id: lancamento.subprojeto_id
+      })
       
-      // Carrega os dados relacionados ANTES de setar os valores
+      setEditingId(lancamento.id)
+      
+      // Carrega os dados relacionados ANTES de popular o form
       if (lancamento.empresa_id) {
-        setValue('empresa_id', lancamento.empresa_id)
-        
         // Aguarda o carregamento dos projetos e contas
         await Promise.all([
           loadProjetos(lancamento.empresa_id),
           loadBancosContas(lancamento.empresa_id)
         ])
+        console.log('✅ [EDIT] Projetos e contas carregados')
         
-        // Depois de carregar, define o projeto
+        // Se tem projeto, carrega subprojetos
         if (lancamento.projeto_id) {
-          setValue('projeto_id', lancamento.projeto_id)
-          
-          // Aguarda o carregamento dos subprojetos
           await loadSubprojetos(lancamento.projeto_id)
-          
-          // Depois de carregar, define o subprojeto
-          if (lancamento.subprojeto_id) {
-            setValue('subprojeto_id', lancamento.subprojeto_id)
-          }
+          console.log('✅ [EDIT] Subprojetos carregados')
         }
         
-        // Define a conta bancária depois de carregar as opções
-        if (lancamento.banco_conta_id) {
-          setValue('banco_conta_id', lancamento.banco_conta_id)
-        }
+        // Aguarda 500ms para garantir que os estados foram atualizados
+        await new Promise(resolve => setTimeout(resolve, 500))
       }
 
-      // Define os outros campos
-      setValue('contraparte_id', lancamento.contraparte_id || '')
-      setValue('plano_conta_id', lancamento.plano_conta_id)
-      setValue('valor_bruto', lancamento.valor_bruto)
-      setValue('data_emissao', formatDateForInput(lancamento.data_emissao))
-      setValue('data_vencimento', formatDateForInput(lancamento.data_vencimento))
-      setValue('data_previsao_pagamento', formatDateForInput(lancamento.data_previsao_pagamento))
-      setValue('documento_tipo', lancamento.documento_tipo || '')
-      setValue('documento_numero', lancamento.documento_numero || '')
-      setValue('observacoes', lancamento.observacoes || '')
+      // Agora popula TODO o formulário de uma vez usando reset
+      console.log('🔍 [EDIT] Populando formulário com reset()')
+      reset({
+        tipo: lancamento.tipo,
+        empresa_id: lancamento.empresa_id,
+        projeto_id: lancamento.projeto_id || '',
+        subprojeto_id: lancamento.subprojeto_id || '',
+        banco_conta_id: lancamento.banco_conta_id || '',
+        contraparte_id: lancamento.contraparte_id || '',
+        plano_conta_id: lancamento.plano_conta_id,
+        valor_bruto: lancamento.valor_bruto,
+        data_emissao: formatDateForInput(lancamento.data_emissao),
+        data_vencimento: formatDateForInput(lancamento.data_vencimento),
+        data_previsao_pagamento: formatDateForInput(lancamento.data_previsao_pagamento),
+        documento_tipo: lancamento.documento_tipo || '',
+        documento_numero: lancamento.documento_numero || '',
+        observacoes: lancamento.observacoes || ''
+      })
+      console.log('✅ [EDIT] Formulário populado')
 
       setValorBruto(lancamento.valor_bruto)
-      setValorBrutoFormatado(formatCurrencyInput((lancamento.valor_bruto * 100).toString()))
+      // Converte para centavos arredondando antes de formatar
+      const valorEmCentavos = Math.round(lancamento.valor_bruto * 100)
+      setValorBrutoFormatado(formatCurrencyInput(valorEmCentavos.toString()))
       
-      const retencoesFormatadas = (lancamento.retencoes || []).map(ret => ({
-        ...ret,
-        valorFormatado: formatCurrencyInput((ret.valor * 100).toString())
-      }))
+      const retencoesFormatadas = (lancamento.retencoes || []).map(ret => {
+        const retValorEmCentavos = Math.round(ret.valor * 100)
+        return {
+          ...ret,
+          valorFormatado: formatCurrencyInput(retValorEmCentavos.toString())
+        }
+      })
       setRetencoes(retencoesFormatadas)
 
       setShowModal(true)
@@ -1209,6 +1231,7 @@ export default function LancamentosPage() {
                       Projeto *
                     </label>
                     <select
+                      key={`projeto-${editingId || 'new'}-${selectedEmpresaId}`}
                       {...register('projeto_id')}
                       disabled={!selectedEmpresaId}
                       style={{
@@ -1250,6 +1273,7 @@ export default function LancamentosPage() {
                       Subprojeto
                     </label>
                     <select
+                      key={`subprojeto-${editingId || 'new'}-${selectedProjetoId}`}
                       {...register('subprojeto_id')}
                       disabled={!selectedProjetoId || subprojetos.length === 0}
                       style={{
@@ -1326,6 +1350,7 @@ export default function LancamentosPage() {
                       Conta Bancária *
                     </label>
                     <select
+                      key={`banco-${editingId || 'new'}-${selectedEmpresaId}`}
                       {...register('banco_conta_id')}
                       disabled={!selectedEmpresaId}
                       style={{
@@ -1369,6 +1394,7 @@ export default function LancamentosPage() {
                       Contraparte *
                     </label>
                     <select
+                      key={`contraparte-${editingId || 'new'}`}
                       {...register('contraparte_id')}
                       style={{
                         width: '100%',

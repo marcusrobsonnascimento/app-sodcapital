@@ -214,15 +214,31 @@ export default function ContrapartesPage() {
 
   const loadContrapartes = async () => {
     try {
+      console.log('🔍 [CONTRAPARTES] Carregando contrapartes...')
       const { data, error } = await supabase
         .from('contrapartes')
         .select('*')
         .order('nome', { ascending: true })
 
-      if (error) throw error
+      if (error) {
+        console.error('❌ [CONTRAPARTES] Erro na query:', error)
+        throw error
+      }
+      
+      console.log('✅ [CONTRAPARTES] Total carregado:', data?.length)
+      console.log('📋 [CONTRAPARTES] IDs:', data?.map(c => ({ id: c.id.substring(0,8), nome: c.nome.substring(0,30) })))
+      
+      // Verificar especificamente a contraparte problemática
+      const problematica = data?.find(c => c.id === '75610ea3-dd0d-476a-bd66-0a233f69d053')
+      if (problematica) {
+        console.log('✅ [CONTRAPARTES] SECRETARIA DA FAZENDA encontrada:', problematica.nome, problematica.org_id)
+      } else {
+        console.log('❌ [CONTRAPARTES] SECRETARIA DA FAZENDA NÃO encontrada no array')
+      }
+      
       setContrapartes(data || [])
     } catch (err) {
-      console.error('Erro ao carregar contrapartes:', err)
+      console.error('❌ [CONTRAPARTES] Erro ao carregar contrapartes:', err)
       showToast('Erro ao carregar contrapartes', 'error')
     } finally {
       setLoading(false)
