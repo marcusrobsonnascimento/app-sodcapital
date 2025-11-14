@@ -151,6 +151,9 @@ const capitalizarTexto = (texto: string): string => {
 export default function ContrapartesPage() {
   const [contrapartes, setContrapartes] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+    const [hasMore, setHasMore] = useState(true)
+  const [totalCount, setTotalCount] = useState(0)
+  const PAGE_SIZE = 50
   const [showModal, setShowModal] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
@@ -209,36 +212,50 @@ export default function ContrapartesPage() {
   }
 
   useEffect(() => {
-    loadContrapartes()
+    loadContrapartes(true)
   }, [])
 
-  const loadContrapartes = async () => {
-    try {
-      console.log('🔍 [CONTRAPARTES] Carregando contrapartes...')
-      const { data, error } = await supabase
-        .from('contrapartes')
-        .select('*')
-        .order('nome', { ascending: true })
+  // Busca com debounce
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      loadContrapartes(true)
+    }, 500)
+    
+    return () => clearTimeout(timer)
+  }, [searchTerm])
 
-      if (error) {
-        console.error('❌ [CONTRAPARTES] Erro na query:', error)
-        throw error
+  const loadContrapartes = async (reset = false) => {
+    try {
+      if (reset) setLoading(true)
+      
+      let query = supabase
+        .from('contrapartes')
+        .select('*', { count: 'exact' })
+        .order('nome', { ascending: true })
+      
+      // Busca server-side se tiver termo
+      if (searchTerm.trim()) {
+        const search = searchTerm.trim()
+        query = query.or(`nome.ilike.%${search}%,documento.ilike.%${search}%,email.ilike.%${search}%`)
       }
       
-      console.log('✅ [CONTRAPARTES] Total carregado:', data?.length)
-      console.log('📋 [CONTRAPARTES] IDs:', data?.map(c => ({ id: c.id.substring(0,8), nome: c.nome.substring(0,30) })))
+      // Paginação
+      const from = reset ? 0 : contrapartes.length
+      query = query.range(from, from + PAGE_SIZE - 1)
+
+      const { data, error, count } = await query
+
+      if (error) throw error
       
-      // Verificar especificamente a contraparte problemática
-      const problematica = data?.find(c => c.id === '75610ea3-dd0d-476a-bd66-0a233f69d053')
-      if (problematica) {
-        console.log('✅ [CONTRAPARTES] SECRETARIA DA FAZENDA encontrada:', problematica.nome, problematica.org_id)
+      if (reset) {
+        setContrapartes(data || [])
       } else {
-        console.log('❌ [CONTRAPARTES] SECRETARIA DA FAZENDA NÃO encontrada no array')
+        setContrapartes(prev => [...prev, ...(data || [])])
       }
       
-      setContrapartes(data || [])
+      setTotalCount(count || 0)
+      setHasMore((data?.length || 0) === PAGE_SIZE)
     } catch (err) {
-      console.error('❌ [CONTRAPARTES] Erro ao carregar contrapartes:', err)
       showToast('Erro ao carregar contrapartes', 'error')
     } finally {
       setLoading(false)
@@ -474,11 +491,8 @@ export default function ContrapartesPage() {
     }
   }
 
-  const filteredContrapartes = contrapartes.filter(cp =>
-    cp.nome.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    cp.documento?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    cp.email?.toLowerCase().includes(searchTerm.toLowerCase())
-  )
+  // Busca feita server-side, não precisa filtrar aqui
+  const filteredContrapartes = contrapartes
 
   const getRelacaoBadgeColor = (relacao: string) => {
     switch (relacao) {
@@ -820,6 +834,50 @@ export default function ContrapartesPage() {
                 })}
               </tbody>
             </table>
+            
+            {/* Contador e botão carregar mais */}
+            <div style={{
+              padding: '16px',
+              borderTop: '1px solid #e5e7eb',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              backgroundColor: '#f9fafb'
+            }}>
+              <div style={{ fontSize: '14px', color: '#6b7280' }}>
+                Mostrando {filteredContrapartes.length} de {totalCount} contrapartes
+              </div>
+              
+              {hasMore && (
+                <button
+                  onClick={() => loadContrapartes(false)}
+                  disabled={loading}
+                  style={{
+                    padding: '8px 16px',
+                    backgroundColor: loading ? '#e5e7eb' : '#1555D6',
+                    color: loading ? '#9ca3af' : '#ffffff',
+                    border: 'none',
+                    borderRadius: '6px',
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    cursor: loading ? 'not-allowed' : 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!loading) {
+                      e.currentTarget.style.backgroundColor = '#1348B8'
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!loading) {
+                      e.currentTarget.style.backgroundColor = '#1555D6'
+                    }
+                  }}
+                >
+                  {loading ? 'Carregando...' : 'Carregar mais'}
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>
