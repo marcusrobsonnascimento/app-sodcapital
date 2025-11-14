@@ -164,6 +164,7 @@ export default function LancamentosPage() {
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [isLancamentoPago, setIsLancamentoPago] = useState(false)
 
   // Filtros
   const [searchTerm, setSearchTerm] = useState('')
@@ -417,16 +418,49 @@ export default function LancamentosPage() {
 
   const loadContrapartes = async () => {
     try {
-      const { data, error } = await supabase
-        .from('contrapartes')
-        .select('id, nome, apelido')
-        .eq('ativo', true)
-        .order('nome', { ascending: true })
+      let allData: Contraparte[] = []
+      let from = 0
+      const pageSize = 1000
+      let hasMore = true
+      let totalCount = 0
+      
+      console.log('📦 Iniciando carregamento de contrapartes em lotes...')
+      
+      while (hasMore) {
+        const { data, error, count } = await supabase
+          .from('contrapartes')
+          .select('id, nome, apelido', { count: 'exact' })
+          .eq('ativo', true)
+          .range(from, from + pageSize - 1)
+          .order('nome', { ascending: true })
 
-      if (error) throw error
-      setContrapartes(data || [])
+        if (error) throw error
+        
+        if (count !== null && totalCount === 0) {
+          totalCount = count
+          console.log(`📊 Total de contrapartes disponíveis: ${totalCount}`)
+        }
+        
+        if (data && data.length > 0) {
+          allData = [...allData, ...data]
+          from += pageSize
+          hasMore = data.length === pageSize
+          console.log(`📦 Lote carregado: ${data.length} registros (total acumulado: ${allData.length}/${totalCount})`)
+        } else {
+          hasMore = false
+        }
+        
+        // Proteção contra loop infinito
+        if (from >= 20000) {
+          console.warn('⚠️ Limite de segurança atingido (20.000 registros)')
+          break
+        }
+      }
+      
+      console.log(`✅ Total de contrapartes carregadas: ${allData.length} de ${totalCount}`)
+      setContrapartes(allData)
     } catch (err) {
-      console.error('Erro ao carregar contrapartes:', err)
+      console.error('❌ Erro ao carregar contrapartes:', err)
       showToast('Erro ao carregar contrapartes', 'error')
     }
   }
@@ -436,7 +470,32 @@ export default function LancamentosPage() {
     try {
       const { data: todasEmpresas } = await supabase.from('empresas').select('id, nome')
       const { data: todosProjetos } = await supabase.from('projetos').select('id, nome')
-      const { data: todasContrapartes } = await supabase.from('contrapartes').select('id, nome, apelido')
+      
+      // Carregar TODAS as contrapartes em lotes
+      let todasContrapartes: any[] = []
+      let from = 0
+      const pageSize = 1000
+      let hasMore = true
+      
+      console.log('📦 [LANCAMENTOS] Carregando todas contrapartes em lotes...')
+      while (hasMore) {
+        const { data } = await supabase
+          .from('contrapartes')
+          .select('id, nome, apelido')
+          .range(from, from + pageSize - 1)
+        
+        if (data && data.length > 0) {
+          todasContrapartes = [...todasContrapartes, ...data]
+          from += pageSize
+          hasMore = data.length === pageSize
+          console.log(`📦 [LANCAMENTOS] Lote: ${data.length} (total: ${todasContrapartes.length})`)
+        } else {
+          hasMore = false
+        }
+        
+        if (from >= 20000) break // Proteção
+      }
+      
       const { data: todasContas } = await supabase
         .from('plano_contas_fluxo')
         .select('id, codigo_conta, categoria, subcategoria, tipo_fluxo, sentido')
@@ -455,11 +514,18 @@ export default function LancamentosPage() {
         .select('*')
         .in('lancamento_id', lancamentosIds)
 
+      console.log(`✅ Total de contrapartes carregadas para mapeamento: ${todasContrapartes.length}`)
+      
       const lancamentosCompletos = (lancamentosData || []).map((lanc: any) => {
         const empresa = todasEmpresas?.find(e => e.id === lanc.empresa_id)
         const projeto = todosProjetos?.find(p => p.id === lanc.projeto_id)
         const subprojeto = todosProjetos?.find(p => p.id === lanc.subprojeto_id)
         const contraparte = todasContrapartes?.find(c => c.id === lanc.contraparte_id)
+        
+        // Log se não encontrar contraparte
+        if (lanc.contraparte_id && !contraparte) {
+          console.warn(`⚠️ Contraparte não encontrada: ${lanc.contraparte_id}`)
+        }
         const planoConta = todasContas?.find(pc => pc.id === lanc.plano_conta_id)
         const retencoesDoLancamento = todasRetencoes?.filter(r => r.lancamento_id === lanc.id) || []
 
@@ -623,6 +689,7 @@ export default function LancamentosPage() {
       })
       
       setEditingId(lancamento.id)
+      setIsLancamentoPago(lancamento.status === 'PAGO_RECEBIDO')
       
       // Carrega os dados relacionados ANTES de popular o form
       if (lancamento.empresa_id) {
@@ -780,6 +847,7 @@ export default function LancamentosPage() {
   const closeModal = () => {
     setShowModal(false)
     setEditingId(null)
+    setIsLancamentoPago(false)
     setRetencoes([])
     setValorBruto(0)
     setValorBrutoFormatado('')
@@ -1113,7 +1181,7 @@ export default function LancamentosPage() {
               backgroundColor: 'white',
               borderRadius: '12px',
               width: '100%',
-              maxWidth: '900px',
+              maxWidth: '1200px',
               maxHeight: '90vh',
               overflow: 'auto',
               boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
@@ -1394,7 +1462,6 @@ export default function LancamentosPage() {
                       Contraparte *
                     </label>
                     <select
-                      key={`contraparte-${editingId || 'new'}`}
                       {...register('contraparte_id')}
                       style={{
                         width: '100%',
@@ -1483,16 +1550,20 @@ export default function LancamentosPage() {
                     <input
                       {...register('data_emissao')}
                       type="date"
+                      disabled={isLancamentoPago}
                       style={{
                         width: '100%',
                         padding: '9px 10px',
                         border: '1px solid #e5e7eb',
                         borderRadius: '8px',
                         fontSize: '13px',
-                        outline: 'none'
+                        outline: 'none',
+                        backgroundColor: isLancamentoPago ? '#f9fafb' : 'white',
+                        cursor: isLancamentoPago ? 'not-allowed' : 'text',
+                        color: isLancamentoPago ? '#9ca3af' : '#1f2937'
                       }}
                       onFocus={(e) => {
-                        e.currentTarget.style.borderColor = '#1555D6'
+                        if (!isLancamentoPago) e.currentTarget.style.borderColor = '#1555D6'
                         e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
                       }}
                       onBlur={(e) => {
@@ -1515,16 +1586,20 @@ export default function LancamentosPage() {
                     <input
                       {...register('data_vencimento')}
                       type="date"
+                      disabled={isLancamentoPago}
                       style={{
                         width: '100%',
                         padding: '9px 10px',
                         border: '1px solid #e5e7eb',
                         borderRadius: '8px',
                         fontSize: '13px',
-                        outline: 'none'
+                        outline: 'none',
+                        backgroundColor: isLancamentoPago ? '#f9fafb' : 'white',
+                        cursor: isLancamentoPago ? 'not-allowed' : 'text',
+                        color: isLancamentoPago ? '#9ca3af' : '#1f2937'
                       }}
                       onFocus={(e) => {
-                        e.currentTarget.style.borderColor = '#1555D6'
+                        if (!isLancamentoPago) e.currentTarget.style.borderColor = '#1555D6'
                         e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
                       }}
                       onBlur={(e) => {
@@ -1547,16 +1622,20 @@ export default function LancamentosPage() {
                     <input
                       {...register('data_previsao_pagamento')}
                       type="date"
+                      disabled={isLancamentoPago}
                       style={{
                         width: '100%',
                         padding: '9px 10px',
                         border: '1px solid #e5e7eb',
                         borderRadius: '8px',
                         fontSize: '13px',
-                        outline: 'none'
+                        outline: 'none',
+                        backgroundColor: isLancamentoPago ? '#f9fafb' : 'white',
+                        cursor: isLancamentoPago ? 'not-allowed' : 'text',
+                        color: isLancamentoPago ? '#9ca3af' : '#1f2937'
                       }}
                       onFocus={(e) => {
-                        e.currentTarget.style.borderColor = '#1555D6'
+                        if (!isLancamentoPago) e.currentTarget.style.borderColor = '#1555D6'
                         e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
                       }}
                       onBlur={(e) => {
@@ -1591,6 +1670,7 @@ export default function LancamentosPage() {
                       <input
                         type="text"
                         value={valorBrutoFormatado}
+                        disabled={isLancamentoPago}
                         onChange={(e) => {
                           const formatted = formatCurrencyInput(e.target.value)
                           setValorBrutoFormatado(formatted)
@@ -1605,12 +1685,17 @@ export default function LancamentosPage() {
                           borderRadius: '8px',
                           fontSize: '13px',
                           outline: 'none',
-                          textAlign: 'right'
+                          textAlign: 'right',
+                          backgroundColor: isLancamentoPago ? '#f9fafb' : 'white',
+                          cursor: isLancamentoPago ? 'not-allowed' : 'text',
+                          color: isLancamentoPago ? '#9ca3af' : '#1f2937'
                         }}
                         placeholder="0,00"
                         onFocus={(e) => {
-                          e.currentTarget.style.borderColor = '#1555D6'
-                          e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                          if (!isLancamentoPago) {
+                            e.currentTarget.style.borderColor = '#1555D6'
+                            e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                          }
                         }}
                         onBlur={(e) => {
                           e.currentTarget.style.borderColor = '#e5e7eb'
