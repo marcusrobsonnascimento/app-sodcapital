@@ -758,7 +758,7 @@ export default function LancamentosPage() {
         showToast('Lançamento criado com sucesso!', 'success')
       }
 
-      loadLancamentos()
+      loadLancamentos(true)
       closeModal()
     } catch (err: any) {
       console.error('Erro ao salvar lançamento:', err)
