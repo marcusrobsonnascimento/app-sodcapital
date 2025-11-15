@@ -166,6 +166,12 @@ export default function LancamentosPage() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [isLancamentoPago, setIsLancamentoPago] = useState(false)
 
+  // Estados para paginação infinita
+  const [page, setPage] = useState(0)
+  const [hasMore, setHasMore] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const ITEMS_PER_PAGE = 50
+
   // Filtros
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedTipoFilter, setSelectedTipoFilter] = useState<string>('')
@@ -255,7 +261,7 @@ export default function LancamentosPage() {
   useEffect(() => {
     loadEmpresas()
     loadContrapartes()
-    loadLancamentos()
+    loadLancamentos(true)
   }, [])
 
   useEffect(() => {
@@ -303,6 +309,34 @@ export default function LancamentosPage() {
     const liquido = Math.max(0, valorBruto - totalRetencoes)
     setValorLiquido(liquido)
   }, [valorBruto, retencoes])
+
+  // Resetar paginação quando filtros de data mudarem
+  useEffect(() => {
+    if (dataVencimentoInicio || dataVencimentoFim) {
+      setPage(0)
+      setHasMore(true)
+      setLancamentos([])
+      loadLancamentos(true)
+    }
+  }, [dataVencimentoInicio, dataVencimentoFim])
+
+  // Detectar scroll para carregar mais
+  useEffect(() => {
+    const handleScroll = () => {
+      if (
+        window.innerHeight + document.documentElement.scrollTop 
+        >= document.documentElement.offsetHeight - 200
+        && !loadingMore 
+        && hasMore
+        && !loading
+      ) {
+        loadMoreLancamentos()
+      }
+    }
+
+    window.addEventListener('scroll', handleScroll)
+    return () => window.removeEventListener('scroll', handleScroll)
+  }, [loadingMore, hasMore, loading])
 
   const loadEmpresas = async () => {
     try {
@@ -465,8 +499,17 @@ export default function LancamentosPage() {
     }
   }
 
-  const loadLancamentos = async () => {
-    setLoading(true)
+  const loadLancamentos = async (resetPage = false) => {
+    const currentPage = resetPage ? 0 : page
+    
+    if (resetPage) {
+      setLoading(true)
+      setLancamentos([])
+      setPage(0)
+    } else {
+      setLoadingMore(true)
+    }
+    
     try {
       const { data: todasEmpresas } = await supabase.from('empresas').select('id, nome')
       const { data: todosProjetos } = await supabase.from('projetos').select('id, nome')
@@ -475,10 +518,10 @@ export default function LancamentosPage() {
       let todasContrapartes: any[] = []
       let from = 0
       const pageSize = 1000
-      let hasMore = true
+      let hasMoreContrapartes = true
       
       console.log('📦 [LANCAMENTOS] Carregando todas contrapartes em lotes...')
-      while (hasMore) {
+      while (hasMoreContrapartes) {
         const { data } = await supabase
           .from('contrapartes')
           .select('id, nome, apelido')
@@ -487,10 +530,10 @@ export default function LancamentosPage() {
         if (data && data.length > 0) {
           todasContrapartes = [...todasContrapartes, ...data]
           from += pageSize
-          hasMore = data.length === pageSize
+          hasMoreContrapartes = data.length === pageSize
           console.log(`📦 [LANCAMENTOS] Lote: ${data.length} (total: ${todasContrapartes.length})`)
         } else {
-          hasMore = false
+          hasMoreContrapartes = false
         }
         
         if (from >= 20000) break // Proteção
@@ -500,13 +543,45 @@ export default function LancamentosPage() {
         .from('plano_contas_fluxo')
         .select('id, codigo_conta, categoria, subcategoria, tipo_fluxo, sentido')
 
-      const { data: lancamentosData, error: lancamentosError } = await supabase
+      // MODIFICAÇÃO PRINCIPAL: Query com paginação
+      let query = supabase
         .from('lancamentos')
-        .select('*')
-        .order('data_vencimento', { ascending: true })
+        .select('*', { count: 'exact' })
+        .order('data_vencimento', { ascending: false }) // Mais novo primeiro
         .order('created_at', { ascending: false })
 
+      // Se tem filtro de data, NÃO paginar - carregar tudo
+      const temFiltroData = dataVencimentoInicio || dataVencimentoFim
+      
+      if (!temFiltroData) {
+        // SEM filtro de data: paginar (50 registros por vez)
+        const start = currentPage * ITEMS_PER_PAGE
+        const end = start + ITEMS_PER_PAGE - 1
+        query = query.range(start, end)
+        console.log(`📄 [PAGINAÇÃO] Carregando registros ${start} a ${end}`)
+      } else {
+        // COM filtro de data: carregar todos do período
+        if (dataVencimentoInicio) {
+          query = query.gte('data_vencimento', dataVencimentoInicio)
+        }
+        if (dataVencimentoFim) {
+          query = query.lte('data_vencimento', dataVencimentoFim)
+        }
+        console.log(`📅 [FILTRO DATA] Carregando todos os registros do período`)
+      }
+
+      const { data: lancamentosData, error: lancamentosError, count } = await query
+
       if (lancamentosError) throw lancamentosError
+
+      // Verificar se tem mais registros para carregar
+      if (!temFiltroData) {
+        const totalLoaded = resetPage ? (lancamentosData?.length || 0) : lancamentos.length + (lancamentosData?.length || 0)
+        setHasMore(count ? totalLoaded < count : false)
+        console.log(`📊 Total carregado: ${totalLoaded} de ${count} | Tem mais? ${totalLoaded < (count || 0)}`)
+      } else {
+        setHasMore(false) // Com filtro de data, carrega tudo de uma vez
+      }
 
       const lancamentosIds = (lancamentosData || []).map((l: any) => l.id)
       const { data: todasRetencoes } = await supabase
@@ -522,7 +597,6 @@ export default function LancamentosPage() {
         const subprojeto = todosProjetos?.find(p => p.id === lanc.subprojeto_id)
         const contraparte = todasContrapartes?.find(c => c.id === lanc.contraparte_id)
         
-        // Log se não encontrar contraparte
         if (lanc.contraparte_id && !contraparte) {
           console.warn(`⚠️ Contraparte não encontrada: ${lanc.contraparte_id}`)
         }
@@ -540,13 +614,27 @@ export default function LancamentosPage() {
         }
       })
 
-      setLancamentos(lancamentosCompletos)
+      // Se for reset, substitui. Se não, acumula
+      if (resetPage) {
+        setLancamentos(lancamentosCompletos)
+      } else {
+        setLancamentos(prev => [...prev, ...lancamentosCompletos])
+        setPage(currentPage + 1)
+      }
     } catch (err) {
       console.error('Erro ao carregar lançamentos:', err)
       showToast('Erro ao carregar lançamentos', 'error')
     } finally {
       setLoading(false)
+      setLoadingMore(false)
     }
+  }
+
+  const loadMoreLancamentos = async () => {
+    if (loadingMore || !hasMore) return
+    
+    console.log('📄 Carregando mais lançamentos...')
+    await loadLancamentos(false)
   }
 
   const onSubmit = async (data: LancamentoForm) => {
@@ -986,9 +1074,10 @@ export default function LancamentosPage() {
           </button>
         </div>
 
+        {/* Linha 1: Datas, Tipo, Status, Empresa */}
         <div style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+          gridTemplateColumns: '1fr 1fr 1fr 1fr 1.5fr',
           gap: '12px',
           marginBottom: '12px'
         }}>
@@ -1014,6 +1103,8 @@ export default function LancamentosPage() {
                 fontSize: '14px',
                 outline: 'none'
               }}
+              onFocus={(e) => e.currentTarget.style.borderColor = '#1555D6'}
+              onBlur={(e) => e.currentTarget.style.borderColor = '#e5e7eb'}
             />
           </div>
 
@@ -1039,6 +1130,8 @@ export default function LancamentosPage() {
                 fontSize: '14px',
                 outline: 'none'
               }}
+              onFocus={(e) => e.currentTarget.style.borderColor = '#1555D6'}
+              onBlur={(e) => e.currentTarget.style.borderColor = '#e5e7eb'}
             />
           </div>
 
@@ -1062,8 +1155,11 @@ export default function LancamentosPage() {
                 borderRadius: '8px',
                 fontSize: '14px',
                 outline: 'none',
-                cursor: 'pointer'
+                cursor: 'pointer',
+                backgroundColor: 'white'
               }}
+              onFocus={(e) => e.currentTarget.style.borderColor = '#1555D6'}
+              onBlur={(e) => e.currentTarget.style.borderColor = '#e5e7eb'}
             >
               <option value="">Todos</option>
               <option value="Entrada">Recebimento</option>
@@ -1091,8 +1187,11 @@ export default function LancamentosPage() {
                 borderRadius: '8px',
                 fontSize: '14px',
                 outline: 'none',
-                cursor: 'pointer'
+                cursor: 'pointer',
+                backgroundColor: 'white'
               }}
+              onFocus={(e) => e.currentTarget.style.borderColor = '#1555D6'}
+              onBlur={(e) => e.currentTarget.style.borderColor = '#e5e7eb'}
             >
               <option value="">Todos</option>
               <option value="ABERTO">Aberto</option>
@@ -1121,8 +1220,11 @@ export default function LancamentosPage() {
                 borderRadius: '8px',
                 fontSize: '14px',
                 outline: 'none',
-                cursor: 'pointer'
+                cursor: 'pointer',
+                backgroundColor: 'white'
               }}
+              onFocus={(e) => e.currentTarget.style.borderColor = '#1555D6'}
+              onBlur={(e) => e.currentTarget.style.borderColor = '#e5e7eb'}
             >
               <option value="">Todas</option>
               {empresas.map((emp) => (
@@ -1130,7 +1232,15 @@ export default function LancamentosPage() {
               ))}
             </select>
           </div>
+        </div>
 
+        {/* Linha 2: Buscar + Botão Atualizar */}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr auto',
+          gap: '12px',
+          marginBottom: '12px'
+        }}>
           <div>
             <label style={{
               display: 'block',
@@ -1165,8 +1275,44 @@ export default function LancamentosPage() {
                   fontSize: '14px',
                   outline: 'none'
                 }}
+                onFocus={(e) => e.currentTarget.style.borderColor = '#1555D6'}
+                onBlur={(e) => e.currentTarget.style.borderColor = '#e5e7eb'}
               />
             </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+            <button
+              onClick={() => {
+                setPage(0)
+                setHasMore(true)
+                setLancamentos([])
+                loadLancamentos(true)
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '8px 20px',
+                backgroundColor: '#1555D6',
+                color: 'white',
+                border: 'none',
+                borderRadius: '8px',
+                fontSize: '14px',
+                fontWeight: '500',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+                whiteSpace: 'nowrap',
+                height: '37px'
+              }}
+              onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#1044b5'}
+              onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#1555D6'}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/>
+              </svg>
+              Atualizar
+            </button>
           </div>
         </div>
       </div>
@@ -2389,6 +2535,48 @@ export default function LancamentosPage() {
                 })}
               </tbody>
             </table>
+            
+            {/* Indicador de loading ao fazer scroll */}
+            {loadingMore && (
+              <div style={{
+                display: 'flex',
+                justifyContent: 'center',
+                alignItems: 'center',
+                padding: '32px',
+                backgroundColor: '#f9fafb'
+              }}>
+                <div style={{
+                  width: '32px',
+                  height: '32px',
+                  border: '3px solid #f3f4f6',
+                  borderTop: '3px solid #1555D6',
+                  borderRadius: '50%',
+                  animation: 'spin 1s linear infinite'
+                }} />
+                <span style={{
+                  marginLeft: '12px',
+                  fontSize: '14px',
+                  color: '#6b7280',
+                  fontWeight: '500'
+                }}>
+                  Carregando mais lançamentos...
+                </span>
+              </div>
+            )}
+            
+            {/* Mensagem quando não há mais registros */}
+            {!loading && !loadingMore && !hasMore && lancamentos.length > 0 && (
+              <div style={{
+                padding: '24px',
+                textAlign: 'center',
+                fontSize: '14px',
+                color: '#9ca3af',
+                backgroundColor: '#f9fafb',
+                borderTop: '1px solid #e5e7eb'
+              }}>
+                Todos os lançamentos foram carregados
+              </div>
+            )}
           </div>
         )}
       </div>
