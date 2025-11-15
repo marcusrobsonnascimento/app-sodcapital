@@ -86,6 +86,8 @@ export default function PlanoContasPage() {
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [showDeleteModal, setShowDeleteModal] = useState(false)
+  const [showWarningModal, setShowWarningModal] = useState(false)
+  const [warningMessage, setWarningMessage] = useState('')
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [deletingConta, setDeletingConta] = useState<PlanoContaFluxo | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -302,6 +304,31 @@ export default function PlanoContasPage() {
     }
   }
 
+  const verificarCodigoDuplicado = async (
+    codigo_conta: string,
+    idAtual?: string
+  ): Promise<boolean> => {
+    try {
+      let query = supabase
+        .from('plano_contas_fluxo')
+        .select('id')
+        .eq('codigo_conta', codigo_conta)
+        .limit(1)
+
+      if (idAtual) {
+        query = query.neq('id', idAtual)
+      }
+
+      const { data, error } = await query
+
+      if (error) throw error
+      return data && data.length > 0
+    } catch (error) {
+      console.error('Erro ao verificar código duplicado:', error)
+      throw error
+    }
+  }
+
   const handleFormatInput = (fieldName: keyof PlanoContaFormData, value: string) => {
     const formatted = formatTitleCase(value)
     setValue(fieldName, formatted as any)
@@ -309,6 +336,18 @@ export default function PlanoContasPage() {
 
   const onSubmit = async (data: PlanoContaFormData) => {
     try {
+      // Verificar se o código da conta já existe
+      const codigoDuplicado = await verificarCodigoDuplicado(
+        data.codigo_conta,
+        editingId || undefined
+      )
+      if (codigoDuplicado) {
+        setWarningMessage(`Já existe uma conta cadastrada com esse código - Sentido: ${data.sentido} - Tipo de Fluxo: ${data.tipo_fluxo} - Grupo: ${data.grupo} - Categoria: ${data.categoria} - Subcategoria: ${data.subcategoria}. Por favor, verifique os dados informados.`)
+        setShowWarningModal(true)
+        return
+      }
+
+      // Verificar se a combinação já existe
       const combinacaoDuplicada = await verificarCombinacaoDuplicada(
         data.tipo_fluxo,
         data.grupo,
@@ -318,7 +357,8 @@ export default function PlanoContasPage() {
         editingId || undefined
       )
       if (combinacaoDuplicada) {
-        showToast('Já existe uma conta com essa combinação de Tipo de Fluxo, Grupo, Categoria, Subcategoria e Sentido.', 'warning')
+        setWarningMessage(`Já existe uma conta cadastrada com essa combinação - Sentido: ${data.sentido} - Tipo de Fluxo: ${data.tipo_fluxo} - Grupo: ${data.grupo} - Categoria: ${data.categoria} - Subcategoria: ${data.subcategoria}. Por favor, verifique os dados informados.`)
+        setShowWarningModal(true)
         return
       }
 
@@ -1047,6 +1087,20 @@ export default function PlanoContasPage() {
                   </label>
                   <input
                     {...register('codigo_conta')}
+                    onChange={(e) => {
+                      const value = e.target.value
+                      setValue('codigo_conta', value)
+                      
+                      // Auto-ajustar sentido baseado no primeiro caractere
+                      if (value.length > 0) {
+                        const firstChar = value.charAt(0)
+                        if (firstChar === '1') {
+                          setValue('sentido', 'Entrada')
+                        } else if (firstChar === '2') {
+                          setValue('sentido', 'Saida')
+                        }
+                      }
+                    }}
                     style={{
                       width: '100%',
                       padding: '12px 16px',
@@ -1057,7 +1111,7 @@ export default function PlanoContasPage() {
                       transition: 'all 0.2s',
                       fontFamily: 'monospace'
                     }}
-                    placeholder="1.01.01.01.001"
+                    placeholder="1.01.01.001"
                     onFocus={(e) => {
                       e.currentTarget.style.borderColor = '#1555D6'
                       e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
@@ -1065,6 +1119,22 @@ export default function PlanoContasPage() {
                     onBlur={(e) => {
                       e.currentTarget.style.borderColor = '#e5e7eb'
                       e.currentTarget.style.boxShadow = 'none'
+                      
+                      // Validar padrão do código quando perder o foco
+                      const value = e.target.value.trim()
+                      if (value) {
+                        const pattern = /^[12]\.\d{2}\.\d{2}\.\d{3}$/
+                        if (!pattern.test(value)) {
+                          showToast('Código inválido! Use o formato: 1.XX.XX.XXX ou 2.XX.XX.XXX', 'warning')
+                          e.currentTarget.style.borderColor = '#eab308'
+                        } else {
+                          const firstChar = value.charAt(0)
+                          if (firstChar !== '1' && firstChar !== '2') {
+                            showToast('Código deve começar com 1 (Entrada) ou 2 (Saída)', 'warning')
+                            e.currentTarget.style.borderColor = '#eab308'
+                          }
+                        }
+                      }
                     }}
                   />
                 </div>
@@ -1081,6 +1151,7 @@ export default function PlanoContasPage() {
                   </label>
                   <select
                     {...register('sentido')}
+                    disabled
                     style={{
                       width: '100%',
                       padding: '12px 16px',
@@ -1088,8 +1159,9 @@ export default function PlanoContasPage() {
                       borderRadius: '8px',
                       fontSize: '14px',
                       outline: 'none',
-                      cursor: 'pointer',
-                      backgroundColor: 'white'
+                      cursor: 'not-allowed',
+                      backgroundColor: '#f9fafb',
+                      color: '#6b7280'
                     }}
                   >
                     <option value="Entrada">Entrada</option>
@@ -1162,8 +1234,9 @@ export default function PlanoContasPage() {
                       backgroundColor: 'white'
                     }}
                   >
+                    <option value="">Selecione o tipo de fluxo</option>
                     {tiposFluxoDisponiveis.length === 0 ? (
-                      <option value="">Carregando...</option>
+                      <option disabled>Carregando...</option>
                     ) : (
                       tiposFluxoDisponiveis.map((tipo) => (
                         <option key={tipo} value={tipo}>{tipo}</option>
@@ -1428,6 +1501,89 @@ export default function PlanoContasPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {showWarningModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 60,
+            backdropFilter: 'blur(4px)'
+          }}
+          onClick={() => setShowWarningModal(false)}
+        >
+          <div
+            style={{
+              backgroundColor: 'white',
+              borderRadius: '16px',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+              padding: '0',
+              width: '100%',
+              maxWidth: '500px',
+              margin: '16px',
+              animation: 'scaleIn 0.2s ease-out',
+              overflow: 'hidden'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header amarelo */}
+            <div style={{
+              backgroundColor: '#fbbf24',
+              padding: '20px 32px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px'
+            }}>
+              <AlertTriangle style={{ width: '28px', height: '28px', color: '#78350f', flexShrink: 0 }} />
+              <h2 style={{
+                fontSize: '20px',
+                fontWeight: '700',
+                color: '#78350f',
+                margin: 0
+              }}>
+                AVISO
+              </h2>
+            </div>
+
+            {/* Conteúdo */}
+            <div style={{ padding: '32px' }}>
+              <p style={{
+                fontSize: '14px',
+                color: '#374151',
+                lineHeight: '1.6',
+                margin: 0,
+                marginBottom: '28px'
+              }}>
+                {warningMessage}
+              </p>
+
+              <button
+                onClick={() => setShowWarningModal(false)}
+                style={{
+                  width: '100%',
+                  padding: '12px 24px',
+                  backgroundColor: '#1555D6',
+                  border: 'none',
+                  borderRadius: '8px',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  color: 'white',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+                onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#1044b5'}
+                onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#1555D6'}
+              >
+                OK
+              </button>
+            </div>
           </div>
         </div>
       )}
