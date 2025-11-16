@@ -68,6 +68,14 @@ const menuItems: MenuItem[] = [
     children: [
       { title: 'DRE', icon: FileBarChart, href: '/relatorios/dre' },
       { title: 'Fluxo de Caixa', icon: TrendingUp, href: '/relatorios/fluxo' },
+      { 
+        title: 'Fluxo de Caixa Realizado', 
+        icon: TrendingUp,
+        children: [
+          { title: 'Anual Realizado', icon: TrendingUp, href: '/relatorios/fluxorealizado/realizado' },
+          { title: 'Mensal Realizado', icon: TrendingUp, href: '/relatorios/fluxorealizado/mensal' }
+        ]
+      },
       { title: 'Painel de PL', icon: PieChart, href: '/relatorios/pl' }
     ]
   },
@@ -113,7 +121,7 @@ export default function SideBar() {
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
-              padding: '0.625rem 0.75rem',
+              padding: level > 0 ? '0.5rem 0.75rem' : '0.625rem 0.75rem',
               borderRadius: '8px',
               backgroundColor: isHovered || isExpanded ? '#f3f4f6' : 'transparent',
               border: 'none',
@@ -124,7 +132,7 @@ export default function SideBar() {
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
               <Icon 
-                size={20} 
+                size={level > 0 ? 18 : 20} 
                 style={{ 
                   color: isExpanded ? '#1555D6' : '#6b7280',
                   transition: 'color 0.2s ease'
@@ -132,7 +140,7 @@ export default function SideBar() {
               />
               <span 
                 style={{ 
-                  fontSize: '0.875rem',
+                  fontSize: level > 0 ? '0.8125rem' : '0.875rem',
                   fontWeight: '500',
                   color: '#374151',
                   transition: 'color 0.2s ease'
@@ -151,7 +159,7 @@ export default function SideBar() {
           {isExpanded && (
             <div 
               style={{ 
-                marginLeft: '1rem',
+                marginLeft: level > 0 ? '0.75rem' : '1rem',
                 marginTop: '0.25rem',
                 paddingLeft: '0.75rem',
                 borderLeft: '2px solid #e5e7eb',

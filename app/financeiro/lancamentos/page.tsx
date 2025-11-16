@@ -868,7 +868,7 @@ export default function LancamentosPage() {
       if (error) throw error
 
       showToast('Lançamento excluído com sucesso!', 'success')
-      loadLancamentos()
+      loadLancamentos(true)
       setDeleteConfirm({ show: false, id: null })
     } catch (err: any) {
       console.error('Erro ao excluir lançamento:', err)
@@ -891,7 +891,7 @@ export default function LancamentosPage() {
       if (error) throw error
 
       showToast('Lançamento liquidado com sucesso!', 'success')
-      loadLancamentos()
+      loadLancamentos(true)
       setLiquidarModal({ show: false, id: null })
       setDataLiquidacao('')
     } catch (err) {
@@ -910,7 +910,7 @@ export default function LancamentosPage() {
       if (error) throw error
 
       showToast('Lançamento cancelado com sucesso!', 'success')
-      loadLancamentos()
+      loadLancamentos(true)
     } catch (err) {
       console.error('Erro ao cancelar lançamento:', err)
       showToast('Erro ao cancelar lançamento', 'error')
