@@ -16,25 +16,46 @@ interface PlanoContaFluxo {
   conta_cont: string | null
 }
 
+interface Contraparte {
+  id: string
+  nome: string
+  apelido: string | null
+}
+
 interface PlanoContaPickerProps {
   value: string
   onChange: (id: string) => void
   sentidoFilter?: 'Entrada' | 'Saida'
+  tipoFluxoFilter?: string
   error?: string
+  showContraparte?: boolean
+  contraparteValue?: string
+  onContraparteChange?: (id: string) => void
+  contrapartes?: Contraparte[]
+  contraparteError?: string
 }
 
-export default function PlanoContaPicker({ value, onChange, sentidoFilter, error }: PlanoContaPickerProps) {
+export default function PlanoContaPicker({ 
+  value, 
+  onChange, 
+  sentidoFilter, 
+  tipoFluxoFilter,
+  error,
+  showContraparte = false,
+  contraparteValue = '',
+  onContraparteChange,
+  contrapartes = [],
+  contraparteError
+}: PlanoContaPickerProps) {
   const [todasContas, setTodasContas] = useState<PlanoContaFluxo[]>([])
   const [loading, setLoading] = useState(true)
 
-  // Estados das seleções
-  const [tipoFluxoSelecionado, setTipoFluxoSelecionado] = useState<string>('')
+  // Estados das seleções - REMOVIDO tipoFluxoSelecionado
   const [grupoSelecionado, setGrupoSelecionado] = useState<string>('')
   const [categoriaSelecionada, setCategoriaSelecionada] = useState<string>('')
   const [subcategoriaSelecionada, setSubcategoriaSelecionada] = useState<string>('')
 
-  // Listas filtradas
-  const [tiposFluxoDisponiveis, setTiposFluxoDisponiveis] = useState<string[]>([])
+  // Listas filtradas - REMOVIDO tiposFluxoDisponiveis
   const [gruposDisponiveis, setGruposDisponiveis] = useState<string[]>([])
   const [categoriasDisponiveis, setCategoriasDisponiveis] = useState<string[]>([])
   const [subcategoriasDisponiveis, setSubcategoriasDisponiveis] = useState<string[]>([])
@@ -44,29 +65,24 @@ export default function PlanoContaPicker({ value, onChange, sentidoFilter, error
     loadContas()
   }, [])
 
-  // Filtrar por sentido quando mudar
+  // Filtrar por sentido e tipo de fluxo quando mudarem
   useEffect(() => {
     if (todasContas.length > 0) {
-      aplicarFiltroSentido()
+      aplicarFiltros()
     }
-  }, [sentidoFilter, todasContas])
+  }, [sentidoFilter, tipoFluxoFilter, todasContas])
 
   // Quando value mudar externamente (edição), preencher os campos E carregar as opções
   useEffect(() => {
     if (value && todasContas.length > 0) {
       const conta = todasContas.find(c => c.id === value)
       if (conta) {
-        // Preencher os valores
-        setTipoFluxoSelecionado(conta.tipo_fluxo)
         setGrupoSelecionado(conta.grupo)
         setCategoriaSelecionada(conta.categoria)
         setSubcategoriaSelecionada(conta.subcategoria)
-        
-        // Carregar as opções para cada nível
         carregarOpcoesParaEdicao(conta)
       }
     } else if (!value) {
-      // Se não há value, resetar tudo
       resetarSelecoes()
     }
   }, [value, todasContas])
@@ -92,48 +108,34 @@ export default function PlanoContaPicker({ value, onChange, sentidoFilter, error
   }
 
   const carregarOpcoesParaEdicao = (conta: PlanoContaFluxo) => {
-    // Carregar tipos de fluxo disponíveis
     let contasFiltradas = todasContas
+    
     if (sentidoFilter) {
-      contasFiltradas = todasContas.filter(c => c.sentido === sentidoFilter)
+      contasFiltradas = contasFiltradas.filter(c => c.sentido === sentidoFilter)
     }
-    const tipos = Array.from(new Set(contasFiltradas.map(c => c.tipo_fluxo))).sort()
-    setTiposFluxoDisponiveis(tipos)
+    
+    if (tipoFluxoFilter) {
+      contasFiltradas = contasFiltradas.filter(c => c.tipo_fluxo === tipoFluxoFilter)
+    }
 
-    // Carregar grupos disponíveis para o tipo selecionado
-    let contasPorTipo = todasContas.filter(c => c.tipo_fluxo === conta.tipo_fluxo)
-    if (sentidoFilter) {
-      contasPorTipo = contasPorTipo.filter(c => c.sentido === sentidoFilter)
-    }
-    const grupos = Array.from(new Set(contasPorTipo.map(c => c.grupo))).sort()
+    // Carregar grupos disponíveis
+    const grupos = Array.from(new Set(contasFiltradas.map(c => c.grupo))).sort()
     setGruposDisponiveis(grupos)
 
     // Carregar categorias disponíveis para o grupo selecionado
-    let contasPorGrupo = todasContas.filter(
-      c => c.tipo_fluxo === conta.tipo_fluxo && c.grupo === conta.grupo
-    )
-    if (sentidoFilter) {
-      contasPorGrupo = contasPorGrupo.filter(c => c.sentido === sentidoFilter)
-    }
+    let contasPorGrupo = contasFiltradas.filter(c => c.grupo === conta.grupo)
     const categorias = Array.from(new Set(contasPorGrupo.map(c => c.categoria))).sort()
     setCategoriasDisponiveis(categorias)
 
     // Carregar subcategorias disponíveis para a categoria selecionada
-    let contasPorCategoria = todasContas.filter(
-      c =>
-        c.tipo_fluxo === conta.tipo_fluxo &&
-        c.grupo === conta.grupo &&
-        c.categoria === conta.categoria
+    let contasPorCategoria = contasFiltradas.filter(
+      c => c.grupo === conta.grupo && c.categoria === conta.categoria
     )
-    if (sentidoFilter) {
-      contasPorCategoria = contasPorCategoria.filter(c => c.sentido === sentidoFilter)
-    }
     const subcategorias = Array.from(new Set(contasPorCategoria.map(c => c.subcategoria))).sort()
     setSubcategoriasDisponiveis(subcategorias)
   }
 
   const resetarSelecoes = () => {
-    setTipoFluxoSelecionado('')
     setGrupoSelecionado('')
     setCategoriaSelecionada('')
     setSubcategoriaSelecionada('')
@@ -142,48 +144,29 @@ export default function PlanoContaPicker({ value, onChange, sentidoFilter, error
     setSubcategoriasDisponiveis([])
   }
 
-  const aplicarFiltroSentido = () => {
+  const aplicarFiltros = () => {
     let contasFiltradas = todasContas
-
-    if (sentidoFilter) {
-      contasFiltradas = todasContas.filter(c => c.sentido === sentidoFilter)
-    }
-
-    // Extrair tipos de fluxo únicos
-    const tipos = Array.from(new Set(contasFiltradas.map(c => c.tipo_fluxo))).sort()
-    setTiposFluxoDisponiveis(tipos)
-
-    // Resetar seleções apenas se não houver value
-    if (!value) {
-      resetarSelecoes()
-    }
-  }
-
-  const handleTipoFluxoChange = (tipo: string) => {
-    setTipoFluxoSelecionado(tipo)
-    setGrupoSelecionado('')
-    setCategoriaSelecionada('')
-    setSubcategoriaSelecionada('')
-    onChange('')
-
-    if (!tipo) {
-      setGruposDisponiveis([])
-      setCategoriasDisponiveis([])
-      setSubcategoriasDisponiveis([])
-      return
-    }
-
-    // Filtrar grupos disponíveis para este tipo de fluxo
-    let contasFiltradas = todasContas.filter(c => c.tipo_fluxo === tipo)
 
     if (sentidoFilter) {
       contasFiltradas = contasFiltradas.filter(c => c.sentido === sentidoFilter)
     }
 
+    if (tipoFluxoFilter) {
+      contasFiltradas = contasFiltradas.filter(c => c.tipo_fluxo === tipoFluxoFilter)
+    }
+
+    // Extrair grupos únicos
     const grupos = Array.from(new Set(contasFiltradas.map(c => c.grupo))).sort()
     setGruposDisponiveis(grupos)
-    setCategoriasDisponiveis([])
-    setSubcategoriasDisponiveis([])
+
+    // Resetar seleções apenas se não houver value
+    if (!value) {
+      setCategoriasDisponiveis([])
+      setSubcategoriasDisponiveis([])
+      setGrupoSelecionado('')
+      setCategoriaSelecionada('')
+      setSubcategoriaSelecionada('')
+    }
   }
 
   const handleGrupoChange = (grupo: string) => {
@@ -198,13 +181,14 @@ export default function PlanoContaPicker({ value, onChange, sentidoFilter, error
       return
     }
 
-    // Filtrar categorias disponíveis para este grupo
-    let contasFiltradas = todasContas.filter(
-      c => c.tipo_fluxo === tipoFluxoSelecionado && c.grupo === grupo
-    )
+    let contasFiltradas = todasContas.filter(c => c.grupo === grupo)
 
     if (sentidoFilter) {
       contasFiltradas = contasFiltradas.filter(c => c.sentido === sentidoFilter)
+    }
+
+    if (tipoFluxoFilter) {
+      contasFiltradas = contasFiltradas.filter(c => c.tipo_fluxo === tipoFluxoFilter)
     }
 
     const categorias = Array.from(new Set(contasFiltradas.map(c => c.categoria))).sort()
@@ -222,16 +206,16 @@ export default function PlanoContaPicker({ value, onChange, sentidoFilter, error
       return
     }
 
-    // Filtrar subcategorias disponíveis para esta categoria
     let contasFiltradas = todasContas.filter(
-      c =>
-        c.tipo_fluxo === tipoFluxoSelecionado &&
-        c.grupo === grupoSelecionado &&
-        c.categoria === categoria
+      c => c.grupo === grupoSelecionado && c.categoria === categoria
     )
 
     if (sentidoFilter) {
       contasFiltradas = contasFiltradas.filter(c => c.sentido === sentidoFilter)
+    }
+
+    if (tipoFluxoFilter) {
+      contasFiltradas = contasFiltradas.filter(c => c.tipo_fluxo === tipoFluxoFilter)
     }
 
     const subcategorias = Array.from(new Set(contasFiltradas.map(c => c.subcategoria))).sort()
@@ -246,10 +230,8 @@ export default function PlanoContaPicker({ value, onChange, sentidoFilter, error
       return
     }
 
-    // Encontrar a conta correspondente
     let conta = todasContas.find(
       c =>
-        c.tipo_fluxo === tipoFluxoSelecionado &&
         c.grupo === grupoSelecionado &&
         c.categoria === categoriaSelecionada &&
         c.subcategoria === subcategoria
@@ -258,11 +240,20 @@ export default function PlanoContaPicker({ value, onChange, sentidoFilter, error
     if (sentidoFilter && conta) {
       conta = todasContas.find(
         c =>
-          c.tipo_fluxo === tipoFluxoSelecionado &&
           c.grupo === grupoSelecionado &&
           c.categoria === categoriaSelecionada &&
           c.subcategoria === subcategoria &&
           c.sentido === sentidoFilter
+      )
+    }
+
+    if (tipoFluxoFilter && conta) {
+      conta = todasContas.find(
+        c =>
+          c.grupo === grupoSelecionado &&
+          c.categoria === categoriaSelecionada &&
+          c.subcategoria === subcategoria &&
+          c.tipo_fluxo === tipoFluxoFilter
       )
     }
 
@@ -302,45 +293,10 @@ export default function PlanoContaPicker({ value, onChange, sentidoFilter, error
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(4, 1fr)',
+          gridTemplateColumns: showContraparte ? '0.8fr 1fr 1fr 1.2fr' : 'repeat(3, 1fr)',
           gap: '12px'
         }}
       >
-        {/* Tipo de Fluxo */}
-        <div>
-          <label
-            style={{
-              display: 'block',
-              fontSize: '12px',
-              fontWeight: '500',
-              color: '#374151',
-              marginBottom: '6px'
-            }}
-          >
-            Tipo de Fluxo
-          </label>
-          <select
-            value={tipoFluxoSelecionado}
-            onChange={(e) => handleTipoFluxoChange(e.target.value)}
-            style={selectStyle}
-            onFocus={(e) => {
-              e.currentTarget.style.borderColor = '#1555D6'
-              e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
-            }}
-            onBlur={(e) => {
-              e.currentTarget.style.borderColor = '#e5e7eb'
-              e.currentTarget.style.boxShadow = 'none'
-            }}
-          >
-            <option value="">Selecione</option>
-            {tiposFluxoDisponiveis.map((tipo) => (
-              <option key={tipo} value={tipo}>
-                {tipo}
-              </option>
-            ))}
-          </select>
-        </div>
-
         {/* Grupo */}
         <div>
           <label
@@ -352,21 +308,24 @@ export default function PlanoContaPicker({ value, onChange, sentidoFilter, error
               marginBottom: '6px'
             }}
           >
-            Grupo
+            Grupo <span style={{ color: '#ef4444' }}>*</span>
           </label>
           <select
             value={grupoSelecionado}
             onChange={(e) => handleGrupoChange(e.target.value)}
-            disabled={!tipoFluxoSelecionado}
-            style={tipoFluxoSelecionado ? selectStyle : disabledSelectStyle}
+            disabled={!tipoFluxoFilter}
+            style={{
+              ...(tipoFluxoFilter ? selectStyle : disabledSelectStyle),
+              borderColor: error && !grupoSelecionado ? '#ef4444' : '#e5e7eb'
+            }}
             onFocus={(e) => {
-              if (tipoFluxoSelecionado) {
+              if (tipoFluxoFilter) {
                 e.currentTarget.style.borderColor = '#1555D6'
                 e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
               }
             }}
             onBlur={(e) => {
-              e.currentTarget.style.borderColor = '#e5e7eb'
+              e.currentTarget.style.borderColor = error && !grupoSelecionado ? '#ef4444' : '#e5e7eb'
               e.currentTarget.style.boxShadow = 'none'
             }}
           >
@@ -390,13 +349,16 @@ export default function PlanoContaPicker({ value, onChange, sentidoFilter, error
               marginBottom: '6px'
             }}
           >
-            Categoria
+            Categoria <span style={{ color: '#ef4444' }}>*</span>
           </label>
           <select
             value={categoriaSelecionada}
             onChange={(e) => handleCategoriaChange(e.target.value)}
             disabled={!grupoSelecionado}
-            style={grupoSelecionado ? selectStyle : disabledSelectStyle}
+            style={{
+              ...(grupoSelecionado ? selectStyle : disabledSelectStyle),
+              borderColor: error && !categoriaSelecionada ? '#ef4444' : '#e5e7eb'
+            }}
             onFocus={(e) => {
               if (grupoSelecionado) {
                 e.currentTarget.style.borderColor = '#1555D6'
@@ -404,7 +366,7 @@ export default function PlanoContaPicker({ value, onChange, sentidoFilter, error
               }
             }}
             onBlur={(e) => {
-              e.currentTarget.style.borderColor = '#e5e7eb'
+              e.currentTarget.style.borderColor = error && !categoriaSelecionada ? '#ef4444' : '#e5e7eb'
               e.currentTarget.style.boxShadow = 'none'
             }}
           >
@@ -428,13 +390,16 @@ export default function PlanoContaPicker({ value, onChange, sentidoFilter, error
               marginBottom: '6px'
             }}
           >
-            Subcategoria
+            Subcategoria <span style={{ color: '#ef4444' }}>*</span>
           </label>
           <select
             value={subcategoriaSelecionada}
             onChange={(e) => handleSubcategoriaChange(e.target.value)}
             disabled={!categoriaSelecionada}
-            style={categoriaSelecionada ? selectStyle : disabledSelectStyle}
+            style={{
+              ...(categoriaSelecionada ? selectStyle : disabledSelectStyle),
+              borderColor: error && !subcategoriaSelecionada ? '#ef4444' : '#e5e7eb'
+            }}
             onFocus={(e) => {
               if (categoriaSelecionada) {
                 e.currentTarget.style.borderColor = '#1555D6'
@@ -442,7 +407,7 @@ export default function PlanoContaPicker({ value, onChange, sentidoFilter, error
               }
             }}
             onBlur={(e) => {
-              e.currentTarget.style.borderColor = '#e5e7eb'
+              e.currentTarget.style.borderColor = error && !subcategoriaSelecionada ? '#ef4444' : '#e5e7eb'
               e.currentTarget.style.boxShadow = 'none'
             }}
           >
@@ -454,6 +419,58 @@ export default function PlanoContaPicker({ value, onChange, sentidoFilter, error
             ))}
           </select>
         </div>
+
+        {/* Contraparte - NOVO */}
+        {showContraparte && (
+          <div>
+            <label
+              style={{
+                display: 'block',
+                fontSize: '12px',
+                fontWeight: '500',
+                color: '#374151',
+                marginBottom: '6px'
+              }}
+            >
+              Contraparte <span style={{ color: '#ef4444' }}>*</span>
+            </label>
+            <select
+              value={contraparteValue || ''}
+              onChange={(e) => onContraparteChange?.(e.target.value)}
+              style={{
+                ...selectStyle,
+                borderColor: contraparteError ? '#ef4444' : '#e5e7eb'
+              }}
+              onFocus={(e) => {
+                e.currentTarget.style.borderColor = '#1555D6'
+                e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.borderColor = contraparteError ? '#ef4444' : '#e5e7eb'
+                e.currentTarget.style.boxShadow = 'none'
+              }}
+            >
+              <option value="">Selecione</option>
+              {contrapartes.map((cp) => (
+                <option key={cp.id} value={cp.id}>
+                  {cp.apelido || cp.nome}
+                </option>
+              ))}
+            </select>
+            {contraparteError && (
+              <p
+                style={{
+                  marginTop: '4px',
+                  fontSize: '11px',
+                  color: '#ef4444',
+                  fontWeight: '500'
+                }}
+              >
+                {contraparteError}
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Preview do código selecionado */}
