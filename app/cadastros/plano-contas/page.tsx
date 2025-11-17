@@ -1111,7 +1111,7 @@ export default function PlanoContasPage() {
                       transition: 'all 0.2s',
                       fontFamily: 'monospace'
                     }}
-                    placeholder="1.01.01.001"
+                    placeholder="1.01.01.01.001"
                     onFocus={(e) => {
                       e.currentTarget.style.borderColor = '#1555D6'
                       e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
@@ -1123,9 +1123,9 @@ export default function PlanoContasPage() {
                       // Validar padrão do código quando perder o foco
                       const value = e.target.value.trim()
                       if (value) {
-                        const pattern = /^[12]\.\d{2}\.\d{2}\.\d{3}$/
+                        const pattern = /^[12]\.\d{2}\.\d{2}\.\d{2}\.\d{3}$/
                         if (!pattern.test(value)) {
-                          showToast('Código inválido! Use o formato: 1.XX.XX.XXX ou 2.XX.XX.XXX', 'warning')
+                          showToast('Código inválido! Use o formato: 1.XX.XX.XX.XXX ou 2.XX.XX.XX.XXX', 'warning')
                           e.currentTarget.style.borderColor = '#eab308'
                         } else {
                           const firstChar = value.charAt(0)

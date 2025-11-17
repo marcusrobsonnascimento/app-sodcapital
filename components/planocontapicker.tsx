@@ -526,7 +526,7 @@ export default function PlanoContaPicker({
                 fontFamily: 'monospace'
               }}
             >
-              {todasContas.find((c) => c.id === value)?.cod_cont || '1.00.000.001'}
+              {todasContas.find((c) => c.id === value)?.cod_cont || '1.00.00.00.001'}
             </span>
             <span
               style={{

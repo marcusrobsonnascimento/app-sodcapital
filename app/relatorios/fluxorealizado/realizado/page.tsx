@@ -1152,80 +1152,7 @@ export default function FluxoCaixaRealizadoPage() {
         </div>
       </div>
 
-      {/* Gráfico - Entradas e Saídas por Classificação */}
-      <div style={{
-        backgroundColor: 'white',
-        borderRadius: '16px',
-        padding: '24px',
-        marginBottom: '24px',
-        boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)'
-      }}>
-        <h2 style={{
-          fontSize: '18px',
-          fontWeight: '600',
-          color: '#374151',
-          marginBottom: '24px'
-        }}>
-          Entradas e Saídas por Classificação
-        </h2>
-
-        {dadosGrafico.length === 0 ? (
-          <div style={{
-            padding: '48px',
-            textAlign: 'center',
-            color: '#9ca3af',
-            fontSize: '14px'
-          }}>
-            Sem dados para exibir
-          </div>
-        ) : (
-          <ResponsiveContainer width="100%" height={500}>
-            <BarChart data={dadosGrafico} layout="vertical">
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-              <XAxis 
-                type="number"
-                stroke="#6b7280"
-                style={{ fontSize: '12px' }}
-                tickFormatter={(value) => formatCurrencyBRL(value)}
-              />
-              <YAxis 
-                type="category"
-                dataKey="classificacao"
-                stroke="#6b7280"
-                style={{ fontSize: '12px' }}
-                width={150}
-              />
-              <Tooltip 
-                formatter={(value: number) => formatCurrencyBRL(value)}
-                contentStyle={{
-                  backgroundColor: 'white',
-                  border: '1px solid #e5e7eb',
-                  borderRadius: '8px',
-                  fontSize: '13px'
-                }}
-              />
-              <Legend 
-                wrapperStyle={{ fontSize: '13px', paddingTop: '16px' }}
-                formatter={(value) => value === 'entradas' ? 'Entradas' : 'Saídas'}
-              />
-              <Bar 
-                dataKey="entradas" 
-                fill="#10b981" 
-                radius={[0, 8, 8, 0]}
-                name="entradas"
-              />
-              <Bar 
-                dataKey="saidas" 
-                fill="#ef4444" 
-                radius={[0, 8, 8, 0]}
-                name="saidas"
-              />
-            </BarChart>
-          </ResponsiveContainer>
-        )}
-      </div>
-
-      {/* Tabela - Dados por Classificação */}
+      {/* CARD 1: Tabela - Dados por Classificação (PRIMEIRO) */}
       <div style={{
         backgroundColor: 'white',
         borderRadius: '16px',
@@ -1438,6 +1365,79 @@ export default function FluxoCaixaRealizadoPage() {
               </tbody>
             </table>
           </div>
+        )}
+      </div>
+
+      {/* CARD 2: Gráfico - Entradas e Saídas por Classificação (SEGUNDO) */}
+      <div style={{
+        backgroundColor: 'white',
+        borderRadius: '16px',
+        padding: '24px',
+        marginBottom: '24px',
+        boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)'
+      }}>
+        <h2 style={{
+          fontSize: '18px',
+          fontWeight: '600',
+          color: '#374151',
+          marginBottom: '24px'
+        }}>
+          Entradas e Saídas por Classificação
+        </h2>
+
+        {dadosGrafico.length === 0 ? (
+          <div style={{
+            padding: '48px',
+            textAlign: 'center',
+            color: '#9ca3af',
+            fontSize: '14px'
+          }}>
+            Sem dados para exibir
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height={500}>
+            <BarChart data={dadosGrafico} layout="vertical">
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+              <XAxis 
+                type="number"
+                stroke="#6b7280"
+                style={{ fontSize: '12px' }}
+                tickFormatter={(value) => formatCurrencyBRL(value)}
+              />
+              <YAxis 
+                type="category"
+                dataKey="classificacao"
+                stroke="#6b7280"
+                style={{ fontSize: '12px' }}
+                width={150}
+              />
+              <Tooltip 
+                formatter={(value: number) => formatCurrencyBRL(value)}
+                contentStyle={{
+                  backgroundColor: 'white',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: '8px',
+                  fontSize: '13px'
+                }}
+              />
+              <Legend 
+                wrapperStyle={{ fontSize: '13px', paddingTop: '16px' }}
+                formatter={(value) => value === 'entradas' ? 'Entradas' : 'Saídas'}
+              />
+              <Bar 
+                dataKey="entradas" 
+                fill="#10b981" 
+                radius={[0, 8, 8, 0]}
+                name="entradas"
+              />
+              <Bar 
+                dataKey="saidas" 
+                fill="#ef4444" 
+                radius={[0, 8, 8, 0]}
+                name="saidas"
+              />
+            </BarChart>
+          </ResponsiveContainer>
         )}
       </div>
 
