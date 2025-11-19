@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 import { formatDate } from '@/lib/utils'
-import { Plus, Pencil, Trash2, Search, CheckCircle, AlertTriangle, XCircle, X } from 'lucide-react'
+import { Plus, Pencil, Trash2, Search, CheckCircle, AlertTriangle, XCircle, X, RefreshCw, ChevronDown } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
@@ -192,6 +192,11 @@ export default function LancamentosPage() {
   const [selectedContraparteFilter, setSelectedContraparteFilter] = useState<string>('')
   const [dataVencimentoInicio, setDataVencimentoInicio] = useState('')
   const [dataVencimentoFim, setDataVencimentoFim] = useState('')
+
+  // Estados para combobox de contraparte
+  const [contraparteSearchTerm, setContraparteSearchTerm] = useState('')
+  const [showContraparteDropdown, setShowContraparteDropdown] = useState(false)
+  const [contraparteNomeExibicao, setContraparteNomeExibicao] = useState('')
 
   // Retenções
   const [retencoes, setRetencoes] = useState<Retencao[]>([])
@@ -485,8 +490,6 @@ export default function LancamentosPage() {
     selectedEmpresaFilter,
     selectedProjetoFilter,
     selectedContraparteFilter,
-    dataVencimentoInicio,
-    dataVencimentoFim
   ])
 
   useEffect(() => {
@@ -511,10 +514,48 @@ export default function LancamentosPage() {
     }
   }, [selectedProjetoId, setValue])
 
+  // Fechar dropdown ao clicar fora
+  useEffect(() => {
+    const handleClickOutside = () => setShowContraparteDropdown(false)
+    if (showContraparteDropdown) {
+      document.addEventListener('click', handleClickOutside)
+      return () => document.removeEventListener('click', handleClickOutside)
+    }
+  }, [showContraparteDropdown])
+
   const handleLoadMore = () => {
     const nextPage = page + 1
     setPage(nextPage)
     loadLancamentos(nextPage, true)
+  }
+
+  const handleAtualizar = () => {
+    setPage(0)
+    loadLancamentos(0, false)
+  }
+
+  // Funções do combobox de contraparte
+  const contrapartesFiltradas = contrapartes.filter(c => 
+    c.nome.toLowerCase().includes(contraparteSearchTerm.toLowerCase()) ||
+    (c.apelido && c.apelido.toLowerCase().includes(contraparteSearchTerm.toLowerCase()))
+  )
+
+  const handleSelectContraparte = (contraparteId: string, contraparteNome: string) => {
+    setSelectedContraparteFilter(contraparteId)
+    setContraparteNomeExibicao(contraparteNome)
+    setContraparteSearchTerm(contraparteNome)
+    setShowContraparteDropdown(false)
+    setPage(0)
+    loadLancamentos(0, false)
+  }
+
+  const handleClearContraparte = () => {
+    setSelectedContraparteFilter('')
+    setContraparteNomeExibicao('')
+    setContraparteSearchTerm('')
+    setShowContraparteDropdown(false)
+    setPage(0)
+    loadLancamentos(0, false)
   }
 
   const openModal = (lancamento?: Lancamento) => {
@@ -1010,6 +1051,155 @@ export default function LancamentosPage() {
                 outline: 'none'
               }}
             />
+          </div>
+
+          <div>
+            <label style={{
+              display: 'block',
+              fontSize: '13px',
+              fontWeight: '500',
+              color: '#374151',
+              marginBottom: '6px'
+            }}>
+              Contraparte
+            </label>
+            <div style={{ position: 'relative' }}>
+              <div style={{ position: 'relative' }}>
+                <input
+                  type="text"
+                  placeholder="Digite para buscar..."
+                  value={contraparteSearchTerm}
+                  onChange={(e) => {
+                    setContraparteSearchTerm(e.target.value)
+                    setShowContraparteDropdown(true)
+                  }}
+                  onFocus={() => setShowContraparteDropdown(true)}
+                  style={{
+                    width: '100%',
+                    padding: '9px 32px 9px 10px',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: '8px',
+                    fontSize: '13px',
+                    outline: 'none'
+                  }}
+                />
+                {selectedContraparteFilter && (
+                  <X
+                    size={16}
+                    onClick={handleClearContraparte}
+                    style={{
+                      position: 'absolute',
+                      right: '32px',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      color: '#9ca3af',
+                      cursor: 'pointer'
+                    }}
+                  />
+                )}
+                <ChevronDown
+                  size={16}
+                  style={{
+                    position: 'absolute',
+                    right: '10px',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    color: '#9ca3af',
+                    pointerEvents: 'none'
+                  }}
+                />
+              </div>
+              
+              {showContraparteDropdown && contrapartesFiltradas.length > 0 && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: '100%',
+                    left: 0,
+                    right: 0,
+                    backgroundColor: 'white',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: '8px',
+                    marginTop: '4px',
+                    maxHeight: '200px',
+                    overflowY: 'auto',
+                    boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
+                    zIndex: 10
+                  }}
+                  onMouseDown={(e) => e.preventDefault()}
+                >
+                  {contrapartesFiltradas.slice(0, 50).map((contraparte) => (
+                    <div
+                      key={contraparte.id}
+                      onClick={() => handleSelectContraparte(contraparte.id, contraparte.nome)}
+                      style={{
+                        padding: '8px 12px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        borderBottom: '1px solid #f3f4f6',
+                        backgroundColor: selectedContraparteFilter === contraparte.id ? '#eff6ff' : 'white'
+                      }}
+                      onMouseEnter={(e) => {
+                        if (selectedContraparteFilter !== contraparte.id) {
+                          e.currentTarget.style.backgroundColor = '#f9fafb'
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if (selectedContraparteFilter !== contraparte.id) {
+                          e.currentTarget.style.backgroundColor = 'white'
+                        }
+                      }}
+                    >
+                      <div style={{ fontWeight: '500', color: '#111827' }}>
+                        {contraparte.nome}
+                      </div>
+                      {contraparte.apelido && (
+                        <div style={{ fontSize: '12px', color: '#6b7280' }}>
+                          {contraparte.apelido}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <label style={{
+              display: 'block',
+              fontSize: '13px',
+              fontWeight: '500',
+              color: '#374151',
+              marginBottom: '6px',
+              visibility: 'hidden'
+            }}>
+              Ações
+            </label>
+            <button
+              onClick={handleAtualizar}
+              style={{
+                width: '100%',
+                padding: '9px 16px',
+                backgroundColor: '#1555D6',
+                border: 'none',
+                borderRadius: '8px',
+                fontSize: '13px',
+                fontWeight: '500',
+                color: 'white',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                transition: 'all 0.2s'
+              }}
+              onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#1044b5'}
+              onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#1555D6'}
+            >
+              <RefreshCw size={16} />
+              Atualizar
+            </button>
           </div>
         </div>
       </div>

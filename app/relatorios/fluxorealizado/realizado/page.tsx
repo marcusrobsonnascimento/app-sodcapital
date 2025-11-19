@@ -58,6 +58,22 @@ interface NoHierarquico {
   liquido: number
   filhos: NoHierarquico[]
   tipo: 'grupo' | 'categoria' | 'subcategoria' | 'item'
+  lancamentos?: LancamentoDetalhado[]
+  planoContaId?: string
+  sentido?: 'Entrada' | 'Saida'
+}
+
+interface LancamentoDetalhado {
+  id: string
+  data_liquidacao: string
+  empresa_nome: string
+  projeto_nome: string
+  contraparte_nome: string
+  valor_liquido: number
+  valor_bruto: number
+  sentido: 'Entrada' | 'Saida'
+  observacoes: string
+  documento_numero: string
 }
 
 interface ItemDetalhado {
@@ -127,6 +143,7 @@ export default function FluxoCaixaRealizadoPage() {
   const [dadosClassificacao, setDadosClassificacao] = useState<ClassificacaoAgrupada[]>([])
   const [hierarquia, setHierarquia] = useState<NoHierarquico[]>([])
   const [nosExpandidos, setNosExpandidos] = useState<Set<string>>(new Set())
+  const [lancamentosExpandidos, setLancamentosExpandidos] = useState<Set<string>>(new Set())
   
   // Filtros
   const [presetSelecionado, setPresetSelecionado] = useState<string>('ano_atual')
@@ -139,6 +156,7 @@ export default function FluxoCaixaRealizadoPage() {
   const [tipoAgrupamento, setTipoAgrupamento] = useState<'classificacao' | 'tipo_fluxo'>('classificacao')
   
   // KPIs
+  const [saldoBancarioInicial, setSaldoBancarioInicial] = useState<number>(0)
   const [totalEntradas, setTotalEntradas] = useState<number>(0)
   const [totalSaidas, setTotalSaidas] = useState<number>(0)
   const [totalLiquido, setTotalLiquido] = useState<number>(0)
@@ -152,6 +170,7 @@ export default function FluxoCaixaRealizadoPage() {
 
   // Inicializar datas ao carregar (ano atual)
   useEffect(() => {
+    loadSaldoInicial()
     const hoje = new Date()
     const inicioAno = new Date(hoje.getFullYear(), 0, 1) // 1º de janeiro do ano atual
     
@@ -250,6 +269,18 @@ export default function FluxoCaixaRealizadoPage() {
     })
   }
 
+  const toggleLancamentos = (chave: string) => {
+    setLancamentosExpandidos(prev => {
+      const novo = new Set(prev)
+      if (novo.has(chave)) {
+        novo.delete(chave)
+      } else {
+        novo.add(chave)
+      }
+      return novo
+    })
+  }
+
   const loadEmpresas = async () => {
     try {
       const { data, error } = await supabase
@@ -264,6 +295,24 @@ export default function FluxoCaixaRealizadoPage() {
       showToast('Erro ao carregar empresas', 'error')
     }
   }
+
+  const loadSaldoInicial = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('bancos_contas')
+        .select('saldo_inicial')
+        .eq('ativo', true)
+
+      if (error) throw error
+
+      const soma = (data || []).reduce((sum, conta) => sum + (conta.saldo_inicial || 0), 0)
+      setSaldoBancarioInicial(soma)
+    } catch (err) {
+      console.error('Erro ao carregar saldo inicial:', err)
+      setSaldoBancarioInicial(0)
+    }
+  }
+
 
   const loadProjetos = async (empresaId?: string) => {
     try {
@@ -501,7 +550,8 @@ export default function FluxoCaixaRealizadoPage() {
                   saidas: 0,
                   liquido: 0,
                   filhos: [],
-                  tipo: 'item'
+                  tipo: 'item',
+                  lancamentos: []
                 }
                 no3.filhos.push(no4)
               }
@@ -512,6 +562,21 @@ export default function FluxoCaixaRealizadoPage() {
                 no4.saidas += valor
               }
               no4.liquido = no4.entradas - no4.saidas
+              
+              // Adicionar lançamento detalhado
+              if (!no4.lancamentos) no4.lancamentos = []
+              no4.lancamentos.push({
+                id: lanc.id,
+                data_liquidacao: lanc.data_liquidacao,
+                empresa_nome: empresa?.nome || 'N/A',
+                projeto_nome: projeto?.nome || 'N/A',
+                contraparte_nome: contraparte?.nome || 'N/A',
+                valor_liquido: lanc.valor_liquido || lanc.valor_bruto,
+                valor_bruto: lanc.valor_bruto,
+                sentido: lanc.sentido,
+                observacoes: lanc.observacoes || '',
+                documento_numero: lanc.documento_numero || ''
+              })
             }
           }
         }
@@ -537,7 +602,15 @@ export default function FluxoCaixaRealizadoPage() {
       
       setTotalEntradas(entradas)
       setTotalSaidas(saidas)
-      setTotalLiquido(entradas - saidas)
+      
+      // Buscar saldo inicial para calcular resultado líquido
+      const { data: contasData } = await supabase
+        .from('bancos_contas')
+        .select('saldo_inicial')
+        .eq('ativo', true)
+      
+      const saldoInicial = (contasData || []).reduce((sum, conta) => sum + (conta.saldo_inicial || 0), 0)
+      setTotalLiquido(saldoInicial + entradas - saidas)
 
     } catch (err) {
       console.error('Erro ao carregar dados realizados:', err)
@@ -1113,17 +1186,21 @@ export default function FluxoCaixaRealizadoPage() {
       {/* KPIs */}
       <div style={{
         display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
         gap: '20px',
         marginBottom: '24px'
       }}>
-        {/* Total Entradas */}
+        {/* Saldo Bancário Inicial */}
         <div style={{
           backgroundColor: 'white',
           borderRadius: '16px',
-          padding: '24px',
+          padding: '18px 16px',
           boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)',
-          borderTop: '4px solid #10b981'
+          borderTop: '4px solid #8b5cf6',
+          minHeight: '130px',
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'space-between'
         }}>
           <div style={{
             display: 'flex',
@@ -1131,12 +1208,58 @@ export default function FluxoCaixaRealizadoPage() {
             alignItems: 'flex-start',
             marginBottom: '8px'
           }}>
-            <span style={{ fontSize: '14px', fontWeight: '500', color: '#6b7280' }}>
+            <span style={{ fontSize: 'clamp(12px, 1.5vw, 14px)', fontWeight: '500', color: '#6b7280' }}>
+              Saldo Bancário Inicial
+            </span>
+            <DollarSign size={24} color="#8b5cf6" />
+          </div>
+          <div style={{ 
+            fontSize: 'clamp(14px, 2.5vw, 22px)', 
+            fontWeight: '700', 
+            color: '#7c3aed',
+            wordBreak: 'break-word',
+            lineHeight: '1.3',
+            minHeight: '50px',
+            display: 'flex',
+            alignItems: 'center'
+          }}>
+            {formatCurrencyBRL(saldoBancarioInicial)}
+          </div>
+        </div>
+
+        {/* Total Entradas */}
+        <div style={{
+          backgroundColor: 'white',
+          borderRadius: '16px',
+          padding: '18px 16px',
+          boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)',
+          borderTop: '4px solid #10b981',
+          minHeight: '130px',
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'space-between'
+        }}>
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'flex-start',
+            marginBottom: '8px'
+          }}>
+            <span style={{ fontSize: 'clamp(12px, 1.5vw, 14px)', fontWeight: '500', color: '#6b7280' }}>
               Total Entradas
             </span>
             <ArrowUpCircle size={24} color="#10b981" />
           </div>
-          <div style={{ fontSize: '32px', fontWeight: '700', color: '#059669' }}>
+          <div style={{ 
+            fontSize: 'clamp(14px, 2.5vw, 22px)', 
+            fontWeight: '700', 
+            color: '#059669',
+            wordBreak: 'break-word',
+            lineHeight: '1.3',
+            minHeight: '50px',
+            display: 'flex',
+            alignItems: 'center'
+          }}>
             {formatCurrencyBRL(totalEntradas)}
           </div>
         </div>
@@ -1145,9 +1268,13 @@ export default function FluxoCaixaRealizadoPage() {
         <div style={{
           backgroundColor: 'white',
           borderRadius: '16px',
-          padding: '24px',
+          padding: '18px 16px',
           boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)',
-          borderTop: '4px solid #ef4444'
+          borderTop: '4px solid #ef4444',
+          minHeight: '130px',
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'space-between'
         }}>
           <div style={{
             display: 'flex',
@@ -1155,12 +1282,21 @@ export default function FluxoCaixaRealizadoPage() {
             alignItems: 'flex-start',
             marginBottom: '8px'
           }}>
-            <span style={{ fontSize: '14px', fontWeight: '500', color: '#6b7280' }}>
+            <span style={{ fontSize: 'clamp(12px, 1.5vw, 14px)', fontWeight: '500', color: '#6b7280' }}>
               Total Saídas
             </span>
             <ArrowDownCircle size={24} color="#ef4444" />
           </div>
-          <div style={{ fontSize: '32px', fontWeight: '700', color: '#dc2626' }}>
+          <div style={{ 
+            fontSize: 'clamp(14px, 2.5vw, 22px)', 
+            fontWeight: '700', 
+            color: '#dc2626',
+            wordBreak: 'break-word',
+            lineHeight: '1.3',
+            minHeight: '50px',
+            display: 'flex',
+            alignItems: 'center'
+          }}>
             {formatCurrencyBRL(totalSaidas)}
           </div>
         </div>
@@ -1169,9 +1305,13 @@ export default function FluxoCaixaRealizadoPage() {
         <div style={{
           backgroundColor: 'white',
           borderRadius: '16px',
-          padding: '24px',
+          padding: '18px 16px',
           boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)',
-          borderTop: `4px solid ${totalLiquido >= 0 ? '#1555D6' : '#ef4444'}`
+          borderTop: `4px solid ${totalLiquido >= 0 ? '#1555D6' : '#ef4444'}`,
+          minHeight: '130px',
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'space-between'
         }}>
           <div style={{
             display: 'flex',
@@ -1179,15 +1319,20 @@ export default function FluxoCaixaRealizadoPage() {
             alignItems: 'flex-start',
             marginBottom: '8px'
           }}>
-            <span style={{ fontSize: '14px', fontWeight: '500', color: '#6b7280' }}>
-              Resultado Líquido
+            <span style={{ fontSize: 'clamp(12px, 1.5vw, 14px)', fontWeight: '500', color: '#6b7280' }}>
+              Saldo Bancário Final
             </span>
             <Receipt size={24} color={totalLiquido >= 0 ? '#1555D6' : '#ef4444'} />
           </div>
           <div style={{ 
-            fontSize: '32px', 
+            fontSize: 'clamp(14px, 2.5vw, 22px)', 
             fontWeight: '700', 
-            color: totalLiquido >= 0 ? '#1555D6' : '#dc2626'
+            color: totalLiquido >= 0 ? '#1555D6' : '#dc2626',
+            wordBreak: 'break-word',
+            lineHeight: '1.3',
+            minHeight: '50px',
+            display: 'flex',
+            alignItems: 'center'
           }}>
             {formatCurrencyBRL(totalLiquido)}
           </div>
@@ -1358,6 +1503,126 @@ export default function FluxoCaixaRealizadoPage() {
                       no.filhos.forEach((filho, idx) => {
                         elementos.push(...renderizarNo(filho, idx, no.filhos.length, chave))
                       })
+                    }
+
+                    // Renderizar lançamentos se não tiver filhos e tiver lançamentos
+                    if (!temFilhos && no.lancamentos && no.lancamentos.length > 0) {
+                      const lancamentosEstaExpandido = lancamentosExpandidos.has(chave)
+                      
+                      // Adicionar botão para expandir lançamentos
+                      elementos.push(
+                        <tr key={`${chave}-toggle`} style={{ backgroundColor: '#f9fafb' }}>
+                          <td colSpan={4} style={{ padding: '8px 16px', paddingLeft: `${16 + (no.nivel) * 20}px` }}>
+                            <button
+                              onClick={() => toggleLancamentos(chave)}
+                              style={{
+                                background: 'none',
+                                border: '1px solid #e5e7eb',
+                                borderRadius: '6px',
+                                padding: '4px 12px',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                fontSize: '12px',
+                                color: '#6b7280',
+                                fontWeight: '500'
+                              }}
+                            >
+                              {lancamentosEstaExpandido ? (
+                                <ChevronDown size={14} style={{ color: '#1555D6' }} />
+                              ) : (
+                                <ChevronRight size={14} style={{ color: '#6b7280' }} />
+                              )}
+                              <span>{lancamentosEstaExpandido ? 'Ocultar' : 'Ver'} {no.lancamentos.length} lançamento{no.lancamentos.length !== 1 ? 's' : ''}</span>
+                            </button>
+                          </td>
+                        </tr>
+                      )
+
+                      // Renderizar lançamentos se expandido
+                      if (lancamentosEstaExpandido) {
+                        no.lancamentos.forEach((lanc, lancIdx) => {
+                          elementos.push(
+                            <tr 
+                              key={`${chave}-lanc-${lancIdx}`} 
+                              style={{ 
+                                backgroundColor: '#fafafa',
+                                borderBottom: lancIdx < no.lancamentos!.length - 1 ? '1px solid #f3f4f6' : 'none'
+                              }}
+                            >
+                              <td style={{ 
+                                padding: '10px 16px', 
+                                paddingLeft: `${16 + (no.nivel + 1) * 20}px`,
+                                fontSize: '12px',
+                                color: '#6b7280'
+                              }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <span style={{ fontWeight: '500', color: '#374151' }}>
+                                      {formatDateBR(lanc.data_liquidacao)}
+                                    </span>
+                                    {lanc.documento_numero && (
+                                      <span style={{ 
+                                        backgroundColor: '#e0e7ff', 
+                                        color: '#4338ca',
+                                        padding: '2px 8px',
+                                        borderRadius: '4px',
+                                        fontSize: '11px',
+                                        fontWeight: '500'
+                                      }}>
+                                        {lanc.documento_numero}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div style={{ fontSize: '11px', color: '#9ca3af' }}>
+                                    <span>{lanc.empresa_nome}</span>
+                                    {lanc.projeto_nome !== 'N/A' && <span> • {lanc.projeto_nome}</span>}
+                                    <span> • {lanc.contraparte_nome}</span>
+                                  </div>
+                                  {lanc.observacoes && (
+                                    <div style={{ 
+                                      fontSize: '11px', 
+                                      color: '#6b7280',
+                                      fontStyle: 'italic',
+                                      marginTop: '2px'
+                                    }}>
+                                      {lanc.observacoes}
+                                    </div>
+                                  )}
+                                </div>
+                              </td>
+                              <td style={{ 
+                                padding: '10px 16px', 
+                                textAlign: 'right',
+                                fontSize: '12px',
+                                fontWeight: '500',
+                                color: lanc.sentido === 'Entrada' ? '#059669' : '#9ca3af'
+                              }}>
+                                {lanc.sentido === 'Entrada' ? formatCurrencyBRL(lanc.valor_liquido) : '-'}
+                              </td>
+                              <td style={{ 
+                                padding: '10px 16px', 
+                                textAlign: 'right',
+                                fontSize: '12px',
+                                fontWeight: '500',
+                                color: lanc.sentido === 'Saida' ? '#dc2626' : '#9ca3af'
+                              }}>
+                                {lanc.sentido === 'Saida' ? formatCurrencyBRL(lanc.valor_liquido) : '-'}
+                              </td>
+                              <td style={{ 
+                                padding: '10px 16px', 
+                                textAlign: 'right',
+                                fontSize: '12px',
+                                fontWeight: '600',
+                                color: lanc.sentido === 'Entrada' ? '#1555D6' : '#dc2626'
+                              }}>
+                                {lanc.sentido === 'Entrada' ? '+' : '-'}{formatCurrencyBRL(Math.abs(lanc.valor_liquido))}
+                              </td>
+                            </tr>
+                          )
+                        })
+                      }
                     }
 
                     return elementos
