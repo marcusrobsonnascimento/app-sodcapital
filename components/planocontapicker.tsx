@@ -506,6 +506,9 @@ export default function PlanoContaPicker({
               }}
             >
               {todasContas.find((c) => c.id === value)?.codigo_conta}
+              {todasContas.find((c) => c.id === value)?.classificacao && 
+                ` - ${todasContas.find((c) => c.id === value)?.classificacao}`
+              }
             </span>
           </div>
           <div>

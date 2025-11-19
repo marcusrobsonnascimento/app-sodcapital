@@ -72,11 +72,10 @@ const menuItems: MenuItem[] = [
     ]
   },
   {
-    title: 'Relatórios',
+    title: 'Relatórios Financeiros',
     icon: BarChart3,
     children: [
-      { title: 'DRE', icon: FileBarChart, href: '/relatorios/dre' },
-      { title: 'Fluxo de Caixa', icon: TrendingUp, href: '/relatorios/fluxo' },
+      { title: 'Fluxo de Caixa Projetado', icon: TrendingUp, href: '/relatorios/fluxo' },
       { 
         title: 'Fluxo de Caixa Realizado', 
         icon: TrendingUp,
@@ -85,6 +84,13 @@ const menuItems: MenuItem[] = [
           { title: 'Mensal Realizado', icon: TrendingUp, href: '/relatorios/fluxorealizado/mensal' }
         ]
       },
+    ]
+  },
+  {
+    title: 'Relatórios Controladoria',
+    icon: FileBarChart,
+    children: [
+      { title: 'DRE', icon: FileBarChart, href: '/relatorios/dre' },
       { title: 'Painel de PL', icon: PieChart, href: '/relatorios/pl' }
     ]
   },

@@ -39,7 +39,7 @@ interface BancoConta {
   numero_conta: string
   agencia: string
   nome_banco?: string
-  banco?: string
+  banco?: { nome: string }
   digito_conta?: string
   tipo_conta: string
 }
@@ -333,9 +333,14 @@ export default function LancamentosPage() {
   const loadBancosContas = async (empresaId: string) => {
     const { data, error } = await supabase
       .from('bancos_contas')
-      .select('*')
+      .select(`
+        *,
+        banco:bancos(nome)
+      `)
       .eq('empresa_id', empresaId)
       .eq('ativo', true)
+      .eq('tipo_conta', 'CC')
+      .order('banco_nome')
     if (error) {
       console.error('Erro ao carregar contas bancárias:', error)
       showToast('Erro ao carregar contas bancárias', 'error')
@@ -1852,7 +1857,7 @@ export default function LancamentosPage() {
                       <option value="">Selecione</option>
                       {bancosContas.map((bc) => (
                         <option key={bc.id} value={bc.id}>
-                          {bc.nome_banco || 'Banco'} - Ag: {bc.agencia} - Conta: {bc.numero_conta}
+                          {bc.banco_nome || bc.banco?.nome || 'Banco'} - Ag: {bc.agencia} - Conta: {bc.numero_conta}
                         </option>
                       ))}
                     </select>
