@@ -59,7 +59,16 @@ const menuItems: MenuItem[] = [
     icon: DollarSign,
     children: [
       { title: 'Lançamentos', icon: DollarSign, href: '/financeiro/lancamentos' },
-      { title: 'Conciliação', icon: GitCompare, href: '/financeiro/conciliacao' }
+      { title: 'Conciliação', icon: GitCompare, href: '/financeiro/conciliacao' },
+      { 
+        title: 'Movimentação Bancária', 
+        icon: Landmark,
+        children: [
+          { title: 'Movimentos', icon: DollarSign, href: '/financeiro/movimentos' },
+          { title: 'Transferências', icon: GitCompare, href: '/financeiro/transferencias' },
+          { title: 'Fechamento Diário', icon: FileSignature, href: '/financeiro/fechamento' }
+        ]
+      }
     ]
   },
   {

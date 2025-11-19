@@ -74,6 +74,7 @@ interface DadoGrafico {
   classificacao: string
   entradas: number
   saidas: number
+  liquido: number
 }
 
 // Função para formatar moeda BRL
@@ -677,8 +678,49 @@ export default function FluxoCaixaRealizadoPage() {
   const dadosGrafico: DadoGrafico[] = hierarquia.map(d => ({
     classificacao: d.nome.length > 20 ? d.nome.substring(0, 20) + '...' : d.nome,
     entradas: d.entradas,
-    saidas: d.saidas
+    saidas: d.saidas,
+    liquido: d.liquido
   }))
+
+  // Tooltip customizado para mostrar entradas, saídas e líquido
+  const CustomTooltip = ({ active, payload }: any) => {
+    if (active && payload && payload.length) {
+      const entradas = payload.find((p: any) => p.dataKey === 'entradas')?.value || 0
+      const saidas = payload.find((p: any) => p.dataKey === 'saidas')?.value || 0
+      const liquido = entradas - saidas
+      
+      return (
+        <div style={{
+          backgroundColor: 'white',
+          border: '1px solid #e5e7eb',
+          borderRadius: '8px',
+          padding: '12px',
+          fontSize: '13px'
+        }}>
+          <p style={{ fontWeight: '600', marginBottom: '8px', color: '#374151' }}>
+            {payload[0]?.payload?.classificacao}
+          </p>
+          <p style={{ color: '#059669', margin: '4px 0' }}>
+            entradas : {formatCurrencyBRL(entradas)}
+          </p>
+          <p style={{ color: '#dc2626', margin: '4px 0' }}>
+            saídas : {formatCurrencyBRL(saidas)}
+          </p>
+          <p style={{ 
+            color: liquido >= 0 ? '#1555D6' : '#dc2626', 
+            margin: '4px 0',
+            fontWeight: '600',
+            borderTop: '1px solid #e5e7eb',
+            paddingTop: '8px',
+            marginTop: '8px'
+          }}>
+            Saldo Líquido : {formatCurrencyBRL(liquido)}
+          </p>
+        </div>
+      )
+    }
+    return null
+  }
 
   return (
     <div style={{ padding: '24px', maxWidth: '1800px', margin: '0 auto' }}>
@@ -1411,15 +1453,7 @@ export default function FluxoCaixaRealizadoPage() {
                 style={{ fontSize: '12px' }}
                 width={150}
               />
-              <Tooltip 
-                formatter={(value: number) => formatCurrencyBRL(value)}
-                contentStyle={{
-                  backgroundColor: 'white',
-                  border: '1px solid #e5e7eb',
-                  borderRadius: '8px',
-                  fontSize: '13px'
-                }}
-              />
+              <Tooltip content={<CustomTooltip />} />
               <Legend 
                 wrapperStyle={{ fontSize: '13px', paddingTop: '16px' }}
                 formatter={(value) => value === 'entradas' ? 'Entradas' : 'Saídas'}
