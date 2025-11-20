@@ -176,6 +176,7 @@ export default function LancamentosPage() {
   const [showModal, setShowModal] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [isLancamentoPago, setIsLancamentoPago] = useState(false)
+  const [statusOriginal, setStatusOriginal] = useState<'ABERTO' | 'PAGO_RECEBIDO' | 'CANCELADO' | null>(null)
 
   // Estados para paginação infinita
   const [page, setPage] = useState(0)
@@ -570,6 +571,7 @@ export default function LancamentosPage() {
       // Definir se o lançamento está pago
       const isPago = lancamento.status === 'PAGO_RECEBIDO'
       setIsLancamentoPago(isPago)
+      setStatusOriginal(lancamento.status)
 
       // Carregar retenções
       loadRetencoes(lancamento.id)
@@ -597,6 +599,7 @@ export default function LancamentosPage() {
     } else {
       setEditingId(null)
       setIsLancamentoPago(false)
+      setStatusOriginal(null)
       setRetencoes([])
       setValorBruto(0)
       setValorBrutoFormatado('')
@@ -610,6 +613,7 @@ export default function LancamentosPage() {
     setShowModal(false)
     setEditingId(null)
     setIsLancamentoPago(false)
+    setStatusOriginal(null)
     setRetencoes([])
     setValorBruto(0)
     setValorBrutoFormatado('')
@@ -676,7 +680,7 @@ export default function LancamentosPage() {
       documento_tipo: formData.documento_tipo || null,
       documento_numero: formData.documento_numero || null,
       observacoes: formData.observacoes || null,
-      status: 'ABERTO',
+      status: editingId && statusOriginal === 'PAGO_RECEBIDO' ? 'PAGO_RECEBIDO' : 'ABERTO',
       sentido: formData.tipo === 'Entrada' ? 'Entrada' : 'Saida'
     }
 
@@ -829,7 +833,7 @@ export default function LancamentosPage() {
   }
 
   return (
-    <div style={{ padding: '24px', maxWidth: '1800px', margin: '0 auto' }}>
+    <div style={{ padding: '24px', maxWidth: '100%', width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
       <div style={{
         display: 'flex',
         justifyContent: 'space-between',
@@ -1217,7 +1221,7 @@ export default function LancamentosPage() {
         boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)'
       }}>
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <table style={{ width: '100%', minWidth: '1200px', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ backgroundColor: '#f9fafb', borderBottom: '1px solid #e5e7eb' }}>
                 <th style={{
