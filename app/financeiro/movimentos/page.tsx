@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
-import { Plus, Pencil, Trash2, Search, DollarSign, TrendingUp, TrendingDown, Calendar } from 'lucide-react'
+import { Plus, Pencil, Trash2, Search, DollarSign, TrendingUp, TrendingDown, Calendar, AlertTriangle } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
@@ -82,6 +82,10 @@ export default function MovimentosPage() {
   const [dataFinal, setDataFinal] = useState<string>('')
   const [toasts, setToasts] = useState<Toast[]>([])
   const [toastIdCounter, setToastIdCounter] = useState(0)
+  const [deleteConfirm, setDeleteConfirm] = useState<{ show: boolean; id: string | null }>({
+    show: false,
+    id: null
+  })
   
   // Estados para paginação
   const [currentPage, setCurrentPage] = useState(0)
@@ -416,8 +420,6 @@ export default function MovimentosPage() {
   }
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Tem certeza que deseja excluir este movimento?')) return
-
     try {
       // Buscar o movimento para validar fechamento
       const { data: movimento, error: fetchError } = await supabase
@@ -438,6 +440,7 @@ export default function MovimentosPage() {
 
       if (ultimaData && movimento.data_movimento <= ultimaData) {
         showToast(`Não é permitido excluir movimentos em data igual ou anterior ao último fechamento (${new Date(ultimaData).toLocaleDateString('pt-BR')})`, 'warning')
+        setDeleteConfirm({ show: false, id: null })
         return
       }
 
@@ -449,10 +452,12 @@ export default function MovimentosPage() {
       if (error) throw error
 
       showToast('Movimento excluído com sucesso!', 'success')
+      setDeleteConfirm({ show: false, id: null })
       loadMovimentos()
     } catch (err: any) {
       console.error('Erro ao excluir movimento:', err)
       showToast(err?.message || 'Erro ao excluir movimento bancário', 'error')
+      setDeleteConfirm({ show: false, id: null })
     }
   }
 
@@ -1106,7 +1111,7 @@ export default function MovimentosPage() {
                               <Pencil style={{ width: '16px', height: '16px', color: '#6b7280' }} />
                             </button>
                             <button
-                              onClick={() => handleDelete(movimento.id)}
+                              onClick={() => setDeleteConfirm({ show: true, id: movimento.id })}
                               style={{
                                 padding: '8px',
                                 backgroundColor: '#f3f4f6',
@@ -1578,6 +1583,116 @@ export default function MovimentosPage() {
                 </div>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Confirmação de Exclusão */}
+      {deleteConfirm.show && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            backdropFilter: 'blur(4px)'
+          }}
+          onClick={() => setDeleteConfirm({ show: false, id: null })}
+        >
+          <div
+            style={{
+              backgroundColor: 'white',
+              borderRadius: '16px',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+              padding: '32px',
+              width: '100%',
+              maxWidth: '450px',
+              margin: '16px',
+              animation: 'scaleIn 0.2s ease-out'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{
+              width: '56px',
+              height: '56px',
+              margin: '0 auto 20px',
+              borderRadius: '50%',
+              backgroundColor: '#fee2e2',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}>
+              <AlertTriangle style={{ width: '28px', height: '28px', color: '#ef4444' }} />
+            </div>
+
+            <h2 style={{
+              fontSize: '20px',
+              fontWeight: '700',
+              color: '#111827',
+              marginBottom: '12px',
+              textAlign: 'center'
+            }}>
+              Confirmar Exclusão
+            </h2>
+            <p style={{
+              fontSize: '14px',
+              color: '#6b7280',
+              marginBottom: '24px',
+              textAlign: 'center',
+              lineHeight: '1.5'
+            }}>
+              Tem certeza que deseja excluir este movimento? Esta ação não pode ser desfeita.
+            </p>
+
+            <div style={{
+              display: 'flex',
+              gap: '12px'
+            }}>
+              <button
+                onClick={() => setDeleteConfirm({ show: false, id: null })}
+                style={{
+                  flex: 1,
+                  padding: '12px 24px',
+                  backgroundColor: 'white',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: '8px',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  color: '#374151',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+                onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#f9fafb'}
+                onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'white'}
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => deleteConfirm.id && handleDelete(deleteConfirm.id)}
+                style={{
+                  flex: 1,
+                  padding: '12px 24px',
+                  backgroundColor: '#ef4444',
+                  border: 'none',
+                  borderRadius: '8px',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  color: 'white',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+                onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#dc2626'}
+                onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#ef4444'}
+              >
+                Excluir
+              </button>
+            </div>
           </div>
         </div>
       )}

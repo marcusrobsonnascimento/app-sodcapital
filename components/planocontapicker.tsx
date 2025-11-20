@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 
 interface PlanoContaFluxo {
@@ -49,6 +49,11 @@ export default function PlanoContaPicker({
 }: PlanoContaPickerProps) {
   const [todasContas, setTodasContas] = useState<PlanoContaFluxo[]>([])
   const [loading, setLoading] = useState(true)
+  
+  // Ref para rastrear se a mudança de value é interna (navegação) ou externa (edição/reset)
+  const isInternalChange = useRef(false)
+  // Ref para rastrear se estamos em modo de navegação (não resetar ao trocar categoria/grupo)
+  const isNavigating = useRef(false)
 
   // Estados das seleções - REMOVIDO tipoFluxoSelecionado
   const [grupoSelecionado, setGrupoSelecionado] = useState<string>('')
@@ -74,15 +79,28 @@ export default function PlanoContaPicker({
 
   // Quando value mudar externamente (edição), preencher os campos E carregar as opções
   useEffect(() => {
+    // Se é mudança interna (navegação nas dropdowns), ignorar
+    if (isInternalChange.current) {
+      isInternalChange.current = false
+      return
+    }
+    
     if (value && todasContas.length > 0) {
       const conta = todasContas.find(c => c.id === value)
       if (conta) {
-        setGrupoSelecionado(conta.grupo)
-        setCategoriaSelecionada(conta.categoria)
-        setSubcategoriaSelecionada(conta.subcategoria)
-        carregarOpcoesParaEdicao(conta)
+        // Verificar se já está setado para evitar loops
+        if (grupoSelecionado !== conta.grupo || 
+            categoriaSelecionada !== conta.categoria || 
+            subcategoriaSelecionada !== conta.subcategoria) {
+          isNavigating.current = false // Reset navegação ao carregar nova conta
+          setGrupoSelecionado(conta.grupo)
+          setCategoriaSelecionada(conta.categoria)
+          setSubcategoriaSelecionada(conta.subcategoria)
+          carregarOpcoesParaEdicao(conta)
+        }
       }
-    } else if (!value) {
+    } else if (!value && !isNavigating.current && grupoSelecionado) {
+      // Só resetar se value está vazio, não estamos navegando E havia algo selecionado antes
       resetarSelecoes()
     }
   }, [value, todasContas])
@@ -136,6 +154,7 @@ export default function PlanoContaPicker({
   }
 
   const resetarSelecoes = () => {
+    isNavigating.current = false // Reset modo navegação
     setGrupoSelecionado('')
     setCategoriaSelecionada('')
     setSubcategoriaSelecionada('')
@@ -170,14 +189,17 @@ export default function PlanoContaPicker({
   }
 
   const handleGrupoChange = (grupo: string) => {
+    isNavigating.current = true // Ativar modo navegação
     setGrupoSelecionado(grupo)
     setCategoriaSelecionada('')
     setSubcategoriaSelecionada('')
+    isInternalChange.current = true
     onChange('')
 
     if (!grupo) {
       setCategoriasDisponiveis([])
       setSubcategoriasDisponiveis([])
+      isNavigating.current = false // Desativar se limpou
       return
     }
 
@@ -197,12 +219,17 @@ export default function PlanoContaPicker({
   }
 
   const handleCategoriaChange = (categoria: string) => {
+    isNavigating.current = true // Ativar modo navegação
     setCategoriaSelecionada(categoria)
     setSubcategoriaSelecionada('')
+    
+    // Marcar como mudança interna para evitar reset no useEffect
+    isInternalChange.current = true
     onChange('')
 
     if (!categoria) {
       setSubcategoriasDisponiveis([])
+      isNavigating.current = false // Desativar se limpou
       return
     }
 
@@ -227,6 +254,7 @@ export default function PlanoContaPicker({
 
     if (!subcategoria) {
       onChange('')
+      isNavigating.current = false // Desativar se limpou
       return
     }
 
@@ -258,6 +286,7 @@ export default function PlanoContaPicker({
     }
 
     if (conta) {
+      isNavigating.current = false // Desativar modo navegação - seleção completa
       onChange(conta.id)
     }
   }

@@ -124,6 +124,14 @@ const formatDateForInput = (date: string | null): string => {
   return date.split('T')[0]
 }
 
+// Função para formatar data para exibição sem aplicar timezone
+const formatDateLocal = (dateString: string | null): string => {
+  if (!dateString) return ''
+  // Parse direto da string no formato YYYY-MM-DD para evitar conversão de timezone
+  const [year, month, day] = dateString.split('T')[0].split('-')
+  return `${day}/${month}/${year}`
+}
+
 // Schema de validação - projeto opcional quando tipo_fluxo é Corporativo
 const lancamentoSchema = z.object({
   tipo: z.enum(['Entrada', 'Saida'], { required_error: 'Tipo é obrigatório' }),
@@ -688,7 +696,11 @@ export default function LancamentosPage() {
         query = query.gte('data_vencimento', dataVencimentoInicio)
       }
       if (dataVencimentoFim) {
-        query = query.lte('data_vencimento', dataVencimentoFim)
+        // Usar manipulação de string para evitar problemas de timezone
+        const [year, month, day] = dataVencimentoFim.split('-').map(Number)
+        const proximoDia = new Date(Date.UTC(year, month - 1, day + 1))
+        const proximoDiaFormatado = proximoDia.toISOString().split('T')[0]
+        query = query.lt('data_vencimento', proximoDiaFormatado)
       }
 
       // Aplicar range apenas se não tiver busca de texto
@@ -1072,8 +1084,10 @@ export default function LancamentosPage() {
     }
   }
 
-  const handleRefresh = () => {
-    fetchLancamentos(true)
+  const handleRefresh = async () => {
+    setLoading(true)
+    await fetchLancamentos(true)
+    setLoading(false)
   }
 
   const handleClearFilters = () => {
@@ -1586,26 +1600,32 @@ export default function LancamentosPage() {
             </button>
             <button
               onClick={handleRefresh}
+              disabled={loading}
               style={{
                 padding: '8px 16px',
-                backgroundColor: '#1555D6',
+                backgroundColor: loading ? '#9ca3af' : '#1555D6',
                 color: 'white',
                 border: 'none',
                 borderRadius: '8px',
                 fontSize: '11px',
                 fontWeight: '600',
-                cursor: 'pointer',
+                cursor: loading ? 'not-allowed' : 'pointer',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: '6px',
-                transition: 'all 0.2s'
+                transition: 'all 0.2s',
+                opacity: loading ? 0.7 : 1
               }}
-              onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#1044b5'}
-              onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#1555D6'}
+              onMouseOver={(e) => {
+                if (!loading) e.currentTarget.style.backgroundColor = '#1044b5'
+              }}
+              onMouseOut={(e) => {
+                if (!loading) e.currentTarget.style.backgroundColor = '#1555D6'
+              }}
             >
-              <RefreshCw size={13} />
-              Atualizar
+              <RefreshCw size={13} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
+              {loading ? 'Atualizando...' : 'Atualizar'}
             </button>
           </div>
         </div>
@@ -1844,7 +1864,7 @@ export default function LancamentosPage() {
                       color: '#6b7280',
                       whiteSpace: 'nowrap'
                     }}>
-                      {formatDate(lancamento.data_vencimento)}
+                      {formatDateLocal(lancamento.data_vencimento)}
                     </td>
                     <td style={{ padding: '10px 12px' }}>
                       <span style={{
