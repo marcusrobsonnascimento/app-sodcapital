@@ -140,10 +140,14 @@ export default function FluxoCaixaRealizadoPage() {
   const [projetos, setProjetos] = useState<Projeto[]>([])
   const [subprojetos, setSubprojetos] = useState<Projeto[]>([])
   const [bancosContas, setBancosContas] = useState<BancoConta[]>([])
+  const [contrapartes, setContrapartes] = useState<Array<{ id: string, nome: string }>>([])
   const [dadosClassificacao, setDadosClassificacao] = useState<ClassificacaoAgrupada[]>([])
   const [hierarquia, setHierarquia] = useState<NoHierarquico[]>([])
   const [nosExpandidos, setNosExpandidos] = useState<Set<string>>(new Set())
   const [lancamentosExpandidos, setLancamentosExpandidos] = useState<Set<string>>(new Set())
+  
+  // Estado para controlar tooltip do gráfico
+  const [barraAtiva, setBarraAtiva] = useState<'entradas' | 'saidas' | null>(null)
   
   // Filtros
   const [presetSelecionado, setPresetSelecionado] = useState<string>('ano_atual')
@@ -153,6 +157,7 @@ export default function FluxoCaixaRealizadoPage() {
   const [projetoSelecionado, setProjetoSelecionado] = useState<string>('')
   const [subprojetoSelecionado, setSubprojetoSelecionado] = useState<string>('')
   const [bancoContaSelecionada, setBancoContaSelecionada] = useState<string>('')
+  const [contraparteSelecionada, setContraparteSelecionada] = useState<string>('')
   const [tipoAgrupamento, setTipoAgrupamento] = useState<'classificacao' | 'tipo_fluxo'>('classificacao')
   
   // KPIs
@@ -199,6 +204,7 @@ export default function FluxoCaixaRealizadoPage() {
     const projeto = searchParams.get('projeto')
     const subprojeto = searchParams.get('subprojeto')
     const banco = searchParams.get('bancoConta')
+    const contraparte = searchParams.get('contraparte')
     
     if (preset) setPresetSelecionado(preset)
     if (inicio) setDataInicial(inicio)
@@ -207,6 +213,7 @@ export default function FluxoCaixaRealizadoPage() {
     if (projeto) setProjetoSelecionado(projeto)
     if (subprojeto) setSubprojetoSelecionado(subprojeto)
     if (banco) setBancoContaSelecionada(banco)
+    if (contraparte) setContraparteSelecionada(contraparte)
   }, [])
 
   useEffect(() => {
@@ -394,7 +401,8 @@ export default function FluxoCaixaRealizadoPage() {
             projeto_id,
             banco_conta_id,
             contraparte_id,
-            plano_conta_id
+            plano_conta_id,
+            documento_numero
           `)
           .eq('status', 'PAGO_RECEBIDO')
           .gte('data_liquidacao', dataInicial)
@@ -422,6 +430,11 @@ export default function FluxoCaixaRealizadoPage() {
           query = query.eq('banco_conta_id', bancoContaSelecionada)
         }
 
+        // Filtrar por contraparte
+        if (contraparteSelecionada) {
+          query = query.eq('contraparte_id', contraparteSelecionada)
+        }
+
         const { data: lote, error: lancError } = await query
 
         if (lancError) throw lancError
@@ -445,7 +458,31 @@ export default function FluxoCaixaRealizadoPage() {
       // Buscar dados relacionados
       const { data: empresasData } = await supabase.from('empresas').select('id, nome')
       const { data: projetosData } = await supabase.from('projetos').select('id, nome')
-      const { data: contrapartesData } = await supabase.from('contrapartes').select('id, nome')
+      
+      // Extrair IDs únicos de contrapartes dos lançamentos
+      const contrapartesIdsUnicos = Array.from(new Set(
+        lancamentos
+          .map(l => l.contraparte_id)
+          .filter(id => id != null)
+      ))
+      
+      // Buscar apenas as contrapartes que aparecem nos lançamentos
+      let contrapartesFiltradas: Array<{ id: string, nome: string }> = []
+      if (contrapartesIdsUnicos.length > 0) {
+        const { data: contrapartesData } = await supabase
+          .from('contrapartes')
+          .select('id, nome')
+          .in('id', contrapartesIdsUnicos)
+          .order('nome', { ascending: true })
+        
+        contrapartesFiltradas = contrapartesData || []
+      }
+      
+      setContrapartes(contrapartesFiltradas)
+      
+      // Buscar todas as contrapartes para uso na hierarquia
+      const { data: todasContrapartes } = await supabase.from('contrapartes').select('id, nome')
+      
       const { data: planoContasData } = await supabase
         .from('plano_contas_fluxo')
         .select('id, classificacao, tipo_fluxo, grupo, categoria, subcategoria')
@@ -459,7 +496,7 @@ export default function FluxoCaixaRealizadoPage() {
         
         const empresa = empresasData?.find(e => e.id === lanc.empresa_id)
         const projeto = projetosData?.find(p => p.id === lanc.projeto_id)
-        const contraparte = contrapartesData?.find(c => c.id === lanc.contraparte_id)
+        const contraparte = todasContrapartes?.find(c => c.id === lanc.contraparte_id)
         
         const valor = lanc.valor_liquido || lanc.valor_bruto
         const isEntrada = lanc.sentido === 'Entrada'
@@ -610,7 +647,15 @@ export default function FluxoCaixaRealizadoPage() {
         .eq('ativo', true)
       
       const saldoInicial = (contasData || []).reduce((sum, conta) => sum + (conta.saldo_inicial || 0), 0)
-      setTotalLiquido(saldoInicial + entradas - saidas)
+      
+      // Calcular líquido baseado em se há projeto selecionado
+      if (projetoSelecionado) {
+        // Se projeto selecionado: apenas Entradas - Saídas  
+        setTotalLiquido(entradas - saidas)
+      } else {
+        // Sem projeto: Saldo Inicial + Entradas - Saídas
+        setTotalLiquido(saldoInicial + entradas - saidas)
+      }
 
     } catch (err) {
       console.error('Erro ao carregar dados realizados:', err)
@@ -647,7 +692,7 @@ export default function FluxoCaixaRealizadoPage() {
     }
   }
 
-  const aplicarFiltros = () => {
+  const aplicarFiltros = async () => {
     // Validar datas
     if (!dataInicial || !dataFinal) {
       showToast('Informe a data inicial e final', 'warning')
@@ -659,18 +704,11 @@ export default function FluxoCaixaRealizadoPage() {
       return
     }
     
-    const params = new URLSearchParams()
-    params.set('preset', presetSelecionado)
-    params.set('dataInicial', dataInicial)
-    params.set('dataFinal', dataFinal)
+    // Evitar múltiplos cliques
+    if (loading) return
     
-    if (empresaSelecionada) params.set('empresa', empresaSelecionada)
-    if (projetoSelecionado) params.set('projeto', projetoSelecionado)
-    if (subprojetoSelecionado) params.set('subprojeto', subprojetoSelecionado)
-    if (bancoContaSelecionada) params.set('bancoConta', bancoContaSelecionada)
-    
-    router.push(`/relatorios/fluxorealizado/realizado?${params.toString()}`)
-    loadDadosRealizados()
+    // Apenas carregar dados sem alterar URL ou causar navegação
+    await loadDadosRealizados()
   }
 
   const limparFiltros = () => {
@@ -684,23 +722,29 @@ export default function FluxoCaixaRealizadoPage() {
     setProjetoSelecionado('')
     setSubprojetoSelecionado('')
     setBancoContaSelecionada('')
+    setContraparteSelecionada('')
     
     router.push('/relatorios/fluxorealizado/realizado')
     loadDadosRealizados()
   }
 
-  const exportarCSV = () => {
+  const formatarNumeroBR = (valor: number): string => {
+    return valor.toLocaleString('pt-BR', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    })
+  }
+
+  const exportarXLSX = () => {
     try {
-      const headers = ['Rótulo de Linha', 'Nível', 'Entradas', 'Saídas', 'Líquido']
-      
       const achatarHierarquia = (no: NoHierarquico, rows: string[][]): void => {
         const indentacao = '  '.repeat(no.nivel - 1)
         rows.push([
           `${indentacao}${no.nome}`,
           no.nivel.toString(),
-          no.entradas.toFixed(2),
-          no.saidas.toFixed(2),
-          no.liquido.toFixed(2)
+          formatarNumeroBR(no.entradas),
+          formatarNumeroBR(no.saidas),
+          formatarNumeroBR(no.liquido)
         ])
         
         no.filhos.forEach(filho => achatarHierarquia(filho, rows))
@@ -709,21 +753,64 @@ export default function FluxoCaixaRealizadoPage() {
       const rows: string[][] = []
       hierarquia.forEach(no => achatarHierarquia(no, rows))
 
-      const csv = [
-        headers.join(','),
-        ...rows.map(row => row.join(','))
-      ].join('\n')
+      // Criar HTML table para Excel com encoding UTF-8
+      let htmlTable = '<html xmlns:x="urn:schemas-microsoft-com:office:excel">'
+      htmlTable += '<head>'
+      htmlTable += '<meta charset="UTF-8">'
+      htmlTable += '<xml>'
+      htmlTable += '<x:ExcelWorkbook>'
+      htmlTable += '<x:ExcelWorksheets>'
+      htmlTable += '<x:ExcelWorksheet>'
+      htmlTable += '<x:Name>Fluxo de Caixa</x:Name>'
+      htmlTable += '<x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions>'
+      htmlTable += '</x:ExcelWorksheet>'
+      htmlTable += '</x:ExcelWorksheets>'
+      htmlTable += '</x:ExcelWorkbook>'
+      htmlTable += '</xml>'
+      htmlTable += '</head>'
+      htmlTable += '<body>'
+      htmlTable += '<table border="1">'
+      
+      // Header
+      htmlTable += '<thead><tr style="background-color: #f0f0f0; font-weight: bold;">'
+      htmlTable += '<th style="text-align: left; padding: 8px;">Rótulo de Linha</th>'
+      htmlTable += '<th style="text-align: center; padding: 8px;">Nível</th>'
+      htmlTable += '<th style="text-align: right; padding: 8px;">Entradas</th>'
+      htmlTable += '<th style="text-align: right; padding: 8px;">Saídas</th>'
+      htmlTable += '<th style="text-align: right; padding: 8px;">Líquido</th>'
+      htmlTable += '</tr></thead>'
+      
+      // Body
+      htmlTable += '<tbody>'
+      rows.forEach(row => {
+        htmlTable += '<tr>'
+        htmlTable += `<td style="text-align: left; padding: 5px;">${row[0]}</td>`
+        htmlTable += `<td style="text-align: center; padding: 5px;">${row[1]}</td>`
+        htmlTable += `<td style="text-align: right; padding: 5px;">${row[2]}</td>`
+        htmlTable += `<td style="text-align: right; padding: 5px;">${row[3]}</td>`
+        htmlTable += `<td style="text-align: right; padding: 5px;">${row[4]}</td>`
+        htmlTable += '</tr>'
+      })
+      htmlTable += '</tbody></table>'
+      htmlTable += '</body></html>'
 
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+      // Criar blob com BOM para UTF-8
+      const BOM = '\uFEFF'
+      const blob = new Blob([BOM + htmlTable], { 
+        type: 'application/vnd.ms-excel;charset=utf-8' 
+      })
       const link = document.createElement('a')
       link.href = URL.createObjectURL(blob)
-      link.download = `FluxoCaixaRealizado_${dataInicial}_${dataFinal}.csv`
+      link.download = `FluxoCaixaRealizado_${dataInicial}_${dataFinal}.xls`
+      document.body.appendChild(link)
       link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(link.href)
 
-      showToast('CSV exportado com sucesso!', 'success')
+      showToast('Excel exportado com sucesso!', 'success')
     } catch (err) {
-      console.error('Erro ao exportar CSV:', err)
-      showToast('Erro ao exportar CSV', 'error')
+      console.error('Erro ao exportar Excel:', err)
+      showToast('Erro ao exportar Excel', 'error')
     }
   }
 
@@ -755,44 +842,91 @@ export default function FluxoCaixaRealizadoPage() {
     liquido: d.liquido
   }))
 
-  // Tooltip customizado para mostrar entradas, saídas e líquido
+  // Tooltip customizado para mostrar informações diferentes por barra
   const CustomTooltip = ({ active, payload }: any) => {
-    if (active && payload && payload.length) {
-      const entradas = payload.find((p: any) => p.dataKey === 'entradas')?.value || 0
-      const saidas = payload.find((p: any) => p.dataKey === 'saidas')?.value || 0
-      const liquido = entradas - saidas
-      
+    if (!active || !payload || payload.length === 0) {
+      return null
+    }
+    
+    const data = payload[0].payload
+    const classificacao = data.classificacao
+    const entradas = data.entradas || 0
+    const saidas = data.saidas || 0
+    const liquido = entradas - saidas
+    
+    // Mouse sobre a barra VERDE (entradas)
+    if (barraAtiva === 'entradas') {
       return (
         <div style={{
           backgroundColor: 'white',
-          border: '1px solid #e5e7eb',
+          border: '3px solid #10b981',
           borderRadius: '8px',
-          padding: '12px',
-          fontSize: '13px'
+          padding: '12px 16px',
+          fontSize: '13px',
+          boxShadow: '0 4px 12px rgba(16, 185, 129, 0.3)'
         }}>
-          <p style={{ fontWeight: '600', marginBottom: '8px', color: '#374151' }}>
-            {payload[0]?.payload?.classificacao}
+          <p style={{ fontWeight: '700', marginBottom: '6px', color: '#374151', fontSize: '12px' }}>
+            {classificacao}
           </p>
-          <p style={{ color: '#059669', margin: '4px 0' }}>
-            entradas : {formatCurrencyBRL(entradas)}
-          </p>
-          <p style={{ color: '#dc2626', margin: '4px 0' }}>
-            saídas : {formatCurrencyBRL(saidas)}
-          </p>
-          <p style={{ 
-            color: liquido >= 0 ? '#1555D6' : '#dc2626', 
-            margin: '4px 0',
-            fontWeight: '600',
-            borderTop: '1px solid #e5e7eb',
-            paddingTop: '8px',
-            marginTop: '8px'
-          }}>
-            Saldo Líquido : {formatCurrencyBRL(liquido)}
+          <p style={{ color: '#10b981', margin: '0', fontWeight: '700', fontSize: '15px' }}>
+            Entradas: {formatCurrencyBRL(entradas)}
           </p>
         </div>
       )
     }
-    return null
+    
+    // Mouse sobre a barra VERMELHA (saídas)
+    if (barraAtiva === 'saidas') {
+      return (
+        <div style={{
+          backgroundColor: 'white',
+          border: '3px solid #ef4444',
+          borderRadius: '8px',
+          padding: '12px 16px',
+          fontSize: '13px',
+          boxShadow: '0 4px 12px rgba(239, 68, 68, 0.3)'
+        }}>
+          <p style={{ fontWeight: '700', marginBottom: '6px', color: '#374151', fontSize: '12px' }}>
+            {classificacao}
+          </p>
+          <p style={{ color: '#ef4444', margin: '0', fontWeight: '700', fontSize: '15px' }}>
+            Saídas: {formatCurrencyBRL(saidas)}
+          </p>
+        </div>
+      )
+    }
+    
+    // Mouse na área CINZA ou sem barra específica - mostrar TUDO
+    return (
+      <div style={{
+        backgroundColor: 'white',
+        border: '3px solid #9ca3af',
+        borderRadius: '8px',
+        padding: '12px 16px',
+        fontSize: '13px',
+        boxShadow: '0 4px 12px rgba(156, 163, 175, 0.3)'
+      }}>
+        <p style={{ fontWeight: '700', marginBottom: '10px', color: '#374151', fontSize: '13px' }}>
+          {classificacao}
+        </p>
+        <p style={{ color: '#10b981', margin: '0 0 6px 0', fontSize: '13px', fontWeight: '600' }}>
+          Entradas: {formatCurrencyBRL(entradas)}
+        </p>
+        <p style={{ color: '#ef4444', margin: '0 0 8px 0', fontSize: '13px', fontWeight: '600' }}>
+          Saídas: {formatCurrencyBRL(saidas)}
+        </p>
+        <p style={{ 
+          color: liquido >= 0 ? '#1555D6' : '#ef4444', 
+          margin: '0',
+          fontWeight: '700',
+          borderTop: '2px solid #e5e7eb',
+          paddingTop: '8px',
+          fontSize: '14px'
+        }}>
+          Resultado Líquido: {formatCurrencyBRL(liquido)}
+        </p>
+      </div>
+    )
   }
 
   return (
@@ -819,7 +953,8 @@ export default function FluxoCaixaRealizadoPage() {
         </div>
 
         <button
-          onClick={exportarCSV}
+          type="button"
+          onClick={exportarXLSX}
           disabled={hierarquia.length === 0}
           style={{
             display: 'flex',
@@ -835,11 +970,11 @@ export default function FluxoCaixaRealizadoPage() {
             cursor: hierarquia.length === 0 ? 'not-allowed' : 'pointer',
             transition: 'all 0.2s'
           }}
-          onMouseOver={(e) => hierarquia.length > 0 && (e.currentTarget.style.backgroundColor = '#059669')}
-          onMouseOut={(e) => hierarquia.length > 0 && (e.currentTarget.style.backgroundColor = '#10b981')}
+          onMouseEnter={(e) => hierarquia.length > 0 && (e.currentTarget.style.backgroundColor = '#059669')}
+          onMouseLeave={(e) => hierarquia.length > 0 && (e.currentTarget.style.backgroundColor = '#10b981')}
         >
           <Download size={18} />
-          Exportar CSV
+          Exportar Excel
         </button>
       </div>
 
@@ -908,6 +1043,7 @@ export default function FluxoCaixaRealizadoPage() {
             {PRESETS_PERIODO.map(preset => (
               <button
                 key={preset.label}
+                type="button"
                 onClick={() => aplicarPreset(preset.label.toLowerCase().replace(/\s/g, '_'), preset.ano, preset.tipo)}
                 style={{
                   padding: '8px 16px',
@@ -920,12 +1056,12 @@ export default function FluxoCaixaRealizadoPage() {
                   cursor: 'pointer',
                   transition: 'all 0.2s'
                 }}
-                onMouseOver={(e) => {
+                onMouseEnter={(e) => {
                   if (presetSelecionado !== preset.label.toLowerCase().replace(/\s/g, '_')) {
                     e.currentTarget.style.backgroundColor = '#f3f4f6'
                   }
                 }}
-                onMouseOut={(e) => {
+                onMouseLeave={(e) => {
                   if (presetSelecionado !== preset.label.toLowerCase().replace(/\s/g, '_')) {
                     e.currentTarget.style.backgroundColor = 'white'
                   }
@@ -1139,30 +1275,84 @@ export default function FluxoCaixaRealizadoPage() {
               ))}
             </select>
           </div>
+
+          {/* Contraparte */}
+          <div>
+            <label style={{
+              display: 'block',
+              fontSize: '13px',
+              fontWeight: '500',
+              color: '#374151',
+              marginBottom: '6px'
+            }}>
+              Contraparte
+            </label>
+            <select
+              value={contraparteSelecionada}
+              onChange={(e) => setContraparteSelecionada(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '9px 12px',
+                border: '1px solid #e5e7eb',
+                borderRadius: '8px',
+                fontSize: '14px',
+                outline: 'none',
+                cursor: 'pointer',
+                backgroundColor: 'white'
+              }}
+            >
+              <option value="">Todas</option>
+              {contrapartes.map(cp => (
+                <option key={cp.id} value={cp.id}>
+                  {cp.nome}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         {/* Botões */}
         <div style={{ display: 'flex', gap: '12px' }}>
-          <button
-            onClick={aplicarFiltros}
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              if (!loading) {
+                aplicarFiltros()
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                if (!loading) {
+                  aplicarFiltros()
+                }
+              }
+            }}
             style={{
               padding: '10px 24px',
-              backgroundColor: '#1555D6',
+              backgroundColor: loading ? '#9ca3af' : '#1555D6',
               color: 'white',
               border: 'none',
               borderRadius: '8px',
               fontSize: '14px',
               fontWeight: '500',
-              cursor: 'pointer',
-              transition: 'all 0.2s'
+              cursor: loading ? 'not-allowed' : 'pointer',
+              transition: 'all 0.2s',
+              opacity: loading ? 0.6 : 1,
+              userSelect: 'none',
+              pointerEvents: loading ? 'none' : 'auto'
             }}
-            onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#1044b5'}
-            onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#1555D6'}
+            onMouseEnter={(e) => !loading && (e.currentTarget.style.backgroundColor = '#1044b5')}
+            onMouseLeave={(e) => !loading && (e.currentTarget.style.backgroundColor = '#1555D6')}
           >
-            Aplicar
-          </button>
+            {loading ? 'Carregando...' : 'Aplicar'}
+          </div>
           
           <button
+            type="button"
             onClick={limparFiltros}
             style={{
               padding: '10px 24px',
@@ -1175,8 +1365,8 @@ export default function FluxoCaixaRealizadoPage() {
               cursor: 'pointer',
               transition: 'all 0.2s'
             }}
-            onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#f9fafb'}
-            onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'white'}
+            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f9fafb'}
+            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'white'}
           >
             Limpar
           </button>
@@ -1191,155 +1381,95 @@ export default function FluxoCaixaRealizadoPage() {
         marginBottom: '24px'
       }}>
         {/* Saldo Bancário Inicial */}
-        <div style={{
-          backgroundColor: 'white',
-          borderRadius: '16px',
-          padding: '18px 16px',
-          boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)',
-          borderTop: '4px solid #8b5cf6',
-          minHeight: '130px',
-          display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'space-between'
-        }}>
+        {!projetoSelecionado && (
           <div style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'flex-start',
-            marginBottom: '8px'
+            backgroundColor: 'white',
+            borderRadius: '12px',
+            padding: '20px',
+            boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)',
+            borderTop: '4px solid #6366f1'
           }}>
-            <span style={{ fontSize: 'clamp(12px, 1.5vw, 14px)', fontWeight: '500', color: '#6b7280' }}>
-              Saldo Bancário Inicial
-            </span>
-            <DollarSign size={24} color="#8b5cf6" />
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <span style={{ fontSize: '13px', fontWeight: '500', color: '#6b7280' }}>
+                Saldo Bancário Inicial
+              </span>
+              <DollarSign size={20} color="#6366f1" />
+            </div>
+            <p style={{ fontSize: '24px', fontWeight: '700', color: '#111827', margin: '8px 0' }}>
+              {formatCurrencyBRL(saldoBancarioInicial)}
+            </p>
           </div>
-          <div style={{ 
-            fontSize: 'clamp(14px, 2.5vw, 22px)', 
-            fontWeight: '700', 
-            color: '#7c3aed',
-            wordBreak: 'break-word',
-            lineHeight: '1.3',
-            minHeight: '50px',
-            display: 'flex',
-            alignItems: 'center'
-          }}>
-            {formatCurrencyBRL(saldoBancarioInicial)}
-          </div>
-        </div>
+        )}
 
         {/* Total Entradas */}
         <div style={{
           backgroundColor: 'white',
-          borderRadius: '16px',
-          padding: '18px 16px',
+          borderRadius: '12px',
+          padding: '20px',
           boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)',
-          borderTop: '4px solid #10b981',
-          minHeight: '130px',
-          display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'space-between'
+          borderTop: '4px solid #10b981'
         }}>
-          <div style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'flex-start',
-            marginBottom: '8px'
-          }}>
-            <span style={{ fontSize: 'clamp(12px, 1.5vw, 14px)', fontWeight: '500', color: '#6b7280' }}>
-              Total Entradas
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+            <span style={{ fontSize: '13px', fontWeight: '500', color: '#6b7280' }}>
+              Total de Entradas
             </span>
-            <ArrowUpCircle size={24} color="#10b981" />
+            <ArrowUpCircle size={20} color="#10b981" />
           </div>
-          <div style={{ 
-            fontSize: 'clamp(14px, 2.5vw, 22px)', 
-            fontWeight: '700', 
-            color: '#059669',
-            wordBreak: 'break-word',
-            lineHeight: '1.3',
-            minHeight: '50px',
-            display: 'flex',
-            alignItems: 'center'
-          }}>
+          <p style={{ fontSize: '24px', fontWeight: '700', color: '#111827', margin: '8px 0' }}>
             {formatCurrencyBRL(totalEntradas)}
-          </div>
+          </p>
         </div>
 
         {/* Total Saídas */}
         <div style={{
           backgroundColor: 'white',
-          borderRadius: '16px',
-          padding: '18px 16px',
+          borderRadius: '12px',
+          padding: '20px',
           boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)',
-          borderTop: '4px solid #ef4444',
-          minHeight: '130px',
-          display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'space-between'
+          borderTop: '4px solid #ef4444'
         }}>
-          <div style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'flex-start',
-            marginBottom: '8px'
-          }}>
-            <span style={{ fontSize: 'clamp(12px, 1.5vw, 14px)', fontWeight: '500', color: '#6b7280' }}>
-              Total Saídas
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+            <span style={{ fontSize: '13px', fontWeight: '500', color: '#6b7280' }}>
+              Total de Saídas
             </span>
-            <ArrowDownCircle size={24} color="#ef4444" />
+            <ArrowDownCircle size={20} color="#ef4444" />
           </div>
-          <div style={{ 
-            fontSize: 'clamp(14px, 2.5vw, 22px)', 
-            fontWeight: '700', 
-            color: '#dc2626',
-            wordBreak: 'break-word',
-            lineHeight: '1.3',
-            minHeight: '50px',
-            display: 'flex',
-            alignItems: 'center'
-          }}>
+          <p style={{ fontSize: '24px', fontWeight: '700', color: '#111827', margin: '8px 0' }}>
             {formatCurrencyBRL(totalSaidas)}
-          </div>
+          </p>
         </div>
 
-        {/* Total Líquido */}
+        {/* Resultado Líquido */}
         <div style={{
           backgroundColor: 'white',
-          borderRadius: '16px',
-          padding: '18px 16px',
+          borderRadius: '12px',
+          padding: '20px',
           boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)',
-          borderTop: `4px solid ${totalLiquido >= 0 ? '#1555D6' : '#ef4444'}`,
-          minHeight: '130px',
-          display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'space-between'
+          borderTop: `4px solid ${totalLiquido >= 0 ? '#1555D6' : '#ef4444'}`
         }}>
-          <div style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'flex-start',
-            marginBottom: '8px'
-          }}>
-            <span style={{ fontSize: 'clamp(12px, 1.5vw, 14px)', fontWeight: '500', color: '#6b7280' }}>
-              Saldo Bancário Final
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+            <span style={{ fontSize: '13px', fontWeight: '500', color: '#6b7280' }}>
+              {projetoSelecionado ? 'Resultado Líquido' : 'Saldo Final'}
             </span>
-            <Receipt size={24} color={totalLiquido >= 0 ? '#1555D6' : '#ef4444'} />
+            <Receipt size={20} color={totalLiquido >= 0 ? '#1555D6' : '#ef4444'} />
           </div>
-          <div style={{ 
-            fontSize: 'clamp(14px, 2.5vw, 22px)', 
+          <p style={{ 
+            fontSize: '24px', 
             fontWeight: '700', 
-            color: totalLiquido >= 0 ? '#1555D6' : '#dc2626',
-            wordBreak: 'break-word',
-            lineHeight: '1.3',
-            minHeight: '50px',
-            display: 'flex',
-            alignItems: 'center'
+            color: totalLiquido >= 0 ? '#1555D6' : '#ef4444',
+            margin: '8px 0' 
           }}>
             {formatCurrencyBRL(totalLiquido)}
-          </div>
+          </p>
+          {!projetoSelecionado && (
+            <p style={{ fontSize: '11px', color: '#9ca3af', marginTop: '4px' }}>
+              Saldo Inicial + Entradas - Saídas
+            </p>
+          )}
         </div>
       </div>
 
-      {/* CARD 1: Tabela - Dados por Classificação (PRIMEIRO) */}
+      {/* CARD 1: Tabela Hierárquica (PRIMEIRO) */}
       <div style={{
         backgroundColor: 'white',
         borderRadius: '16px',
@@ -1351,9 +1481,9 @@ export default function FluxoCaixaRealizadoPage() {
           fontSize: '18px',
           fontWeight: '600',
           color: '#374151',
-          marginBottom: '16px'
+          marginBottom: '20px'
         }}>
-          Rótulos de Linha
+          Detalhamento por {tipoAgrupamento === 'classificacao' ? 'Classificação' : 'Tipo de Fluxo'}
         </h2>
 
         {hierarquia.length === 0 ? (
@@ -1363,58 +1493,49 @@ export default function FluxoCaixaRealizadoPage() {
             color: '#9ca3af',
             fontSize: '14px'
           }}>
-            Sem lançamentos para o período selecionado
+            Nenhum dado encontrado para o período selecionado
           </div>
         ) : (
-          <div style={{
-            overflowX: 'auto',
-            border: '1px solid #e5e7eb',
-            borderRadius: '8px'
-          }}>
+          <div style={{ overflowX: 'auto' }}>
             <table style={{
               width: '100%',
               borderCollapse: 'collapse',
               fontSize: '13px'
             }}>
               <thead>
-                <tr style={{ backgroundColor: '#f9fafb' }}>
+                <tr style={{ 
+                  backgroundColor: '#f9fafb',
+                  borderBottom: '2px solid #e5e7eb'
+                }}>
                   <th style={{ 
                     padding: '12px 16px', 
-                    textAlign: 'left', 
-                    fontWeight: '600', 
-                    color: '#6b7280', 
-                    borderBottom: '1px solid #e5e7eb',
-                    width: '40%'
+                    textAlign: 'left',
+                    fontWeight: '600',
+                    color: '#374151'
                   }}>
-                    Rótulos de Linha
+                    Rótulo de Linha
                   </th>
                   <th style={{ 
                     padding: '12px 16px', 
-                    textAlign: 'right', 
-                    fontWeight: '600', 
-                    color: '#6b7280', 
-                    borderBottom: '1px solid #e5e7eb',
-                    width: '20%'
+                    textAlign: 'right',
+                    fontWeight: '600',
+                    color: '#374151'
                   }}>
                     Entradas
                   </th>
                   <th style={{ 
                     padding: '12px 16px', 
-                    textAlign: 'right', 
-                    fontWeight: '600', 
-                    color: '#6b7280', 
-                    borderBottom: '1px solid #e5e7eb',
-                    width: '20%'
+                    textAlign: 'right',
+                    fontWeight: '600',
+                    color: '#374151'
                   }}>
                     Saídas
                   </th>
                   <th style={{ 
                     padding: '12px 16px', 
-                    textAlign: 'right', 
-                    fontWeight: '600', 
-                    color: '#6b7280', 
-                    borderBottom: '1px solid #e5e7eb',
-                    width: '20%'
+                    textAlign: 'right',
+                    fontWeight: '600',
+                    color: '#374151'
                   }}>
                     Líquido
                   </th>
@@ -1422,207 +1543,195 @@ export default function FluxoCaixaRealizadoPage() {
               </thead>
               <tbody>
                 {(() => {
-                  const renderizarNo = (no: NoHierarquico, index: number, arrayLength: number, caminhoCompleto: string = ''): React.ReactElement[] => {
-                    const elementos: React.ReactElement[] = []
-                    const indentacao = (no.nivel - 1) * 20
-                    const chave = caminhoCompleto ? `${caminhoCompleto}>${no.nome}` : no.nome
-                    const temFilhos = no.filhos && no.filhos.length > 0
-                    const estaExpandido = nosExpandidos.has(chave)
+                  const renderizarNo = (no: NoHierarquico, idx: number, totalNos: number): React.ReactElement[] => {
+                    const chave = `${no.nome}-${no.nivel}`
+                    const expandido = nosExpandidos.has(chave)
+                    const temFilhos = no.filhos.length > 0
+                    const temLancamentos = no.lancamentos && no.lancamentos.length > 0
+                    const lancamentosVisiveis = lancamentosExpandidos.has(chave)
                     
-                    // Estilo baseado no nível
-                    const estiloLinha = {
-                      backgroundColor: no.nivel === 1 ? '#f0f9ff' : 'transparent',
-                      fontWeight: no.nivel <= 2 ? '600' : '500',
-                      borderBottom: index < arrayLength - 1 ? '1px solid #f3f4f6' : 'none'
+                    // Cores por nível
+                    const coresNivel = {
+                      1: { bg: '#f0f9ff', text: '#1e40af', border: '#bfdbfe' },
+                      2: { bg: '#fef3c7', text: '#92400e', border: '#fde68a' },
+                      3: { bg: '#fce7f3', text: '#831843', border: '#fbcfe8' },
+                      4: { bg: '#f3e8ff', text: '#6b21a8', border: '#e9d5ff' }
                     }
-
+                    
+                    const cor = coresNivel[no.nivel as keyof typeof coresNivel] || coresNivel[1]
+                    const indentacao = no.nivel * 20
+                    
+                    const elementos: React.ReactElement[] = []
+                    
+                    // Linha principal do nó
                     elementos.push(
-                      <tr key={chave} style={estiloLinha}>
+                      <tr 
+                        key={chave}
+                        style={{ 
+                          backgroundColor: cor.bg,
+                          borderLeft: `4px solid ${cor.border}`,
+                          borderBottom: idx === totalNos - 1 && !expandido ? 'none' : '1px solid #f3f4f6',
+                          cursor: temFilhos || temLancamentos ? 'pointer' : 'default'
+                        }}
+                        onClick={() => {
+                          if (temFilhos) toggleNo(chave)
+                          else if (temLancamentos) toggleLancamentos(chave)
+                        }}
+                      >
                         <td style={{ 
                           padding: '12px 16px', 
                           paddingLeft: `${16 + indentacao}px`,
-                          color: '#374151',
-                          fontWeight: estiloLinha.fontWeight,
+                          fontWeight: no.nivel === 1 ? '700' : no.nivel === 2 ? '600' : '500',
+                          color: cor.text,
                           display: 'flex',
                           alignItems: 'center',
                           gap: '8px'
                         }}>
-                          {temFilhos ? (
-                            <button
-                              onClick={() => toggleNo(chave)}
-                              style={{
-                                background: 'none',
-                                border: 'none',
-                                cursor: 'pointer',
-                                padding: '0',
-                                display: 'flex',
-                                alignItems: 'center',
-                                color: '#6b7280'
-                              }}
-                            >
-                              {estaExpandido ? (
-                                <ChevronDown size={16} style={{ color: '#1555D6' }} />
-                              ) : (
-                                <ChevronRight size={16} style={{ color: '#6b7280' }} />
-                              )}
-                            </button>
-                          ) : (
-                            <span style={{ width: '16px' }} />
+                          {(temFilhos || temLancamentos) && (
+                            expandido || lancamentosVisiveis ? 
+                              <ChevronDown size={16} color={cor.text} /> : 
+                              <ChevronRight size={16} color={cor.text} />
                           )}
-                          <span>{no.nome}</span>
+                          {no.nome}
+                          {temLancamentos && (
+                            <span style={{
+                              backgroundColor: '#e0e7ff',
+                              color: '#4338ca',
+                              padding: '2px 6px',
+                              borderRadius: '10px',
+                              fontSize: '11px',
+                              fontWeight: '500',
+                              marginLeft: '6px'
+                            }}>
+                              {no.lancamentos?.length}
+                            </span>
+                          )}
                         </td>
                         <td style={{ 
                           padding: '12px 16px', 
-                          textAlign: 'right', 
-                          fontWeight: estiloLinha.fontWeight,
-                          color: no.entradas > 0 ? '#059669' : '#9ca3af'
+                          textAlign: 'right',
+                          color: '#059669',
+                          fontWeight: no.nivel <= 2 ? '600' : '500'
                         }}>
-                          {no.entradas > 0 ? formatCurrencyBRL(no.entradas) : '-'}
+                          {formatCurrencyBRL(no.entradas)}
                         </td>
                         <td style={{ 
                           padding: '12px 16px', 
-                          textAlign: 'right', 
-                          fontWeight: estiloLinha.fontWeight,
-                          color: no.saidas > 0 ? '#dc2626' : '#9ca3af'
+                          textAlign: 'right',
+                          color: '#dc2626',
+                          fontWeight: no.nivel <= 2 ? '600' : '500'
                         }}>
-                          {no.saidas > 0 ? formatCurrencyBRL(no.saidas) : '-'}
+                          {formatCurrencyBRL(no.saidas)}
                         </td>
                         <td style={{ 
                           padding: '12px 16px', 
-                          textAlign: 'right', 
-                          fontWeight: estiloLinha.fontWeight,
-                          color: no.liquido >= 0 ? '#1555D6' : '#dc2626'
+                          textAlign: 'right',
+                          color: no.liquido >= 0 ? '#1555D6' : '#dc2626',
+                          fontWeight: no.nivel <= 2 ? '700' : '600'
                         }}>
                           {formatCurrencyBRL(no.liquido)}
                         </td>
                       </tr>
                     )
-
-                    // Renderizar filhos recursivamente apenas se expandido
-                    if (temFilhos && estaExpandido) {
-                      no.filhos.forEach((filho, idx) => {
-                        elementos.push(...renderizarNo(filho, idx, no.filhos.length, chave))
+                    
+                    // Renderizar filhos se expandido
+                    if (expandido && temFilhos) {
+                      no.filhos.forEach((filho, filhoIdx) => {
+                        elementos.push(...renderizarNo(filho, filhoIdx, no.filhos.length))
                       })
                     }
-
-                    // Renderizar lançamentos se não tiver filhos e tiver lançamentos
-                    if (!temFilhos && no.lancamentos && no.lancamentos.length > 0) {
-                      const lancamentosEstaExpandido = lancamentosExpandidos.has(chave)
+                    
+                    // Renderizar lançamentos se visível
+                    if (lancamentosVisiveis && temLancamentos && no.lancamentos) {
+                      // Ordenar lançamentos por data
+                      const lancamentosOrdenados = [...no.lancamentos].sort((a, b) => {
+                        return new Date(b.data_liquidacao).getTime() - new Date(a.data_liquidacao).getTime()
+                      })
                       
-                      // Adicionar botão para expandir lançamentos
-                      elementos.push(
-                        <tr key={`${chave}-toggle`} style={{ backgroundColor: '#f9fafb' }}>
-                          <td colSpan={4} style={{ padding: '8px 16px', paddingLeft: `${16 + (no.nivel) * 20}px` }}>
-                            <button
-                              onClick={() => toggleLancamentos(chave)}
-                              style={{
-                                background: 'none',
-                                border: '1px solid #e5e7eb',
-                                borderRadius: '6px',
-                                padding: '4px 12px',
-                                cursor: 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '6px',
-                                fontSize: '12px',
-                                color: '#6b7280',
-                                fontWeight: '500'
-                              }}
-                            >
-                              {lancamentosEstaExpandido ? (
-                                <ChevronDown size={14} style={{ color: '#1555D6' }} />
-                              ) : (
-                                <ChevronRight size={14} style={{ color: '#6b7280' }} />
-                              )}
-                              <span>{lancamentosEstaExpandido ? 'Ocultar' : 'Ver'} {no.lancamentos.length} lançamento{no.lancamentos.length !== 1 ? 's' : ''}</span>
-                            </button>
-                          </td>
-                        </tr>
-                      )
-
-                      // Renderizar lançamentos se expandido
-                      if (lancamentosEstaExpandido) {
-                        no.lancamentos.forEach((lanc, lancIdx) => {
-                          elementos.push(
-                            <tr 
-                              key={`${chave}-lanc-${lancIdx}`} 
-                              style={{ 
-                                backgroundColor: '#fafafa',
-                                borderBottom: lancIdx < no.lancamentos!.length - 1 ? '1px solid #f3f4f6' : 'none'
-                              }}
-                            >
-                              <td style={{ 
-                                padding: '10px 16px', 
-                                paddingLeft: `${16 + (no.nivel + 1) * 20}px`,
-                                fontSize: '12px',
-                                color: '#6b7280'
-                              }}>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                    <span style={{ fontWeight: '500', color: '#374151' }}>
-                                      {formatDateBR(lanc.data_liquidacao)}
-                                    </span>
-                                    {lanc.documento_numero && (
-                                      <span style={{ 
-                                        backgroundColor: '#e0e7ff', 
-                                        color: '#4338ca',
-                                        padding: '2px 8px',
-                                        borderRadius: '4px',
-                                        fontSize: '11px',
-                                        fontWeight: '500'
-                                      }}>
-                                        {lanc.documento_numero}
-                                      </span>
-                                    )}
-                                  </div>
-                                  <div style={{ fontSize: '11px', color: '#9ca3af' }}>
-                                    <span>{lanc.empresa_nome}</span>
-                                    {lanc.projeto_nome !== 'N/A' && <span> • {lanc.projeto_nome}</span>}
-                                    <span> • {lanc.contraparte_nome}</span>
-                                  </div>
-                                  {lanc.observacoes && (
-                                    <div style={{ 
-                                      fontSize: '11px', 
-                                      color: '#6b7280',
-                                      fontStyle: 'italic',
-                                      marginTop: '2px'
+                      lancamentosOrdenados.forEach((lanc, lancIdx) => {
+                        elementos.push(
+                          <tr 
+                            key={`${chave}-lanc-${lancIdx}`}
+                            style={{ 
+                              backgroundColor: '#fafafa',
+                              borderLeft: '4px solid #e5e7eb'
+                            }}
+                          >
+                            <td style={{ 
+                              padding: '10px 16px', 
+                              paddingLeft: `${36 + indentacao}px`,
+                              borderBottom: '1px solid #f3f4f6'
+                            }}>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                <div style={{ 
+                                  display: 'flex', 
+                                  alignItems: 'center', 
+                                  gap: '8px',
+                                  fontSize: '12px',
+                                  fontWeight: '500',
+                                  color: '#374151'
+                                }}>
+                                  <span>{formatDateBR(lanc.data_liquidacao)}</span>
+                                  {lanc.documento_numero && (
+                                    <span style={{ 
+                                      backgroundColor: '#e0e7ff', 
+                                      color: '#4338ca',
+                                      padding: '2px 8px',
+                                      borderRadius: '4px',
+                                      fontSize: '11px',
+                                      fontWeight: '500'
                                     }}>
-                                      {lanc.observacoes}
-                                    </div>
+                                      {lanc.documento_numero}
+                                    </span>
                                   )}
                                 </div>
-                              </td>
-                              <td style={{ 
-                                padding: '10px 16px', 
-                                textAlign: 'right',
-                                fontSize: '12px',
-                                fontWeight: '500',
-                                color: lanc.sentido === 'Entrada' ? '#059669' : '#9ca3af'
-                              }}>
-                                {lanc.sentido === 'Entrada' ? formatCurrencyBRL(lanc.valor_liquido) : '-'}
-                              </td>
-                              <td style={{ 
-                                padding: '10px 16px', 
-                                textAlign: 'right',
-                                fontSize: '12px',
-                                fontWeight: '500',
-                                color: lanc.sentido === 'Saida' ? '#dc2626' : '#9ca3af'
-                              }}>
-                                {lanc.sentido === 'Saida' ? formatCurrencyBRL(lanc.valor_liquido) : '-'}
-                              </td>
-                              <td style={{ 
-                                padding: '10px 16px', 
-                                textAlign: 'right',
-                                fontSize: '12px',
-                                fontWeight: '600',
-                                color: lanc.sentido === 'Entrada' ? '#1555D6' : '#dc2626'
-                              }}>
-                                {lanc.sentido === 'Entrada' ? '+' : '-'}{formatCurrencyBRL(Math.abs(lanc.valor_liquido))}
-                              </td>
-                            </tr>
-                          )
-                        })
-                      }
+                                <div style={{ fontSize: '11px', color: '#9ca3af' }}>
+                                  <span>{lanc.empresa_nome}</span>
+                                  {lanc.projeto_nome !== 'N/A' && <span> • {lanc.projeto_nome}</span>}
+                                  <span> • {lanc.contraparte_nome}</span>
+                                </div>
+                                {lanc.observacoes && (
+                                  <div style={{ 
+                                    fontSize: '11px', 
+                                    color: '#6b7280',
+                                    fontStyle: 'italic',
+                                    marginTop: '2px'
+                                  }}>
+                                    {lanc.observacoes}
+                                  </div>
+                                )}
+                              </div>
+                            </td>
+                            <td style={{ 
+                              padding: '10px 16px', 
+                              textAlign: 'right',
+                              fontSize: '12px',
+                              fontWeight: '500',
+                              color: lanc.sentido === 'Entrada' ? '#059669' : '#9ca3af'
+                            }}>
+                              {lanc.sentido === 'Entrada' ? formatCurrencyBRL(lanc.valor_liquido) : '-'}
+                            </td>
+                            <td style={{ 
+                              padding: '10px 16px', 
+                              textAlign: 'right',
+                              fontSize: '12px',
+                              fontWeight: '500',
+                              color: lanc.sentido === 'Saida' ? '#dc2626' : '#9ca3af'
+                            }}>
+                              {lanc.sentido === 'Saida' ? formatCurrencyBRL(lanc.valor_liquido) : '-'}
+                            </td>
+                            <td style={{ 
+                              padding: '10px 16px', 
+                              textAlign: 'right',
+                              fontSize: '12px',
+                              fontWeight: '600',
+                              color: lanc.sentido === 'Entrada' ? '#1555D6' : '#dc2626'
+                            }}>
+                              {lanc.sentido === 'Entrada' ? '+' : '-'}{formatCurrencyBRL(Math.abs(lanc.valor_liquido))}
+                            </td>
+                          </tr>
+                        )
+                      })
                     }
 
                     return elementos
@@ -1703,7 +1812,13 @@ export default function FluxoCaixaRealizadoPage() {
           </div>
         ) : (
           <ResponsiveContainer width="100%" height={500}>
-            <BarChart data={dadosGrafico} layout="vertical">
+            <BarChart 
+              data={dadosGrafico} 
+              layout="vertical"
+              margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+              barGap={8}
+              barCategoryGap="15%"
+            >
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
               <XAxis 
                 type="number"
@@ -1718,7 +1833,12 @@ export default function FluxoCaixaRealizadoPage() {
                 style={{ fontSize: '12px' }}
                 width={150}
               />
-              <Tooltip content={<CustomTooltip />} />
+              <Tooltip 
+                content={<CustomTooltip />}
+                cursor={false}
+                isAnimationActive={false}
+                allowEscapeViewBox={{ x: true, y: true }}
+              />
               <Legend 
                 wrapperStyle={{ fontSize: '13px', paddingTop: '16px' }}
                 formatter={(value) => value === 'entradas' ? 'Entradas' : 'Saídas'}
@@ -1728,12 +1848,18 @@ export default function FluxoCaixaRealizadoPage() {
                 fill="#10b981" 
                 radius={[0, 8, 8, 0]}
                 name="entradas"
+                barSize={20}
+                onMouseEnter={() => setBarraAtiva('entradas')}
+                onMouseLeave={() => setBarraAtiva(null)}
               />
               <Bar 
                 dataKey="saidas" 
                 fill="#ef4444" 
                 radius={[0, 8, 8, 0]}
                 name="saidas"
+                barSize={20}
+                onMouseEnter={() => setBarraAtiva('saidas')}
+                onMouseLeave={() => setBarraAtiva(null)}
               />
             </BarChart>
           </ResponsiveContainer>

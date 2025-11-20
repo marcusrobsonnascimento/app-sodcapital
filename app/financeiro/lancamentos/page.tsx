@@ -155,13 +155,13 @@ const lancamentoSchema = z.object({
 type LancamentoForm = z.infer<typeof lancamentoSchema>
 
 const IMPOSTOS = [
-  { value: 'IRRF', label: 'IRRF' },
-  { value: 'INSS', label: 'INSS' },
-  { value: 'ISSQN', label: 'ISSQN' },
-  { value: 'PIS', label: 'PIS' },
   { value: 'COFINS', label: 'COFINS' },
   { value: 'CSLL', label: 'CSLL' },
-  { value: 'OUTRO', label: 'Outro' }
+  { value: 'INSS', label: 'INSS' },
+  { value: 'IRRF', label: 'IRRF' },
+  { value: 'ISSQN', label: 'ISSQN' },
+  { value: 'OUTRO', label: 'Outro' },
+  { value: 'PIS', label: 'PIS' }
 ]
 
 export default function LancamentosPage() {
@@ -190,9 +190,16 @@ export default function LancamentosPage() {
   const [selectedStatusFilter, setSelectedStatusFilter] = useState<string>('')
   const [selectedEmpresaFilter, setSelectedEmpresaFilter] = useState<string>('')
   const [selectedProjetoFilter, setSelectedProjetoFilter] = useState<string>('')
+  const [selectedSubprojetoFilter, setSelectedSubprojetoFilter] = useState<string>('')
   const [selectedContraparteFilter, setSelectedContraparteFilter] = useState<string>('')
+  const [selectedCategoriaFilter, setSelectedCategoriaFilter] = useState<string>('')
   const [dataVencimentoInicio, setDataVencimentoInicio] = useState('')
   const [dataVencimentoFim, setDataVencimentoFim] = useState('')
+
+  // Listas para os filtros
+  const [projetosFilter, setProjetosFilter] = useState<Projeto[]>([])
+  const [subprojetosFilter, setSubprojetosFilter] = useState<Projeto[]>([])
+  const [categorias, setCategorias] = useState<string[]>([])
 
   // Estados para combobox de contraparte
   const [contraparteSearchTerm, setContraparteSearchTerm] = useState('')
@@ -243,19 +250,72 @@ export default function LancamentosPage() {
   const selectedProjetoId = watch('projeto_id')
   const selectedTipoLancamento = watch('tipo')
 
+  // Helper function para buscar todos os registros (paginação automática)
+  const fetchAllRecords = async (tableName: string, selectQuery: string = '*', filters?: any) => {
+    const PAGE_SIZE = 1000
+    let allData: any[] = []
+    let from = 0
+    let hasMore = true
+
+    while (hasMore) {
+      let query = supabase
+        .from(tableName)
+        .select(selectQuery)
+        .range(from, from + PAGE_SIZE - 1)
+
+      // Aplicar filtros adicionais
+      if (filters) {
+        Object.keys(filters).forEach(key => {
+          const value = filters[key]
+          if (value !== undefined && value !== null) {
+            if (key === 'order') {
+              // Ordenar pela coluna especificada
+              query = query.order(value, { ascending: true })
+            } else if (typeof value === 'boolean') {
+              query = query.eq(key, value)
+            } else if (key === 'is_null') {
+              query = query.is(value.column, value.value)
+            } else {
+              query = query.eq(key, value)
+            }
+          }
+        })
+      }
+
+      const { data, error } = await query
+
+      if (error) throw error
+
+      if (data && data.length > 0) {
+        allData = [...allData, ...data]
+        if (data.length < PAGE_SIZE) {
+          hasMore = false
+        } else {
+          from += PAGE_SIZE
+        }
+      } else {
+        hasMore = false
+      }
+    }
+
+    return allData
+  }
+
   // Toast functions
   const showToast = (message: string, type: ToastType) => {
     const id = toastIdCounter
     setToastIdCounter(prev => prev + 1)
     const newToast: Toast = { id, message, type }
     setToasts(prev => [...prev, newToast])
-    const duration = type === 'warning' ? 2000 : 3000
-    setTimeout(() => {
-      setToasts(prev => prev.filter(toast => toast.id !== id))
-    }, duration)
+
+    if (type !== 'error') {
+      setTimeout(() => {
+        setToasts(prev => prev.filter(t => t.id !== id))
+      }, 5000)
+    }
   }
 
-  const showToastWithConfirmation = (message: string, type: ToastType) => {
+  const showConfirmToast = (message: string, type: ToastType) => {
     const id = toastIdCounter
     setToastIdCounter(prev => prev + 1)
     const newToast: Toast = { id, message, type, requiresConfirmation: true }
@@ -263,339 +323,567 @@ export default function LancamentosPage() {
   }
 
   const dismissToast = (id: number) => {
-    setToasts(prev => prev.filter(toast => toast.id !== id))
+    setToasts(prev => prev.filter(t => t.id !== id))
   }
 
   const getToastStyles = (type: ToastType) => {
     switch (type) {
       case 'success':
-        return { borderColor: '#10b981', icon: CheckCircle, iconColor: '#10b981' }
+        return {
+          borderColor: '#10b981',
+          icon: CheckCircle,
+          iconColor: '#10b981'
+        }
       case 'warning':
-        return { borderColor: '#f59e0b', icon: AlertTriangle, iconColor: '#f59e0b' }
+        return {
+          borderColor: '#f59e0b',
+          icon: AlertTriangle,
+          iconColor: '#f59e0b'
+        }
       case 'error':
-        return { borderColor: '#ef4444', icon: XCircle, iconColor: '#ef4444' }
+        return {
+          borderColor: '#ef4444',
+          icon: XCircle,
+          iconColor: '#ef4444'
+        }
     }
   }
 
-  // Limpar projeto quando tipo de fluxo for Corporativo
+  // Helpers para badges
+  const getStatusBadgeStyle = (status: string) => {
+    switch (status) {
+      case 'ABERTO':
+        return { bg: '#fef3c7', text: '#92400e', label: 'Aberto' }
+      case 'PAGO_RECEBIDO':
+        return { bg: '#d1fae5', text: '#065f46', label: 'Liquidado' }
+      case 'CANCELADO':
+        return { bg: '#fee2e2', text: '#991b1b', label: 'Cancelado' }
+      default:
+        return { bg: '#e5e7eb', text: '#374151', label: status }
+    }
+  }
+
+  const getTipoBadgeStyle = (tipo: string) => {
+    switch (tipo) {
+      case 'Entrada':
+        return { bg: '#d1fae5', text: '#065f46', label: 'Recebimento' }
+      case 'Saida':
+        return { bg: '#fee2e2', text: '#991b1b', label: 'Pagamento' }
+      default:
+        return { bg: '#e5e7eb', text: '#374151', label: tipo }
+    }
+  }
+
+  // Fetch initial data
   useEffect(() => {
-    if (selectedTipoFluxo === 'Corporativo') {
-      setValue('projeto_id', '')
-      setValue('subprojeto_id', '')
-    }
-  }, [selectedTipoFluxo, setValue])
-
-  // Load data functions
-  const loadEmpresas = async () => {
-    const { data, error } = await supabase
-      .from('empresas')
-      .select('*')
-      .eq('ativo', true)
-      .order('nome')
-    if (error) {
-      console.error('Erro ao carregar empresas:', error)
-      showToast('Erro ao carregar empresas', 'error')
-    } else {
-      setEmpresas(data || [])
-    }
-  }
-
-  const loadProjetos = async (empresaId: string) => {
-    const { data, error } = await supabase
-      .from('projetos')
-      .select('*')
-      .eq('empresa_id', empresaId)
-      .eq('ativo', true)
-      .is('projeto_pai_id', null)
-      .order('nome')
-    if (error) {
-      console.error('Erro ao carregar projetos:', error)
-      showToast('Erro ao carregar projetos', 'error')
-    } else {
-      setProjetos(data || [])
-    }
-  }
-
-  const loadSubprojetos = async (projetoId: string) => {
-    const { data, error } = await supabase
-      .from('projetos')
-      .select('*')
-      .eq('projeto_pai_id', projetoId)
-      .eq('ativo', true)
-      .order('nome')
-    if (error) {
-      console.error('Erro ao carregar subprojetos:', error)
-      showToast('Erro ao carregar subprojetos', 'error')
-    } else {
-      setSubprojetos(data || [])
-    }
-  }
-
-  const loadBancosContas = async (empresaId: string) => {
-    const { data, error } = await supabase
-      .from('bancos_contas')
-      .select(`
-        *,
-        banco:bancos(nome)
-      `)
-      .eq('empresa_id', empresaId)
-      .eq('ativo', true)
-      .eq('tipo_conta', 'CC')
-      .order('banco_nome')
-    if (error) {
-      console.error('Erro ao carregar contas bancárias:', error)
-      showToast('Erro ao carregar contas bancárias', 'error')
-    } else {
-      setBancosContas(data || [])
-    }
-  }
-
-  const loadContrapartes = async () => {
-    const { data, error } = await supabase
-      .from('contrapartes')
-      .select('*')
-      .eq('ativo', true)
-      .order('nome')
-    if (error) {
-      console.error('Erro ao carregar contrapartes:', error)
-      showToast('Erro ao carregar contrapartes', 'error')
-    } else {
-      setContrapartes(data || [])
-    }
-  }
-
-  const loadTiposFluxo = async () => {
-    const { data, error } = await supabase
-      .from('plano_contas_fluxo')
-      .select('tipo_fluxo')
-      .eq('ativo', true)
-    
-    if (error) {
-      console.error('Erro ao carregar tipos de fluxo:', error)
-      showToast('Erro ao carregar tipos de fluxo', 'error')
-    } else {
-      const tiposUnicos = Array.from(new Set((data || []).map(item => item.tipo_fluxo))).sort()
-      setTiposFluxo(tiposUnicos)
-    }
-  }
-
-  const loadRetencoes = async (lancamentoId: string) => {
-    const { data, error } = await supabase
-      .from('lancamento_retencoes')
-      .select('*')
-      .eq('lancamento_id', lancamentoId)
-    
-    if (error) {
-      console.error('Erro ao carregar retenções:', error)
-    } else {
-      const retencoesFormatadas = (data || []).map(r => ({
-        ...r,
-        valorFormatado: formatCurrencyInput((r.valor * 100).toString())
-      }))
-      setRetencoes(retencoesFormatadas)
-    }
-  }
-
-  const loadLancamentos = async (pageNum: number = 0, isLoadMore = false) => {
-    if (isLoadMore) {
-      setLoadingMore(true)
-    } else {
-      setLoading(true)
-    }
-
-    let query = supabase
-      .from('lancamentos')
-      .select(`
-        *,
-        empresa:empresas!lancamentos_empresa_id_fkey(nome),
-        projeto:projetos!lancamentos_projeto_id_fkey(nome),
-        subprojeto:projetos!lancamentos_subprojeto_id_fkey(nome),
-        contraparte:contrapartes(nome),
-        plano_conta:plano_contas_fluxo(*)
-      `)
-      .order('data_vencimento', { ascending: false })
-      .order('created_at', { ascending: false })
-      .range(pageNum * ITEMS_PER_PAGE, (pageNum + 1) * ITEMS_PER_PAGE - 1)
-
-    // Aplicar filtros
-    if (searchTerm) {
-      query = query.or(`documento_numero.ilike.%${searchTerm}%,observacoes.ilike.%${searchTerm}%`)
-    }
-    if (selectedTipoFilter) {
-      query = query.eq('tipo', selectedTipoFilter)
-    }
-    if (selectedStatusFilter) {
-      query = query.eq('status', selectedStatusFilter)
-    }
-    if (selectedEmpresaFilter) {
-      query = query.eq('empresa_id', selectedEmpresaFilter)
-    }
-    if (selectedProjetoFilter) {
-      query = query.eq('projeto_id', selectedProjetoFilter)
-    }
-    if (selectedContraparteFilter) {
-      query = query.eq('contraparte_id', selectedContraparteFilter)
-    }
-    if (dataVencimentoInicio) {
-      query = query.gte('data_vencimento', dataVencimentoInicio)
-    }
-    if (dataVencimentoFim) {
-      query = query.lte('data_vencimento', dataVencimentoFim)
-    }
-
-    const { data, error } = await query
-
-    if (error) {
-      console.error('Erro ao carregar lançamentos:', error)
-      showToast('Erro ao carregar lançamentos', 'error')
-      if (isLoadMore) {
-        setLoadingMore(false)
-      } else {
-        setLoading(false)
-      }
-      return
-    }
-
-    const lancamentosFormatados = (data || []).map(l => ({
-      ...l,
-      empresa_nome: l.empresa?.nome,
-      projeto_nome: l.projeto?.nome,
-      subprojeto_nome: l.subprojeto?.nome,
-      contraparte_nome: l.contraparte?.nome
-    }))
-
-    if (isLoadMore) {
-      setLancamentos(prev => [...prev, ...lancamentosFormatados])
-    } else {
-      setLancamentos(lancamentosFormatados)
-    }
-
-    setHasMore(lancamentosFormatados.length === ITEMS_PER_PAGE)
-    
-    if (isLoadMore) {
-      setLoadingMore(false)
-    } else {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    loadEmpresas()
-    loadContrapartes()
-    loadTiposFluxo()
-    loadLancamentos()
+    fetchEmpresas()
+    fetchContrapartes()
+    fetchTiposFluxo()
+    fetchProjetosForFilter()
+    fetchCategorias()
+    fetchLancamentos()
   }, [])
 
+  // Carregar subprojetos quando um projeto for selecionado nos filtros
   useEffect(() => {
-    setPage(0)
-    loadLancamentos(0, false)
-  }, [
-    searchTerm,
-    selectedTipoFilter,
-    selectedStatusFilter,
-    selectedEmpresaFilter,
-    selectedProjetoFilter,
-    selectedContraparteFilter,
-  ])
+    if (selectedProjetoFilter) {
+      fetchSubprojetosForFilter(selectedProjetoFilter)
+    } else {
+      setSubprojetosFilter([])
+      setSelectedSubprojetoFilter('')
+    }
+  }, [selectedProjetoFilter])
 
+  // Update project list when empresa changes
   useEffect(() => {
     if (selectedEmpresaId) {
-      loadProjetos(selectedEmpresaId)
-      loadBancosContas(selectedEmpresaId)
-      setValue('projeto_id', '')
-      setValue('subprojeto_id', '')
-      setValue('banco_conta_id', '')
+      fetchProjetos(selectedEmpresaId)
+      fetchBancosContas(selectedEmpresaId)
     } else {
       setProjetos([])
+      setSubprojetos([])
       setBancosContas([])
     }
-  }, [selectedEmpresaId, setValue])
+  }, [selectedEmpresaId])
 
+  // Update subproject list when project changes
   useEffect(() => {
     if (selectedProjetoId) {
-      loadSubprojetos(selectedProjetoId)
-      setValue('subprojeto_id', '')
+      fetchSubprojetos(selectedProjetoId)
     } else {
       setSubprojetos([])
     }
-  }, [selectedProjetoId, setValue])
+  }, [selectedProjetoId])
 
-  // Fechar dropdown ao clicar fora
+  // Recalcular valor líquido quando retenções mudam
   useEffect(() => {
-    const handleClickOutside = () => setShowContraparteDropdown(false)
-    if (showContraparteDropdown) {
-      document.addEventListener('click', handleClickOutside)
-      return () => document.removeEventListener('click', handleClickOutside)
+    const totalRetencoes = retencoes.reduce((acc, r) => acc + r.valor, 0)
+    setValorLiquido(valorBruto - totalRetencoes)
+  }, [retencoes, valorBruto])
+
+  const fetchEmpresas = async () => {
+    try {
+      const data = await fetchAllRecords('empresas', '*', { ativo: true, order: 'nome' })
+      setEmpresas(data || [])
+    } catch (error: any) {
+      console.error('Erro ao buscar empresas:', error)
+      showConfirmToast('Erro ao carregar empresas', 'error')
     }
-  }, [showContraparteDropdown])
+  }
+
+  const fetchProjetos = async (empresaId: string) => {
+    try {
+      const PAGE_SIZE = 1000
+      let allData: any[] = []
+      let from = 0
+      let hasMore = true
+
+      while (hasMore) {
+        const { data, error } = await supabase
+          .from('projetos')
+          .select('*')
+          .eq('empresa_id', empresaId)
+          .eq('ativo', true)
+          .is('projeto_pai_id', null)
+          .order('nome')
+          .range(from, from + PAGE_SIZE - 1)
+
+        if (error) throw error
+
+        if (data && data.length > 0) {
+          allData = [...allData, ...data]
+          if (data.length < PAGE_SIZE) {
+            hasMore = false
+          } else {
+            from += PAGE_SIZE
+          }
+        } else {
+          hasMore = false
+        }
+      }
+
+      setProjetos(allData || [])
+    } catch (error: any) {
+      console.error('Erro ao buscar projetos:', error)
+      showConfirmToast('Erro ao carregar projetos', 'error')
+    }
+  }
+
+  const fetchSubprojetos = async (projetoId: string) => {
+    try {
+      const data = await fetchAllRecords('projetos', '*', { 
+        projeto_pai_id: projetoId, 
+        ativo: true, 
+        order: 'nome' 
+      })
+      setSubprojetos(data || [])
+    } catch (error: any) {
+      console.error('Erro ao buscar subprojetos:', error)
+    }
+  }
+
+  const fetchBancosContas = async (empresaId: string) => {
+    try {
+      const PAGE_SIZE = 1000
+      let allData: any[] = []
+      let from = 0
+      let hasMore = true
+
+      while (hasMore) {
+        const { data, error } = await supabase
+          .from('bancos_contas')
+          .select(`
+            *,
+            banco:bancos(nome)
+          `)
+          .eq('empresa_id', empresaId)
+          .eq('ativo', true)
+          .range(from, from + PAGE_SIZE - 1)
+
+        if (error) throw error
+
+        if (data && data.length > 0) {
+          allData = [...allData, ...data]
+          if (data.length < PAGE_SIZE) {
+            hasMore = false
+          } else {
+            from += PAGE_SIZE
+          }
+        } else {
+          hasMore = false
+        }
+      }
+
+      // Ordenar por banco_nome e depois por numero_conta
+      allData.sort((a, b) => {
+        const nomeA = (a.banco_nome || a.banco?.nome || '').toLowerCase()
+        const nomeB = (b.banco_nome || b.banco?.nome || '').toLowerCase()
+        if (nomeA < nomeB) return -1
+        if (nomeA > nomeB) return 1
+        return (a.numero_conta || '').localeCompare(b.numero_conta || '')
+      })
+
+      setBancosContas(allData || [])
+    } catch (error: any) {
+      console.error('Erro ao buscar contas bancárias:', error)
+      showConfirmToast('Erro ao carregar contas bancárias', 'error')
+    }
+  }
+
+  const fetchContrapartes = async () => {
+    try {
+      const data = await fetchAllRecords('contrapartes', '*', { ativo: true, order: 'nome' })
+      // Aplicar trim nos nomes e apelidos
+      const cleanedData = (data || []).map(c => ({
+        ...c,
+        nome: c.nome?.trim() || '',
+        apelido: c.apelido?.trim() || null
+      }))
+      // Ordenar alfabeticamente pelo campo que será exibido (apelido ou nome)
+      const sortedData = cleanedData.sort((a, b) => {
+        const displayNameA = (a.apelido || a.nome).toLowerCase()
+        const displayNameB = (b.apelido || b.nome).toLowerCase()
+        return displayNameA.localeCompare(displayNameB, 'pt-BR', { sensitivity: 'base' })
+      })
+      setContrapartes(sortedData)
+    } catch (error: any) {
+      console.error('Erro ao buscar contrapartes:', error)
+      showConfirmToast('Erro ao carregar contrapartes', 'error')
+    }
+  }
+
+  const fetchTiposFluxo = async () => {
+    try {
+      const data = await fetchAllRecords('plano_contas_fluxo', 'tipo_fluxo', { ativo: true })
+      const uniqueTipos = Array.from(new Set(data?.map((item: any) => item.tipo_fluxo) || []))
+      setTiposFluxo(uniqueTipos.sort())
+    } catch (error: any) {
+      console.error('Erro ao buscar tipos de fluxo:', error)
+      showConfirmToast('Erro ao carregar tipos de fluxo', 'error')
+    }
+  }
+
+  const fetchProjetosForFilter = async () => {
+    try {
+      const PAGE_SIZE = 1000
+      let allData: any[] = []
+      let from = 0
+      let hasMore = true
+
+      while (hasMore) {
+        const { data, error } = await supabase
+          .from('projetos')
+          .select('*')
+          .eq('ativo', true)
+          .is('projeto_pai_id', null)
+          .order('nome')
+          .range(from, from + PAGE_SIZE - 1)
+
+        if (error) throw error
+
+        if (data && data.length > 0) {
+          allData = [...allData, ...data]
+          if (data.length < PAGE_SIZE) {
+            hasMore = false
+          } else {
+            from += PAGE_SIZE
+          }
+        } else {
+          hasMore = false
+        }
+      }
+
+      setProjetosFilter(allData || [])
+    } catch (error: any) {
+      console.error('Erro ao buscar projetos para filtro:', error)
+    }
+  }
+
+  const fetchSubprojetosForFilter = async (projetoId: string) => {
+    try {
+      const data = await fetchAllRecords('projetos', '*', { 
+        projeto_pai_id: projetoId, 
+        ativo: true, 
+        order: 'nome' 
+      })
+      setSubprojetosFilter(data || [])
+    } catch (error: any) {
+      console.error('Erro ao buscar subprojetos para filtro:', error)
+    }
+  }
+
+  const fetchCategorias = async () => {
+    try {
+      const data = await fetchAllRecords('plano_contas_fluxo', 'categoria', { ativo: true })
+      const uniqueCategorias = Array.from(new Set(data?.map((item: any) => item.categoria) || []))
+      setCategorias(uniqueCategorias.sort())
+    } catch (error: any) {
+      console.error('Erro ao buscar categorias:', error)
+    }
+  }
+
+  const fetchLancamentos = async (resetPagination = false) => {
+    try {
+      if (resetPagination) {
+        setPage(0)
+        setHasMore(true)
+      }
+
+      const currentPage = resetPagination ? 0 : page
+      const from = currentPage * ITEMS_PER_PAGE
+      const to = from + ITEMS_PER_PAGE - 1
+
+      let query = supabase
+        .from('lancamentos')
+        .select(`
+          *,
+          empresa:empresas(nome),
+          projeto:projetos!lancamentos_projeto_id_fkey(nome),
+          subprojeto:projetos!lancamentos_subprojeto_id_fkey(nome),
+          contraparte:contrapartes(nome),
+          plano_conta:plano_contas_fluxo(*)
+        `)
+        .order('data_vencimento', { ascending: false })
+
+      // Apply filters (exceto searchTerm que será aplicado em memória)
+      if (selectedTipoFilter) {
+        query = query.eq('tipo', selectedTipoFilter)
+      }
+      if (selectedStatusFilter) {
+        query = query.eq('status', selectedStatusFilter)
+      }
+      if (selectedEmpresaFilter) {
+        query = query.eq('empresa_id', selectedEmpresaFilter)
+      }
+      if (selectedProjetoFilter) {
+        query = query.eq('projeto_id', selectedProjetoFilter)
+      }
+      if (selectedSubprojetoFilter) {
+        query = query.eq('subprojeto_id', selectedSubprojetoFilter)
+      }
+      if (selectedContraparteFilter) {
+        query = query.eq('contraparte_id', selectedContraparteFilter)
+      }
+      if (selectedCategoriaFilter) {
+        // Buscar IDs dos planos de conta com a categoria selecionada
+        const { data: planosData } = await supabase
+          .from('plano_contas_fluxo')
+          .select('id')
+          .eq('categoria', selectedCategoriaFilter)
+          .eq('ativo', true)
+        
+        if (planosData && planosData.length > 0) {
+          const planoIds = planosData.map(p => p.id)
+          query = query.in('plano_conta_id', planoIds)
+        } else {
+          // Se não encontrou planos com essa categoria, retornar vazio
+          setLancamentos([])
+          setHasMore(false)
+          setLoading(false)
+          setLoadingMore(false)
+          return
+        }
+      }
+      if (dataVencimentoInicio) {
+        query = query.gte('data_vencimento', dataVencimentoInicio)
+      }
+      if (dataVencimentoFim) {
+        query = query.lte('data_vencimento', dataVencimentoFim)
+      }
+
+      // Aplicar range apenas se não tiver busca de texto
+      if (!searchTerm) {
+        query = query.range(from, to)
+      }
+
+      const { data, error } = await query
+
+      if (error) throw error
+
+      let formattedData = data?.map((l: any) => ({
+        ...l,
+        empresa_nome: l.empresa?.nome,
+        projeto_nome: l.projeto?.nome,
+        subprojeto_nome: l.subprojeto?.nome,
+        contraparte_nome: l.contraparte?.nome
+      })) || []
+
+      // Aplicar filtro de busca em memória
+      if (searchTerm) {
+        const searchLower = searchTerm.toLowerCase()
+        formattedData = formattedData.filter((l: any) => {
+          return (
+            l.tipo?.toLowerCase().includes(searchLower) ||
+            l.status?.toLowerCase().includes(searchLower) ||
+            l.empresa_nome?.toLowerCase().includes(searchLower) ||
+            l.projeto_nome?.toLowerCase().includes(searchLower) ||
+            l.subprojeto_nome?.toLowerCase().includes(searchLower) ||
+            l.contraparte_nome?.toLowerCase().includes(searchLower) ||
+            l.plano_conta?.categoria?.toLowerCase().includes(searchLower) ||
+            l.valor_bruto?.toString().includes(searchLower) ||
+            l.valor_liquido?.toString().includes(searchLower) ||
+            l.data_vencimento?.includes(searchLower) ||
+            l.observacoes?.toLowerCase().includes(searchLower) ||
+            l.documento_numero?.toLowerCase().includes(searchLower) ||
+            l.documento_tipo?.toLowerCase().includes(searchLower)
+          )
+        })
+      }
+
+      if (resetPagination) {
+        setLancamentos(formattedData)
+      } else {
+        setLancamentos(prev => [...prev, ...formattedData])
+      }
+
+      setHasMore(!searchTerm && formattedData.length === ITEMS_PER_PAGE)
+      setLoading(false)
+      setLoadingMore(false)
+    } catch (error: any) {
+      console.error('Erro ao buscar lançamentos:', error)
+      showConfirmToast('Erro ao carregar lançamentos', 'error')
+      setLoading(false)
+      setLoadingMore(false)
+    }
+  }
 
   const handleLoadMore = () => {
-    const nextPage = page + 1
-    setPage(nextPage)
-    loadLancamentos(nextPage, true)
+    setLoadingMore(true)
+    setPage(prev => prev + 1)
   }
 
-  const handleAtualizar = () => {
-    setPage(0)
-    loadLancamentos(0, false)
+  useEffect(() => {
+    if (page > 0) {
+      fetchLancamentos()
+    }
+  }, [page])
+
+  // Refetch on filter change
+  useEffect(() => {
+    const delayDebounceFn = setTimeout(() => {
+      fetchLancamentos(true)
+    }, 300)
+
+    return () => clearTimeout(delayDebounceFn)
+  }, [searchTerm, selectedTipoFilter, selectedStatusFilter, selectedEmpresaFilter, selectedProjetoFilter, selectedSubprojetoFilter, selectedContraparteFilter, selectedCategoriaFilter, dataVencimentoInicio, dataVencimentoFim])
+
+  // Fetch retenções ao abrir modal de edição
+  const fetchRetencoes = async (lancamentoId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('lancamento_retencoes')
+        .select('*')
+        .eq('lancamento_id', lancamentoId)
+
+      if (error) throw error
+
+      const retencoesFormatadas = data?.map(r => ({
+        ...r,
+        valorFormatado: new Intl.NumberFormat('pt-BR', {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2
+        }).format(r.valor)
+      })) || []
+
+      setRetencoes(retencoesFormatadas)
+    } catch (error: any) {
+      console.error('Erro ao buscar retenções:', error)
+      showConfirmToast('Erro ao carregar retenções', 'error')
+    }
   }
 
-  // Funções do combobox de contraparte
-  const contrapartesFiltradas = contrapartes.filter(c => 
-    c.nome.toLowerCase().includes(contraparteSearchTerm.toLowerCase()) ||
-    (c.apelido && c.apelido.toLowerCase().includes(contraparteSearchTerm.toLowerCase()))
-  )
-
-  const handleSelectContraparte = (contraparteId: string, contraparteNome: string) => {
-    setSelectedContraparteFilter(contraparteId)
-    setContraparteNomeExibicao(contraparteNome)
-    setContraparteSearchTerm(contraparteNome)
-    setShowContraparteDropdown(false)
-    setPage(0)
-    loadLancamentos(0, false)
+  const adicionarRetencao = () => {
+    const novaRetencao: Retencao = {
+      imposto: 'IRRF',
+      valor: 0,
+      valorFormatado: '0,00',
+      detalhe: null
+    }
+    setRetencoes([...retencoes, novaRetencao])
   }
 
-  const handleClearContraparte = () => {
-    setSelectedContraparteFilter('')
-    setContraparteNomeExibicao('')
-    setContraparteSearchTerm('')
-    setShowContraparteDropdown(false)
-    setPage(0)
-    loadLancamentos(0, false)
+  const removerRetencao = (index: number) => {
+    setRetencoes(retencoes.filter((_, i) => i !== index))
   }
 
-  const openModal = (lancamento?: Lancamento) => {
+  const atualizarRetencao = (index: number, field: keyof Retencao, value: any) => {
+    const updated = [...retencoes]
+    if (field === 'valorFormatado') {
+      const formatted = formatCurrencyInput(value)
+      updated[index].valorFormatado = formatted
+      updated[index].valor = parseCurrencyInput(formatted)
+    } else {
+      updated[index][field] = value as never
+    }
+    setRetencoes(updated)
+  }
+
+  const openModal = async (lancamento?: Lancamento) => {
     if (lancamento) {
       setEditingId(lancamento.id)
-      
-      // Definir se o lançamento está pago
-      const isPago = lancamento.status === 'PAGO_RECEBIDO'
-      setIsLancamentoPago(isPago)
+      setIsLancamentoPago(lancamento.status === 'PAGO_RECEBIDO')
       setStatusOriginal(lancamento.status)
 
-      // Carregar retenções
-      loadRetencoes(lancamento.id)
+      // Buscar as retenções
+      await fetchRetencoes(lancamento.id)
 
-      // Popular o formulário
-      setValue('tipo', lancamento.tipo)
+      // Primeiro definir empresa_id para habilitar os combos dependentes
       setValue('empresa_id', lancamento.empresa_id)
-      setValue('tipo_fluxo', lancamento.plano_conta?.tipo_fluxo || '')
-      setValue('projeto_id', lancamento.projeto_id || '')
-      setValue('subprojeto_id', lancamento.subprojeto_id || '')
-      setValue('banco_conta_id', lancamento.banco_conta_id || '')
-      setValue('contraparte_id', lancamento.contraparte_id || '')
-      setValue('plano_conta_id', lancamento.plano_conta_id)
-      setValue('valor_bruto', lancamento.valor_bruto)
-      setValue('data_emissao', formatDateForInput(lancamento.data_emissao))
-      setValue('data_vencimento', formatDateForInput(lancamento.data_vencimento))
-      setValue('data_previsao_pagamento', formatDateForInput(lancamento.data_previsao_pagamento))
-      setValue('documento_tipo', lancamento.documento_tipo || '')
-      setValue('documento_numero', lancamento.documento_numero || '')
-      setValue('observacoes', lancamento.observacoes || '')
+      
+      // Aguardar os dados serem carregados
+      await fetchProjetos(lancamento.empresa_id)
+      await fetchBancosContas(lancamento.empresa_id)
+      
+      if (lancamento.projeto_id) {
+        await fetchSubprojetos(lancamento.projeto_id)
+      }
 
+      // Buscar o tipo_fluxo do plano de conta selecionado
+      if (lancamento.plano_conta_id) {
+        const { data: planoData } = await supabase
+          .from('plano_contas_fluxo')
+          .select('tipo_fluxo')
+          .eq('id', lancamento.plano_conta_id)
+          .single()
+
+        if (planoData) {
+          setValue('tipo_fluxo', planoData.tipo_fluxo)
+        }
+      }
+
+      // Agora preencher todos os campos
+      reset({
+        tipo: lancamento.tipo,
+        empresa_id: lancamento.empresa_id,
+        tipo_fluxo: lancamento.plano_conta?.tipo_fluxo || '',
+        projeto_id: lancamento.projeto_id || '',
+        subprojeto_id: lancamento.subprojeto_id || '',
+        banco_conta_id: lancamento.banco_conta_id || '',
+        contraparte_id: lancamento.contraparte_id || '',
+        plano_conta_id: lancamento.plano_conta_id,
+        valor_bruto: lancamento.valor_bruto,
+        data_emissao: formatDateForInput(lancamento.data_emissao),
+        data_vencimento: formatDateForInput(lancamento.data_vencimento),
+        data_previsao_pagamento: formatDateForInput(lancamento.data_previsao_pagamento),
+        documento_tipo: lancamento.documento_tipo || '',
+        documento_numero: lancamento.documento_numero || '',
+        observacoes: lancamento.observacoes || ''
+      })
+
+      // Definir valores formatados
       setValorBruto(lancamento.valor_bruto)
-      setValorBrutoFormatado(formatCurrencyInput((lancamento.valor_bruto * 100).toString()))
-      setValorLiquido(lancamento.valor_liquido)
+      setValorBrutoFormatado(new Intl.NumberFormat('pt-BR', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      }).format(lancamento.valor_bruto))
+
+      // Buscar nome da contraparte para exibição
+      if (lancamento.contraparte_id) {
+        const contraparte = contrapartes.find(c => c.id === lancamento.contraparte_id)
+        if (contraparte) {
+          setContraparteNomeExibicao(contraparte.apelido || contraparte.nome)
+        }
+      }
     } else {
       setEditingId(null)
       setIsLancamentoPago(false)
@@ -604,7 +892,24 @@ export default function LancamentosPage() {
       setValorBruto(0)
       setValorBrutoFormatado('')
       setValorLiquido(0)
-      reset()
+      setContraparteNomeExibicao('')
+      reset({
+        tipo: 'Saida',
+        empresa_id: '',
+        tipo_fluxo: '',
+        projeto_id: '',
+        subprojeto_id: '',
+        banco_conta_id: '',
+        contraparte_id: '',
+        plano_conta_id: '',
+        valor_bruto: 0,
+        data_emissao: '',
+        data_vencimento: '',
+        data_previsao_pagamento: '',
+        documento_tipo: '',
+        documento_numero: '',
+        observacoes: ''
+      })
     }
     setShowModal(true)
   }
@@ -618,222 +923,197 @@ export default function LancamentosPage() {
     setValorBruto(0)
     setValorBrutoFormatado('')
     setValorLiquido(0)
+    setContraparteNomeExibicao('')
     reset()
   }
 
-  const calcularValorLiquido = (valorBruto: number, retencoes: Retencao[]): number => {
-    const totalRetencoes = retencoes.reduce((sum, r) => sum + r.valor, 0)
-    return valorBruto - totalRetencoes
-  }
-
-  useEffect(() => {
-    const liquido = calcularValorLiquido(valorBruto, retencoes)
-    setValorLiquido(liquido)
-  }, [valorBruto, retencoes])
-
-  const adicionarRetencao = () => {
-    setRetencoes([
-      ...retencoes,
-      { imposto: 'IRRF', valor: 0, valorFormatado: '', detalhe: null }
-    ])
-  }
-
-  const removerRetencao = (index: number) => {
-    setRetencoes(retencoes.filter((_, i) => i !== index))
-  }
-
-  const atualizarRetencao = (index: number, campo: keyof Retencao, valor: any) => {
-    const novasRetencoes = [...retencoes]
-    
-    if (campo === 'valorFormatado') {
-      const formatted = formatCurrencyInput(valor)
-      const numericValue = parseCurrencyInput(formatted)
-      novasRetencoes[index] = {
-        ...novasRetencoes[index],
-        valorFormatado: formatted,
-        valor: numericValue
-      }
-    } else {
-      novasRetencoes[index] = {
-        ...novasRetencoes[index],
-        [campo]: valor
-      }
-    }
-    
-    setRetencoes(novasRetencoes)
-  }
-
   const onSubmit = async (formData: LancamentoForm) => {
-    const lancamentoData = {
-      tipo: formData.tipo,
-      empresa_id: formData.empresa_id,
-      projeto_id: selectedTipoFluxo === 'Corporativo' ? null : (formData.projeto_id || null),
-      subprojeto_id: formData.subprojeto_id || null,
-      banco_conta_id: formData.banco_conta_id,
-      contraparte_id: formData.contraparte_id,
-      plano_conta_id: formData.plano_conta_id,
-      valor_bruto: valorBruto,
-      valor_liquido: valorLiquido,
-      data_emissao: formData.data_emissao,
-      data_vencimento: formData.data_vencimento,
-      data_previsao_pagamento: formData.data_previsao_pagamento || null,
-      documento_tipo: formData.documento_tipo || null,
-      documento_numero: formData.documento_numero || null,
-      observacoes: formData.observacoes || null,
-      status: editingId && statusOriginal === 'PAGO_RECEBIDO' ? 'PAGO_RECEBIDO' : 'ABERTO',
-      sentido: formData.tipo === 'Entrada' ? 'Entrada' : 'Saida'
-    }
-
-    if (editingId) {
-      // Atualização
-      const { error } = await supabase
-        .from('lancamentos')
-        .update(lancamentoData)
-        .eq('id', editingId)
-
-      if (error) {
-        console.error('Erro ao atualizar lançamento:', error)
-        showToast('Erro ao atualizar lançamento', 'error')
-        return
+    try {
+      // Preparar dados do lançamento
+      const lancamentoData = {
+        tipo: formData.tipo,
+        empresa_id: formData.empresa_id,
+        projeto_id: formData.projeto_id || null,
+        subprojeto_id: formData.subprojeto_id || null,
+        banco_conta_id: formData.banco_conta_id,
+        contraparte_id: formData.contraparte_id,
+        plano_conta_id: formData.plano_conta_id,
+        valor_bruto: formData.valor_bruto,
+        valor_liquido: valorLiquido,
+        data_emissao: formData.data_emissao,
+        data_vencimento: formData.data_vencimento,
+        data_previsao_pagamento: formData.data_previsao_pagamento || null,
+        documento_tipo: formData.documento_tipo || null,
+        documento_numero: formData.documento_numero || null,
+        observacoes: formData.observacoes || null,
+        status: statusOriginal || 'ABERTO'
       }
 
-      // Atualizar retenções
-      await supabase
+      if (editingId) {
+        // Update
+        const { error: lancamentoError } = await supabase
+          .from('lancamentos')
+          .update(lancamentoData)
+          .eq('id', editingId)
+
+        if (lancamentoError) throw lancamentoError
+
+        // Atualizar retenções
+        // Primeiro deletar as antigas
+        const { error: deleteError } = await supabase
+          .from('lancamento_retencoes')
+          .delete()
+          .eq('lancamento_id', editingId)
+
+        if (deleteError) throw deleteError
+
+        // Inserir as novas
+        if (retencoes.length > 0) {
+          const retencoesData = retencoes.map(r => ({
+            lancamento_id: editingId,
+            imposto: r.imposto,
+            valor: r.valor,
+            detalhe: r.detalhe
+          }))
+
+          const { error: insertError } = await supabase
+            .from('lancamento_retencoes')
+            .insert(retencoesData)
+
+          if (insertError) throw insertError
+        }
+
+        showToast('Lançamento atualizado com sucesso!', 'success')
+      } else {
+        // Create
+        const { data: newLancamento, error: lancamentoError } = await supabase
+          .from('lancamentos')
+          .insert(lancamentoData)
+          .select()
+          .single()
+
+        if (lancamentoError) throw lancamentoError
+
+        // Inserir retenções
+        if (retencoes.length > 0) {
+          const retencoesData = retencoes.map(r => ({
+            lancamento_id: newLancamento.id,
+            imposto: r.imposto,
+            valor: r.valor,
+            detalhe: r.detalhe
+          }))
+
+          const { error: retencoesError } = await supabase
+            .from('lancamento_retencoes')
+            .insert(retencoesData)
+
+          if (retencoesError) throw retencoesError
+        }
+
+        showToast('Lançamento criado com sucesso!', 'success')
+      }
+
+      closeModal()
+      fetchLancamentos(true)
+    } catch (error: any) {
+      console.error('Erro ao salvar lançamento:', error)
+      showConfirmToast(error.message || 'Erro ao salvar lançamento', 'error')
+    }
+  }
+
+  const handleDelete = async (id: string) => {
+    try {
+      // Primeiro deletar as retenções
+      const { error: retencoesError } = await supabase
         .from('lancamento_retencoes')
         .delete()
-        .eq('lancamento_id', editingId)
+        .eq('lancamento_id', id)
 
-      if (retencoes.length > 0) {
-        const retencoesData = retencoes.map(r => ({
-          lancamento_id: editingId,
-          imposto: r.imposto,
-          valor: r.valor,
-          detalhe: r.detalhe
-        }))
+      if (retencoesError) throw retencoesError
 
-        await supabase
-          .from('lancamento_retencoes')
-          .insert(retencoesData)
-      }
-
-      showToast('Lançamento atualizado com sucesso!', 'success')
-    } else {
-      // Criação
-      const { data: newLancamento, error } = await supabase
+      // Depois deletar o lançamento
+      const { error } = await supabase
         .from('lancamentos')
-        .insert([lancamentoData])
-        .select()
-        .single()
+        .delete()
+        .eq('id', id)
 
-      if (error) {
-        console.error('Erro ao criar lançamento:', error)
-        showToast('Erro ao criar lançamento', 'error')
-        return
-      }
+      if (error) throw error
 
-      // Inserir retenções
-      if (retencoes.length > 0 && newLancamento) {
-        const retencoesData = retencoes.map(r => ({
-          lancamento_id: newLancamento.id,
-          imposto: r.imposto,
-          valor: r.valor,
-          detalhe: r.detalhe
-        }))
-
-        await supabase
-          .from('lancamento_retencoes')
-          .insert(retencoesData)
-      }
-
-      showToast('Lançamento criado com sucesso!', 'success')
-    }
-
-    closeModal()
-    loadLancamentos()
-  }
-
-  const onSubmitError = (errors: any) => {
-    console.log('Erros de validação:', errors)
-    const firstError = Object.values(errors)[0] as any
-    if (firstError?.message) {
-      showToast(firstError.message, 'error')
-    }
-  }
-
-  const handleDelete = async () => {
-    if (!deleteConfirm.id) return
-
-    const { error } = await supabase
-      .from('lancamentos')
-      .delete()
-      .eq('id', deleteConfirm.id)
-
-    if (error) {
-      console.error('Erro ao excluir lançamento:', error)
-      showToast('Erro ao excluir lançamento', 'error')
-    } else {
       showToast('Lançamento excluído com sucesso!', 'success')
-      loadLancamentos()
+      setDeleteConfirm({ show: false, id: null })
+      fetchLancamentos(true)
+    } catch (error: any) {
+      console.error('Erro ao excluir:', error)
+      showConfirmToast(error.message || 'Erro ao excluir lançamento', 'error')
     }
-
-    setDeleteConfirm({ show: false, id: null })
   }
 
   const handleLiquidar = async () => {
     if (!liquidarModal.id || !dataLiquidacao) return
 
-    const { error } = await supabase
-      .from('lancamentos')
-      .update({
-        status: 'PAGO_RECEBIDO',
-        data_liquidacao: dataLiquidacao
-      })
-      .eq('id', liquidarModal.id)
+    try {
+      const { error } = await supabase
+        .from('lancamentos')
+        .update({
+          status: 'PAGO_RECEBIDO',
+          data_liquidacao: dataLiquidacao
+        })
+        .eq('id', liquidarModal.id)
 
-    if (error) {
-      console.error('Erro ao liquidar lançamento:', error)
-      showToast('Erro ao liquidar lançamento', 'error')
-    } else {
+      if (error) throw error
+
       showToast('Lançamento liquidado com sucesso!', 'success')
-      loadLancamentos()
+      setLiquidarModal({ show: false, id: null })
+      setDataLiquidacao('')
+      fetchLancamentos(true)
+    } catch (error: any) {
+      console.error('Erro ao liquidar:', error)
+      showConfirmToast(error.message || 'Erro ao liquidar lançamento', 'error')
     }
-
-    setLiquidarModal({ show: false, id: null })
-    setDataLiquidacao('')
   }
 
-  const getStatusBadgeStyle = (status: string) => {
-    const styles = {
-      ABERTO: { bg: '#fef3c7', text: '#92400e', label: 'Aberto' },
-      PAGO_RECEBIDO: { bg: '#d1fae5', text: '#065f46', label: 'Liquidado' },
-      CANCELADO: { bg: '#fee2e2', text: '#991b1b', label: 'Cancelado' }
-    }
-    return styles[status as keyof typeof styles] || styles.ABERTO
+  const handleRefresh = () => {
+    fetchLancamentos(true)
   }
 
-  const getTipoBadgeStyle = (tipo: string) => {
-    return tipo === 'Entrada'
-      ? { bg: '#d1fae5', text: '#065f46', label: 'Recebimento' }
-      : { bg: '#fee2e2', text: '#991b1b', label: 'Pagamento' }
+  const handleClearFilters = () => {
+    setSearchTerm('')
+    setSelectedTipoFilter('')
+    setSelectedStatusFilter('')
+    setSelectedEmpresaFilter('')
+    setSelectedProjetoFilter('')
+    setSelectedSubprojetoFilter('')
+    setSelectedContraparteFilter('')
+    setSelectedCategoriaFilter('')
+    setDataVencimentoInicio('')
+    setDataVencimentoFim('')
   }
 
   if (loading) {
     return (
       <div style={{
         display: 'flex',
-        justifyContent: 'center',
         alignItems: 'center',
-        height: '100vh',
-        fontSize: '18px',
+        justifyContent: 'center',
+        minHeight: '400px',
+        fontSize: '14px',
         color: '#6b7280'
       }}>
-        Carregando...
+        <div style={{
+          width: '32px',
+          height: '32px',
+          border: '3px solid #e5e7eb',
+          borderTop: '3px solid #1555D6',
+          borderRadius: '50%',
+          animation: 'spin 1s linear infinite'
+        }} />
       </div>
     )
   }
 
   return (
-    <div style={{ padding: '24px', maxWidth: '100%', width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
+    <div style={{ padding: '20px', maxWidth: '100%', margin: '0 auto' }}>
+      {/* Header */}
       <div style={{
         display: 'flex',
         justifyContent: 'space-between',
@@ -841,12 +1121,12 @@ export default function LancamentosPage() {
         marginBottom: '24px'
       }}>
         <h1 style={{
-          fontSize: '28px',
+          fontSize: '24px',
           fontWeight: '700',
           color: '#1f2937',
           margin: 0
         }}>
-          Lançamentos Financeiros
+          Lançamentos
         </h1>
         <button
           onClick={() => openModal()}
@@ -854,7 +1134,7 @@ export default function LancamentosPage() {
             display: 'flex',
             alignItems: 'center',
             gap: '8px',
-            padding: '12px 20px',
+            padding: '10px 20px',
             backgroundColor: '#1555D6',
             color: 'white',
             border: 'none',
@@ -867,12 +1147,12 @@ export default function LancamentosPage() {
           onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#1044b5'}
           onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#1555D6'}
         >
-          <Plus size={20} />
+          <Plus size={18} />
           Novo Lançamento
         </button>
       </div>
 
-      {/* Filtros */}
+      {/* Filters */}
       <div style={{
         backgroundColor: 'white',
         borderRadius: '12px',
@@ -883,12 +1163,13 @@ export default function LancamentosPage() {
         <div style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-          gap: '16px'
+          gap: '16px',
+          marginBottom: '16px'
         }}>
           <div>
             <label style={{
               display: 'block',
-              fontSize: '13px',
+              fontSize: '11px',
               fontWeight: '500',
               color: '#374151',
               marginBottom: '6px'
@@ -897,7 +1178,7 @@ export default function LancamentosPage() {
             </label>
             <div style={{ position: 'relative' }}>
               <Search
-                size={18}
+                size={16}
                 style={{
                   position: 'absolute',
                   left: '12px',
@@ -908,16 +1189,24 @@ export default function LancamentosPage() {
               />
               <input
                 type="text"
-                placeholder="Documento, observações..."
+                placeholder="Buscar..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 style={{
                   width: '100%',
-                  padding: '9px 10px 9px 38px',
+                  padding: '8px 8px 8px 36px',
                   border: '1px solid #e5e7eb',
                   borderRadius: '8px',
-                  fontSize: '13px',
+                  fontSize: '11px',
                   outline: 'none'
+                }}
+                onFocus={(e) => {
+                  e.currentTarget.style.borderColor = '#1555D6'
+                  e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = '#e5e7eb'
+                  e.currentTarget.style.boxShadow = 'none'
                 }}
               />
             </div>
@@ -926,7 +1215,7 @@ export default function LancamentosPage() {
           <div>
             <label style={{
               display: 'block',
-              fontSize: '13px',
+              fontSize: '11px',
               fontWeight: '500',
               color: '#374151',
               marginBottom: '6px'
@@ -938,12 +1227,20 @@ export default function LancamentosPage() {
               onChange={(e) => setSelectedTipoFilter(e.target.value)}
               style={{
                 width: '100%',
-                padding: '9px 10px',
+                padding: '8px',
                 border: '1px solid #e5e7eb',
                 borderRadius: '8px',
-                fontSize: '13px',
+                fontSize: '11px',
                 outline: 'none',
                 cursor: 'pointer'
+              }}
+              onFocus={(e) => {
+                e.currentTarget.style.borderColor = '#1555D6'
+                e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.borderColor = '#e5e7eb'
+                e.currentTarget.style.boxShadow = 'none'
               }}
             >
               <option value="">Todos</option>
@@ -955,7 +1252,7 @@ export default function LancamentosPage() {
           <div>
             <label style={{
               display: 'block',
-              fontSize: '13px',
+              fontSize: '11px',
               fontWeight: '500',
               color: '#374151',
               marginBottom: '6px'
@@ -967,12 +1264,20 @@ export default function LancamentosPage() {
               onChange={(e) => setSelectedStatusFilter(e.target.value)}
               style={{
                 width: '100%',
-                padding: '9px 10px',
+                padding: '8px',
                 border: '1px solid #e5e7eb',
                 borderRadius: '8px',
-                fontSize: '13px',
+                fontSize: '11px',
                 outline: 'none',
                 cursor: 'pointer'
+              }}
+              onFocus={(e) => {
+                e.currentTarget.style.borderColor = '#1555D6'
+                e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.borderColor = '#e5e7eb'
+                e.currentTarget.style.boxShadow = 'none'
               }}
             >
               <option value="">Todos</option>
@@ -985,7 +1290,7 @@ export default function LancamentosPage() {
           <div>
             <label style={{
               display: 'block',
-              fontSize: '13px',
+              fontSize: '11px',
               fontWeight: '500',
               color: '#374151',
               marginBottom: '6px'
@@ -997,17 +1302,27 @@ export default function LancamentosPage() {
               onChange={(e) => setSelectedEmpresaFilter(e.target.value)}
               style={{
                 width: '100%',
-                padding: '9px 10px',
+                padding: '8px',
                 border: '1px solid #e5e7eb',
                 borderRadius: '8px',
-                fontSize: '13px',
+                fontSize: '11px',
                 outline: 'none',
                 cursor: 'pointer'
               }}
+              onFocus={(e) => {
+                e.currentTarget.style.borderColor = '#1555D6'
+                e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.borderColor = '#e5e7eb'
+                e.currentTarget.style.boxShadow = 'none'
+              }}
             >
               <option value="">Todas</option>
-              {empresas.map((emp) => (
-                <option key={emp.id} value={emp.id}>{emp.nome}</option>
+              {empresas.map((empresa) => (
+                <option key={empresa.id} value={empresa.id}>
+                  {empresa.nome}
+                </option>
               ))}
             </select>
           </div>
@@ -1015,12 +1330,177 @@ export default function LancamentosPage() {
           <div>
             <label style={{
               display: 'block',
-              fontSize: '13px',
+              fontSize: '11px',
               fontWeight: '500',
               color: '#374151',
               marginBottom: '6px'
             }}>
-              Vencimento - De
+              Projeto
+            </label>
+            <select
+              value={selectedProjetoFilter}
+              onChange={(e) => setSelectedProjetoFilter(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '8px',
+                border: '1px solid #e5e7eb',
+                borderRadius: '8px',
+                fontSize: '11px',
+                outline: 'none',
+                cursor: 'pointer'
+              }}
+              onFocus={(e) => {
+                e.currentTarget.style.borderColor = '#1555D6'
+                e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.borderColor = '#e5e7eb'
+                e.currentTarget.style.boxShadow = 'none'
+              }}
+            >
+              <option value="">Todos</option>
+              {projetosFilter.map((projeto) => (
+                <option key={projeto.id} value={projeto.id}>
+                  {projeto.nome}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label style={{
+              display: 'block',
+              fontSize: '11px',
+              fontWeight: '500',
+              color: '#374151',
+              marginBottom: '6px'
+            }}>
+              Subprojeto
+            </label>
+            <select
+              value={selectedSubprojetoFilter}
+              onChange={(e) => setSelectedSubprojetoFilter(e.target.value)}
+              disabled={!selectedProjetoFilter || subprojetosFilter.length === 0}
+              style={{
+                width: '100%',
+                padding: '8px',
+                border: '1px solid #e5e7eb',
+                borderRadius: '8px',
+                fontSize: '11px',
+                outline: 'none',
+                cursor: (!selectedProjetoFilter || subprojetosFilter.length === 0) ? 'not-allowed' : 'pointer',
+                opacity: (!selectedProjetoFilter || subprojetosFilter.length === 0) ? 0.6 : 1,
+                backgroundColor: (!selectedProjetoFilter || subprojetosFilter.length === 0) ? '#f9fafb' : 'white'
+              }}
+              onFocus={(e) => {
+                if (selectedProjetoFilter && subprojetosFilter.length > 0) {
+                  e.currentTarget.style.borderColor = '#1555D6'
+                  e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                }
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.borderColor = '#e5e7eb'
+                e.currentTarget.style.boxShadow = 'none'
+              }}
+            >
+              <option value="">Todos</option>
+              {subprojetosFilter.map((subprojeto) => (
+                <option key={subprojeto.id} value={subprojeto.id}>
+                  {subprojeto.nome}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label style={{
+              display: 'block',
+              fontSize: '11px',
+              fontWeight: '500',
+              color: '#374151',
+              marginBottom: '6px'
+            }}>
+              Contraparte
+            </label>
+            <select
+              value={selectedContraparteFilter}
+              onChange={(e) => setSelectedContraparteFilter(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '8px',
+                border: '1px solid #e5e7eb',
+                borderRadius: '8px',
+                fontSize: '11px',
+                outline: 'none',
+                cursor: 'pointer'
+              }}
+              onFocus={(e) => {
+                e.currentTarget.style.borderColor = '#1555D6'
+                e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.borderColor = '#e5e7eb'
+                e.currentTarget.style.boxShadow = 'none'
+              }}
+            >
+              <option value="">Todas</option>
+              {contrapartes.map((contraparte) => (
+                <option key={contraparte.id} value={contraparte.id}>
+                  {contraparte.apelido || contraparte.nome}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label style={{
+              display: 'block',
+              fontSize: '11px',
+              fontWeight: '500',
+              color: '#374151',
+              marginBottom: '6px'
+            }}>
+              Categoria
+            </label>
+            <select
+              value={selectedCategoriaFilter}
+              onChange={(e) => setSelectedCategoriaFilter(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '8px',
+                border: '1px solid #e5e7eb',
+                borderRadius: '8px',
+                fontSize: '11px',
+                outline: 'none',
+                cursor: 'pointer'
+              }}
+              onFocus={(e) => {
+                e.currentTarget.style.borderColor = '#1555D6'
+                e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.borderColor = '#e5e7eb'
+                e.currentTarget.style.boxShadow = 'none'
+              }}
+            >
+              <option value="">Todas</option>
+              {categorias.map((categoria) => (
+                <option key={categoria} value={categoria}>
+                  {categoria}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label style={{
+              display: 'block',
+              fontSize: '11px',
+              fontWeight: '500',
+              color: '#374151',
+              marginBottom: '6px'
+            }}>
+              Vencimento De
             </label>
             <input
               type="date"
@@ -1028,11 +1508,19 @@ export default function LancamentosPage() {
               onChange={(e) => setDataVencimentoInicio(e.target.value)}
               style={{
                 width: '100%',
-                padding: '9px 10px',
+                padding: '8px',
                 border: '1px solid #e5e7eb',
                 borderRadius: '8px',
-                fontSize: '13px',
+                fontSize: '11px',
                 outline: 'none'
+              }}
+              onFocus={(e) => {
+                e.currentTarget.style.borderColor = '#1555D6'
+                e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.borderColor = '#e5e7eb'
+                e.currentTarget.style.boxShadow = 'none'
               }}
             />
           </div>
@@ -1040,12 +1528,12 @@ export default function LancamentosPage() {
           <div>
             <label style={{
               display: 'block',
-              fontSize: '13px',
+              fontSize: '11px',
               fontWeight: '500',
               color: '#374151',
               marginBottom: '6px'
             }}>
-              Vencimento - Até
+              Vencimento Até
             </label>
             <input
               type="date"
@@ -1053,160 +1541,70 @@ export default function LancamentosPage() {
               onChange={(e) => setDataVencimentoFim(e.target.value)}
               style={{
                 width: '100%',
-                padding: '9px 10px',
+                padding: '8px',
                 border: '1px solid #e5e7eb',
                 borderRadius: '8px',
-                fontSize: '13px',
+                fontSize: '11px',
                 outline: 'none'
+              }}
+              onFocus={(e) => {
+                e.currentTarget.style.borderColor = '#1555D6'
+                e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.borderColor = '#e5e7eb'
+                e.currentTarget.style.boxShadow = 'none'
               }}
             />
           </div>
+        </div>
 
-          <div>
-            <label style={{
-              display: 'block',
-              fontSize: '13px',
-              fontWeight: '500',
-              color: '#374151',
-              marginBottom: '6px'
-            }}>
-              Contraparte
-            </label>
-            <div style={{ position: 'relative' }}>
-              <div style={{ position: 'relative' }}>
-                <input
-                  type="text"
-                  placeholder="Digite para buscar..."
-                  value={contraparteSearchTerm}
-                  onChange={(e) => {
-                    setContraparteSearchTerm(e.target.value)
-                    setShowContraparteDropdown(true)
-                  }}
-                  onFocus={() => setShowContraparteDropdown(true)}
-                  style={{
-                    width: '100%',
-                    padding: '9px 32px 9px 10px',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: '8px',
-                    fontSize: '13px',
-                    outline: 'none'
-                  }}
-                />
-                {selectedContraparteFilter && (
-                  <X
-                    size={16}
-                    onClick={handleClearContraparte}
-                    style={{
-                      position: 'absolute',
-                      right: '32px',
-                      top: '50%',
-                      transform: 'translateY(-50%)',
-                      color: '#9ca3af',
-                      cursor: 'pointer'
-                    }}
-                  />
-                )}
-                <ChevronDown
-                  size={16}
-                  style={{
-                    position: 'absolute',
-                    right: '10px',
-                    top: '50%',
-                    transform: 'translateY(-50%)',
-                    color: '#9ca3af',
-                    pointerEvents: 'none'
-                  }}
-                />
-              </div>
-              
-              {showContraparteDropdown && contrapartesFiltradas.length > 0 && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    top: '100%',
-                    left: 0,
-                    right: 0,
-                    backgroundColor: 'white',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: '8px',
-                    marginTop: '4px',
-                    maxHeight: '200px',
-                    overflowY: 'auto',
-                    boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
-                    zIndex: 10
-                  }}
-                  onMouseDown={(e) => e.preventDefault()}
-                >
-                  {contrapartesFiltradas.slice(0, 50).map((contraparte) => (
-                    <div
-                      key={contraparte.id}
-                      onClick={() => handleSelectContraparte(contraparte.id, contraparte.nome)}
-                      style={{
-                        padding: '8px 12px',
-                        cursor: 'pointer',
-                        fontSize: '13px',
-                        borderBottom: '1px solid #f3f4f6',
-                        backgroundColor: selectedContraparteFilter === contraparte.id ? '#eff6ff' : 'white'
-                      }}
-                      onMouseEnter={(e) => {
-                        if (selectedContraparteFilter !== contraparte.id) {
-                          e.currentTarget.style.backgroundColor = '#f9fafb'
-                        }
-                      }}
-                      onMouseLeave={(e) => {
-                        if (selectedContraparteFilter !== contraparte.id) {
-                          e.currentTarget.style.backgroundColor = 'white'
-                        }
-                      }}
-                    >
-                      <div style={{ fontWeight: '500', color: '#111827' }}>
-                        {contraparte.nome}
-                      </div>
-                      {contraparte.apelido && (
-                        <div style={{ fontSize: '12px', color: '#6b7280' }}>
-                          {contraparte.apelido}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div>
-            <label style={{
-              display: 'block',
-              fontSize: '13px',
-              fontWeight: '500',
-              color: '#374151',
-              marginBottom: '6px',
-              visibility: 'hidden'
-            }}>
-              Ações
-            </label>
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <div style={{ display: 'flex', gap: '8px' }}>
             <button
-              onClick={handleAtualizar}
+              onClick={handleClearFilters}
               style={{
-                width: '100%',
-                padding: '9px 16px',
-                backgroundColor: '#1555D6',
+                padding: '8px 16px',
+                backgroundColor: '#6b7280',
+                color: 'white',
                 border: 'none',
                 borderRadius: '8px',
-                fontSize: '13px',
-                fontWeight: '500',
-                color: 'white',
+                fontSize: '11px',
+                fontWeight: '600',
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: '8px',
+                gap: '6px',
+                transition: 'all 0.2s'
+              }}
+              onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#4b5563'}
+              onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#6b7280'}
+            >
+              <X size={13} />
+              Limpar Filtros
+            </button>
+            <button
+              onClick={handleRefresh}
+              style={{
+                padding: '8px 16px',
+                backgroundColor: '#1555D6',
+                color: 'white',
+                border: 'none',
+                borderRadius: '8px',
+                fontSize: '11px',
+                fontWeight: '600',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px',
                 transition: 'all 0.2s'
               }}
               onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#1044b5'}
               onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#1555D6'}
             >
-              <RefreshCw size={16} />
+              <RefreshCw size={13} />
               Atualizar
             </button>
           </div>
@@ -1220,119 +1618,129 @@ export default function LancamentosPage() {
         overflow: 'hidden',
         boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)'
       }}>
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', minWidth: '1200px', borderCollapse: 'collapse' }}>
+        <div style={{ overflowX: 'auto', width: '100%' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'auto' }}>
             <thead>
               <tr style={{ backgroundColor: '#f9fafb', borderBottom: '1px solid #e5e7eb' }}>
                 <th style={{
-                  padding: '14px 16px',
+                  padding: '10px 12px',
                   textAlign: 'left',
-                  fontSize: '12px',
+                  fontSize: '9.6px',
                   fontWeight: '600',
                   color: '#6b7280',
                   textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
+                  letterSpacing: '0.4px',
+                  whiteSpace: 'nowrap'
                 }}>
-                  Tipo
+                  TIPO
                 </th>
                 <th style={{
-                  padding: '14px 16px',
+                  padding: '10px 12px',
                   textAlign: 'left',
-                  fontSize: '12px',
+                  fontSize: '9.6px',
                   fontWeight: '600',
                   color: '#6b7280',
                   textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
+                  letterSpacing: '0.4px',
+                  whiteSpace: 'nowrap'
                 }}>
-                  Empresa
+                  EMPRESA
                 </th>
                 <th style={{
-                  padding: '14px 16px',
+                  padding: '10px 12px',
                   textAlign: 'left',
-                  fontSize: '12px',
+                  fontSize: '9.6px',
                   fontWeight: '600',
                   color: '#6b7280',
                   textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
+                  letterSpacing: '0.4px',
+                  whiteSpace: 'nowrap'
                 }}>
-                  Projeto
+                  PROJETO
                 </th>
                 <th style={{
-                  padding: '14px 16px',
+                  padding: '10px 12px',
                   textAlign: 'left',
-                  fontSize: '12px',
+                  fontSize: '9.6px',
                   fontWeight: '600',
                   color: '#6b7280',
                   textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
+                  letterSpacing: '0.4px',
+                  whiteSpace: 'nowrap'
                 }}>
-                  Contraparte
+                  CONTRAPARTE
                 </th>
                 <th style={{
-                  padding: '14px 16px',
+                  padding: '10px 12px',
                   textAlign: 'left',
-                  fontSize: '12px',
+                  fontSize: '9.6px',
                   fontWeight: '600',
                   color: '#6b7280',
                   textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
+                  letterSpacing: '0.4px',
+                  whiteSpace: 'nowrap'
                 }}>
-                  Categoria
+                  CATEGORIA
                 </th>
                 <th style={{
-                  padding: '14px 16px',
+                  padding: '10px 12px',
                   textAlign: 'right',
-                  fontSize: '12px',
+                  fontSize: '9.6px',
                   fontWeight: '600',
                   color: '#6b7280',
                   textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
+                  letterSpacing: '0.4px',
+                  whiteSpace: 'nowrap'
                 }}>
-                  Valor Bruto
+                  VALOR BRUTO
                 </th>
                 <th style={{
-                  padding: '14px 16px',
+                  padding: '10px 12px',
                   textAlign: 'right',
-                  fontSize: '12px',
+                  fontSize: '9.6px',
                   fontWeight: '600',
                   color: '#6b7280',
                   textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
+                  letterSpacing: '0.4px',
+                  whiteSpace: 'nowrap'
                 }}>
-                  Valor Líquido
+                  VALOR LÍQUIDO
                 </th>
                 <th style={{
-                  padding: '14px 16px',
+                  padding: '10px 12px',
                   textAlign: 'left',
-                  fontSize: '12px',
+                  fontSize: '9.6px',
                   fontWeight: '600',
                   color: '#6b7280',
                   textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
+                  letterSpacing: '0.4px',
+                  whiteSpace: 'nowrap'
                 }}>
-                  Vencimento
+                  VENCIMENTO
                 </th>
                 <th style={{
-                  padding: '14px 16px',
+                  padding: '10px 12px',
                   textAlign: 'left',
-                  fontSize: '12px',
+                  fontSize: '9.6px',
                   fontWeight: '600',
                   color: '#6b7280',
                   textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
+                  letterSpacing: '0.4px',
+                  whiteSpace: 'nowrap'
                 }}>
-                  Status
+                  STATUS
                 </th>
                 <th style={{
-                  padding: '14px 16px',
+                  padding: '10px 12px',
                   textAlign: 'right',
-                  fontSize: '12px',
+                  fontSize: '9.6px',
                   fontWeight: '600',
                   color: '#6b7280',
                   textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
+                  letterSpacing: '0.4px',
+                  whiteSpace: 'nowrap'
                 }}>
-                  Ações
+                  AÇÕES
                 </th>
               </tr>
             </thead>
@@ -1351,108 +1759,130 @@ export default function LancamentosPage() {
                     onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#f9fafb'}
                     onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'white'}
                   >
-                    <td style={{ padding: '14px 16px' }}>
+                    <td style={{ padding: '10px 12px' }}>
                       <span style={{
                         display: 'inline-block',
-                        padding: '4px 10px',
+                        padding: '3px 8px',
                         borderRadius: '6px',
-                        fontSize: '12px',
+                        fontSize: '9.6px',
                         fontWeight: '600',
                         backgroundColor: tipoStyle.bg,
-                        color: tipoStyle.text
+                        color: tipoStyle.text,
+                        whiteSpace: 'nowrap'
                       }}>
                         {tipoStyle.label}
                       </span>
                     </td>
                     <td style={{
-                      padding: '14px 16px',
-                      fontSize: '13px',
+                      padding: '10px 12px',
+                      fontSize: '10.4px',
                       color: '#1f2937',
-                      fontWeight: '500'
+                      fontWeight: '500',
+                      maxWidth: '150px',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
                     }}>
                       {lancamento.empresa_nome}
                     </td>
                     <td style={{
-                      padding: '14px 16px',
-                      fontSize: '13px',
-                      color: '#6b7280'
+                      padding: '10px 12px',
+                      fontSize: '10.4px',
+                      color: '#6b7280',
+                      maxWidth: '120px',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
                     }}>
                       {lancamento.projeto_nome || '-'}
                     </td>
                     <td style={{
-                      padding: '14px 16px',
-                      fontSize: '13px',
-                      color: '#6b7280'
+                      padding: '10px 12px',
+                      fontSize: '10.4px',
+                      color: '#6b7280',
+                      maxWidth: '150px',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
                     }}>
                       {lancamento.contraparte_nome || '-'}
                     </td>
                     <td style={{
-                      padding: '14px 16px',
-                      fontSize: '13px',
-                      color: '#6b7280'
+                      padding: '10px 12px',
+                      fontSize: '10.4px',
+                      color: '#6b7280',
+                      maxWidth: '130px',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
                     }}>
                       {lancamento.plano_conta?.categoria || '-'}
                     </td>
                     <td style={{
-                      padding: '14px 16px',
-                      fontSize: '13px',
+                      padding: '10px 12px',
+                      fontSize: '10.4px',
                       color: '#1f2937',
                       fontWeight: '600',
-                      textAlign: 'right'
+                      textAlign: 'right',
+                      whiteSpace: 'nowrap'
                     }}>
                       {formatCurrencyBRL(lancamento.valor_bruto)}
                     </td>
                     <td style={{
-                      padding: '14px 16px',
-                      fontSize: '13px',
+                      padding: '10px 12px',
+                      fontSize: '10.4px',
                       color: '#1f2937',
                       fontWeight: '600',
-                      textAlign: 'right'
+                      textAlign: 'right',
+                      whiteSpace: 'nowrap'
                     }}>
                       {formatCurrencyBRL(lancamento.valor_liquido)}
                     </td>
                     <td style={{
-                      padding: '14px 16px',
-                      fontSize: '13px',
-                      color: '#6b7280'
+                      padding: '10px 12px',
+                      fontSize: '10.4px',
+                      color: '#6b7280',
+                      whiteSpace: 'nowrap'
                     }}>
                       {formatDate(lancamento.data_vencimento)}
                     </td>
-                    <td style={{ padding: '14px 16px' }}>
+                    <td style={{ padding: '10px 12px' }}>
                       <span style={{
                         display: 'inline-block',
-                        padding: '4px 10px',
+                        padding: '3px 8px',
                         borderRadius: '6px',
-                        fontSize: '12px',
+                        fontSize: '9.6px',
                         fontWeight: '600',
                         backgroundColor: statusStyle.bg,
-                        color: statusStyle.text
+                        color: statusStyle.text,
+                        whiteSpace: 'nowrap'
                       }}>
                         {statusStyle.label}
                       </span>
                     </td>
                     <td style={{
-                      padding: '14px 16px',
+                      padding: '10px 12px',
                       textAlign: 'right'
                     }}>
                       <div style={{
                         display: 'flex',
-                        gap: '8px',
+                        gap: '6px',
                         justifyContent: 'flex-end'
                       }}>
                         {lancamento.status === 'ABERTO' && (
                           <button
                             onClick={() => setLiquidarModal({ show: true, id: lancamento.id })}
                             style={{
-                              padding: '6px 10px',
+                              padding: '5px 8px',
                               backgroundColor: '#10b981',
                               color: 'white',
                               border: 'none',
                               borderRadius: '6px',
-                              fontSize: '12px',
+                              fontSize: '9.6px',
                               fontWeight: '500',
                               cursor: 'pointer',
-                              transition: 'all 0.2s'
+                              transition: 'all 0.2s',
+                              whiteSpace: 'nowrap'
                             }}
                             onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#059669'}
                             onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#10b981'}
@@ -1463,7 +1893,7 @@ export default function LancamentosPage() {
                         <button
                           onClick={() => openModal(lancamento)}
                           style={{
-                            padding: '6px',
+                            padding: '5px',
                             backgroundColor: '#e0e7ff',
                             color: '#1555D6',
                             border: 'none',
@@ -1477,12 +1907,12 @@ export default function LancamentosPage() {
                           onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#c7d2fe'}
                           onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#e0e7ff'}
                         >
-                          <Pencil size={16} />
+                          <Pencil size={13} />
                         </button>
                         <button
                           onClick={() => setDeleteConfirm({ show: true, id: lancamento.id })}
                           style={{
-                            padding: '6px',
+                            padding: '5px',
                             backgroundColor: '#fee2e2',
                             color: '#ef4444',
                             border: 'none',
@@ -1496,7 +1926,7 @@ export default function LancamentosPage() {
                           onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#fecaca'}
                           onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#fee2e2'}
                         >
-                          <Trash2 size={16} />
+                          <Trash2 size={13} />
                         </button>
                       </div>
                     </td>
@@ -1522,7 +1952,7 @@ export default function LancamentosPage() {
                 color: 'white',
                 border: 'none',
                 borderRadius: '8px',
-                fontSize: '14px',
+                fontSize: '11px',
                 fontWeight: '600',
                 cursor: loadingMore ? 'not-allowed' : 'pointer',
                 transition: 'all 0.2s'
@@ -1599,34 +2029,40 @@ export default function LancamentosPage() {
                     color: '#9ca3af',
                     cursor: 'pointer',
                     padding: '0',
-                    width: '32px',
-                    height: '32px',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    borderRadius: '6px',
-                    transition: 'all 0.2s'
+                    transition: 'color 0.2s'
                   }}
-                  onMouseOver={(e) => {
-                    e.currentTarget.style.backgroundColor = '#f3f4f6'
-                    e.currentTarget.style.color = '#6b7280'
-                  }}
-                  onMouseOut={(e) => {
-                    e.currentTarget.style.backgroundColor = 'transparent'
-                    e.currentTarget.style.color = '#9ca3af'
-                  }}
+                  onMouseOver={(e) => e.currentTarget.style.color = '#1f2937'}
+                  onMouseOut={(e) => e.currentTarget.style.color = '#9ca3af'}
                 >
-                  ×
+                  <X size={24} />
                 </button>
               </div>
             </div>
 
-            <div style={{ padding: '18px', overflowY: 'auto' }}>
-              <form onSubmit={handleSubmit(onSubmit, onSubmitError)}>
-                {/* LINHA 1: Empresa | Tipo de Fluxo | Projeto | Subprojeto | Tipo | Conta Bancária */}
+            <form onSubmit={handleSubmit(onSubmit)} style={{ flex: 1, overflowY: 'auto' }}>
+              <div style={{ padding: '20px' }}>
+                <div style={{
+                  borderBottom: '1px solid #e5e7eb',
+                  paddingBottom: '16px',
+                  marginBottom: '16px'
+                }}>
+                  <h3 style={{
+                    fontSize: '16px',
+                    fontWeight: '600',
+                    color: '#1f2937',
+                    marginTop: 0,
+                    marginBottom: '14px'
+                  }}>
+                    Informações Básicas
+                  </h3>
+                </div>
+
                 <div style={{
                   display: 'grid',
-                  gridTemplateColumns: '1fr 1fr 1fr 1fr 120px 1fr',
+                  gridTemplateColumns: '1fr 1fr 1fr',
                   gap: '12px',
                   marginBottom: '14px'
                 }}>
@@ -1642,6 +2078,7 @@ export default function LancamentosPage() {
                     </label>
                     <select
                       {...register('empresa_id')}
+                      disabled={isLancamentoPago}
                       style={{
                         width: '100%',
                         padding: '9px 10px',
@@ -1649,11 +2086,15 @@ export default function LancamentosPage() {
                         borderRadius: '8px',
                         fontSize: '13px',
                         outline: 'none',
-                        cursor: 'pointer'
+                        cursor: isLancamentoPago ? 'not-allowed' : 'pointer',
+                        backgroundColor: isLancamentoPago ? '#f9fafb' : 'white',
+                        color: isLancamentoPago ? '#9ca3af' : '#1f2937'
                       }}
                       onFocus={(e) => {
-                        e.currentTarget.style.borderColor = '#1555D6'
-                        e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                        if (!isLancamentoPago) {
+                          e.currentTarget.style.borderColor = '#1555D6'
+                          e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                        }
                       }}
                       onBlur={(e) => {
                         e.currentTarget.style.borderColor = '#e5e7eb'
@@ -1661,10 +2102,15 @@ export default function LancamentosPage() {
                       }}
                     >
                       <option value="">Selecione</option>
-                      {empresas.map((emp) => (
-                        <option key={emp.id} value={emp.id}>{emp.nome}</option>
+                      {empresas.map((e) => (
+                        <option key={e.id} value={e.id}>{e.nome}</option>
                       ))}
                     </select>
+                    {errors.empresa_id && (
+                      <span style={{ fontSize: '12px', color: '#ef4444', marginTop: '4px', display: 'block' }}>
+                        {errors.empresa_id.message}
+                      </span>
+                    )}
                   </div>
 
                   <div>
@@ -1679,6 +2125,7 @@ export default function LancamentosPage() {
                     </label>
                     <select
                       {...register('tipo_fluxo')}
+                      disabled={!selectedEmpresaId || isLancamentoPago}
                       style={{
                         width: '100%',
                         padding: '9px 10px',
@@ -1686,11 +2133,16 @@ export default function LancamentosPage() {
                         borderRadius: '8px',
                         fontSize: '13px',
                         outline: 'none',
-                        cursor: 'pointer'
+                        cursor: (!selectedEmpresaId || isLancamentoPago) ? 'not-allowed' : 'pointer',
+                        opacity: selectedEmpresaId ? 1 : 0.6,
+                        backgroundColor: isLancamentoPago ? '#f9fafb' : 'white',
+                        color: isLancamentoPago ? '#9ca3af' : '#1f2937'
                       }}
                       onFocus={(e) => {
-                        e.currentTarget.style.borderColor = '#1555D6'
-                        e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                        if (selectedEmpresaId && !isLancamentoPago) {
+                          e.currentTarget.style.borderColor = '#1555D6'
+                          e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                        }
                       }}
                       onBlur={(e) => {
                         e.currentTarget.style.borderColor = '#e5e7eb'
@@ -1702,6 +2154,11 @@ export default function LancamentosPage() {
                         <option key={tipo} value={tipo}>{tipo}</option>
                       ))}
                     </select>
+                    {errors.tipo_fluxo && (
+                      <span style={{ fontSize: '12px', color: '#ef4444', marginTop: '4px', display: 'block' }}>
+                        {errors.tipo_fluxo.message}
+                      </span>
+                    )}
                   </div>
 
                   <div>
@@ -1717,7 +2174,7 @@ export default function LancamentosPage() {
                     <select
                       key={`projeto-${editingId || 'new'}-${selectedEmpresaId}`}
                       {...register('projeto_id')}
-                      disabled={!selectedEmpresaId || selectedTipoFluxo === 'Corporativo'}
+                      disabled={!selectedEmpresaId || isLancamentoPago}
                       style={{
                         width: '100%',
                         padding: '9px 10px',
@@ -1725,11 +2182,13 @@ export default function LancamentosPage() {
                         borderRadius: '8px',
                         fontSize: '13px',
                         outline: 'none',
-                        cursor: (selectedEmpresaId && selectedTipoFluxo !== 'Corporativo') ? 'pointer' : 'not-allowed',
-                        opacity: (selectedEmpresaId && selectedTipoFluxo !== 'Corporativo') ? 1 : 0.6
+                        cursor: (!selectedEmpresaId || isLancamentoPago) ? 'not-allowed' : 'pointer',
+                        opacity: selectedEmpresaId ? 1 : 0.6,
+                        backgroundColor: isLancamentoPago ? '#f9fafb' : 'white',
+                        color: isLancamentoPago ? '#9ca3af' : '#1f2937'
                       }}
                       onFocus={(e) => {
-                        if (selectedEmpresaId && selectedTipoFluxo !== 'Corporativo') {
+                        if (selectedEmpresaId && !isLancamentoPago) {
                           e.currentTarget.style.borderColor = '#1555D6'
                           e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
                         }
@@ -1740,12 +2199,24 @@ export default function LancamentosPage() {
                       }}
                     >
                       <option value="">Selecione</option>
-                      {projetos.map((proj) => (
-                        <option key={proj.id} value={proj.id}>{proj.nome}</option>
+                      {projetos.map((p) => (
+                        <option key={p.id} value={p.id}>{p.nome}</option>
                       ))}
                     </select>
+                    {errors.projeto_id && (
+                      <span style={{ fontSize: '12px', color: '#ef4444', marginTop: '4px', display: 'block' }}>
+                        {errors.projeto_id.message}
+                      </span>
+                    )}
                   </div>
+                </div>
 
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 1fr 1fr',
+                  gap: '12px',
+                  marginBottom: '14px'
+                }}>
                   <div>
                     <label style={{
                       display: 'block',
@@ -1759,7 +2230,7 @@ export default function LancamentosPage() {
                     <select
                       key={`subprojeto-${editingId || 'new'}-${selectedProjetoId}`}
                       {...register('subprojeto_id')}
-                      disabled={!selectedProjetoId || subprojetos.length === 0}
+                      disabled={!selectedProjetoId || isLancamentoPago}
                       style={{
                         width: '100%',
                         padding: '9px 10px',
@@ -1767,11 +2238,13 @@ export default function LancamentosPage() {
                         borderRadius: '8px',
                         fontSize: '13px',
                         outline: 'none',
-                        cursor: (selectedProjetoId && subprojetos.length > 0) ? 'pointer' : 'not-allowed',
-                        opacity: (selectedProjetoId && subprojetos.length > 0) ? 1 : 0.6
+                        cursor: (!selectedProjetoId || isLancamentoPago) ? 'not-allowed' : 'pointer',
+                        opacity: selectedProjetoId ? 1 : 0.6,
+                        backgroundColor: isLancamentoPago ? '#f9fafb' : 'white',
+                        color: isLancamentoPago ? '#9ca3af' : '#1f2937'
                       }}
                       onFocus={(e) => {
-                        if (selectedProjetoId && subprojetos.length > 0) {
+                        if (selectedProjetoId && !isLancamentoPago) {
                           e.currentTarget.style.borderColor = '#1555D6'
                           e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
                         }
@@ -1782,8 +2255,8 @@ export default function LancamentosPage() {
                       }}
                     >
                       <option value="">Selecione</option>
-                      {subprojetos.map((sub) => (
-                        <option key={sub.id} value={sub.id}>{sub.nome}</option>
+                      {subprojetos.map((sp) => (
+                        <option key={sp.id} value={sp.id}>{sp.nome}</option>
                       ))}
                     </select>
                   </div>
@@ -1796,10 +2269,11 @@ export default function LancamentosPage() {
                       color: '#374151',
                       marginBottom: '6px'
                     }}>
-                      Tipo *
+                      Tipo de Operação *
                     </label>
                     <select
                       {...register('tipo')}
+                      disabled={isLancamentoPago}
                       style={{
                         width: '100%',
                         padding: '9px 10px',
@@ -1807,11 +2281,15 @@ export default function LancamentosPage() {
                         borderRadius: '8px',
                         fontSize: '13px',
                         outline: 'none',
-                        cursor: 'pointer'
+                        cursor: isLancamentoPago ? 'not-allowed' : 'pointer',
+                        backgroundColor: isLancamentoPago ? '#f9fafb' : 'white',
+                        color: isLancamentoPago ? '#9ca3af' : '#1f2937'
                       }}
                       onFocus={(e) => {
-                        e.currentTarget.style.borderColor = '#1555D6'
-                        e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                        if (!isLancamentoPago) {
+                          e.currentTarget.style.borderColor = '#1555D6'
+                          e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+                        }
                       }}
                       onBlur={(e) => {
                         e.currentTarget.style.borderColor = '#e5e7eb'
@@ -1836,7 +2314,7 @@ export default function LancamentosPage() {
                     <select
                       key={`banco-${editingId || 'new'}-${selectedEmpresaId}`}
                       {...register('banco_conta_id')}
-                      disabled={!selectedEmpresaId}
+                      disabled={!selectedEmpresaId || isLancamentoPago}
                       style={{
                         width: '100%',
                         padding: '9px 10px',
@@ -1844,11 +2322,13 @@ export default function LancamentosPage() {
                         borderRadius: '8px',
                         fontSize: '13px',
                         outline: 'none',
-                        cursor: selectedEmpresaId ? 'pointer' : 'not-allowed',
-                        opacity: selectedEmpresaId ? 1 : 0.6
+                        cursor: (!selectedEmpresaId || isLancamentoPago) ? 'not-allowed' : 'pointer',
+                        opacity: selectedEmpresaId ? 1 : 0.6,
+                        backgroundColor: isLancamentoPago ? '#f9fafb' : 'white',
+                        color: isLancamentoPago ? '#9ca3af' : '#1f2937'
                       }}
                       onFocus={(e) => {
-                        if (selectedEmpresaId) {
+                        if (selectedEmpresaId && !isLancamentoPago) {
                           e.currentTarget.style.borderColor = '#1555D6'
                           e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
                         }
@@ -2003,7 +2483,7 @@ export default function LancamentosPage() {
                       color: '#374151',
                       marginBottom: '6px'
                     }}>
-                      Previsão Pgto
+                      Previsão Pag.
                     </label>
                     <input
                       {...register('data_previsao_pagamento')}
@@ -2198,11 +2678,11 @@ export default function LancamentosPage() {
                         gap: '6px',
                         padding: '8px 14px',
                         backgroundColor: isLancamentoPago ? '#d1d5db' : '#e0e7ff',
-                        color: isLancamentoPago ? '#6b7280' : '#1555D6',
+                        color: isLancamentoPago ? '#9ca3af' : '#1555D6',
                         border: 'none',
-                        borderRadius: '6px',
+                        borderRadius: '8px',
                         fontSize: '13px',
-                        fontWeight: '500',
+                        fontWeight: '600',
                         cursor: isLancamentoPago ? 'not-allowed' : 'pointer',
                         transition: 'all 0.2s'
                       }}
@@ -2222,223 +2702,209 @@ export default function LancamentosPage() {
                     </button>
                   </div>
 
-                  {retencoes.map((retencao, index) => (
-                    <div
-                      key={index}
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: '1fr 1fr 2fr 40px',
-                        gap: '12px',
-                        marginBottom: '12px',
-                        padding: '12px',
-                        backgroundColor: '#f9fafb',
-                        borderRadius: '8px'
-                      }}
-                    >
-                      <div>
-                        <label style={{
-                          display: 'block',
-                          fontSize: '12px',
-                          fontWeight: '500',
-                          color: '#374151',
-                          marginBottom: '6px'
-                        }}>
-                          Tipo de Imposto
-                        </label>
-                        <select
-                          value={retencao.imposto}
-                          onChange={(e) => atualizarRetencao(index, 'imposto', e.target.value)}
-                          disabled={isLancamentoPago}
+                  {retencoes.length > 0 && (
+                    <div style={{ marginBottom: '14px' }}>
+                      {retencoes.map((retencao, index) => (
+                        <div
+                          key={index}
                           style={{
-                            width: '100%',
-                            padding: '8px',
-                            border: '1px solid #e5e7eb',
-                            borderRadius: '6px',
-                            fontSize: '13px',
-                            outline: 'none',
-                            cursor: isLancamentoPago ? 'not-allowed' : 'pointer',
-                            backgroundColor: isLancamentoPago ? '#e5e7eb' : 'white',
-                            color: isLancamentoPago ? '#9ca3af' : '#1f2937'
+                            display: 'grid',
+                            gridTemplateColumns: '1fr 1fr 2fr auto',
+                            gap: '12px',
+                            alignItems: 'end',
+                            padding: '12px',
+                            backgroundColor: '#f9fafb',
+                            borderRadius: '8px',
+                            marginBottom: '8px'
                           }}
                         >
-                          {IMPOSTOS.map((imp) => (
-                            <option key={imp.value} value={imp.value}>{imp.label}</option>
-                          ))}
-                        </select>
-                      </div>
+                          <div>
+                            <label style={{
+                              display: 'block',
+                              fontSize: '13px',
+                              fontWeight: '500',
+                              color: '#374151',
+                              marginBottom: '6px'
+                            }}>
+                              Imposto
+                            </label>
+                            <select
+                              value={retencao.imposto}
+                              onChange={(e) => atualizarRetencao(index, 'imposto', e.target.value)}
+                              disabled={isLancamentoPago}
+                              style={{
+                                width: '100%',
+                                padding: '9px 10px',
+                                border: '1px solid #e5e7eb',
+                                borderRadius: '8px',
+                                fontSize: '13px',
+                                outline: 'none',
+                                cursor: isLancamentoPago ? 'not-allowed' : 'pointer',
+                                backgroundColor: isLancamentoPago ? '#f9fafb' : 'white',
+                                color: isLancamentoPago ? '#9ca3af' : '#1f2937'
+                              }}
+                            >
+                              {IMPOSTOS.map((imp) => (
+                                <option key={imp.value} value={imp.value}>
+                                  {imp.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
 
-                      <div>
-                        <label style={{
-                          display: 'block',
-                          fontSize: '12px',
-                          fontWeight: '500',
-                          color: '#374151',
-                          marginBottom: '6px'
-                        }}>
-                          Valor
-                        </label>
-                        <div style={{ position: 'relative' }}>
-                          <span style={{
-                            position: 'absolute',
-                            left: '8px',
-                            top: '50%',
-                            transform: 'translateY(-50%)',
-                            fontSize: '12px',
-                            color: '#6b7280',
-                            fontWeight: '500'
-                          }}>
-                            R$
-                          </span>
-                          <input
-                            type="text"
-                            value={retencao.valorFormatado}
-                            onChange={(e) => atualizarRetencao(index, 'valorFormatado', e.target.value)}
+                          <div>
+                            <label style={{
+                              display: 'block',
+                              fontSize: '13px',
+                              fontWeight: '500',
+                              color: '#374151',
+                              marginBottom: '6px'
+                            }}>
+                              Valor
+                            </label>
+                            <div style={{ position: 'relative' }}>
+                              <span style={{
+                                position: 'absolute',
+                                left: '10px',
+                                top: '50%',
+                                transform: 'translateY(-50%)',
+                                fontSize: '13px',
+                                color: '#6b7280',
+                                fontWeight: '500'
+                              }}>
+                                R$
+                              </span>
+                              <input
+                                type="text"
+                                value={retencao.valorFormatado}
+                                onChange={(e) => atualizarRetencao(index, 'valorFormatado', e.target.value)}
+                                disabled={isLancamentoPago}
+                                style={{
+                                  width: '100%',
+                                  padding: '9px 10px 9px 32px',
+                                  border: '1px solid #e5e7eb',
+                                  borderRadius: '8px',
+                                  fontSize: '13px',
+                                  outline: 'none',
+                                  textAlign: 'right',
+                                  backgroundColor: isLancamentoPago ? '#f9fafb' : 'white',
+                                  cursor: isLancamentoPago ? 'not-allowed' : 'text',
+                                  color: isLancamentoPago ? '#9ca3af' : '#1f2937'
+                                }}
+                              />
+                            </div>
+                          </div>
+
+                          <div>
+                            <label style={{
+                              display: 'block',
+                              fontSize: '13px',
+                              fontWeight: '500',
+                              color: '#374151',
+                              marginBottom: '6px'
+                            }}>
+                              Detalhe
+                            </label>
+                            <input
+                              type="text"
+                              value={retencao.detalhe || ''}
+                              onChange={(e) => atualizarRetencao(index, 'detalhe', e.target.value)}
+                              disabled={isLancamentoPago}
+                              placeholder="Observação opcional"
+                              style={{
+                                width: '100%',
+                                padding: '9px 10px',
+                                border: '1px solid #e5e7eb',
+                                borderRadius: '8px',
+                                fontSize: '13px',
+                                outline: 'none',
+                                backgroundColor: isLancamentoPago ? '#f9fafb' : 'white',
+                                cursor: isLancamentoPago ? 'not-allowed' : 'text',
+                                color: isLancamentoPago ? '#9ca3af' : '#1f2937'
+                              }}
+                            />
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => removerRetencao(index)}
                             disabled={isLancamentoPago}
                             style={{
-                              width: '100%',
-                              padding: '8px 8px 8px 28px',
-                              border: '1px solid #e5e7eb',
-                              borderRadius: '6px',
-                              fontSize: '13px',
-                              outline: 'none',
-                              textAlign: 'right',
-                              backgroundColor: isLancamentoPago ? '#e5e7eb' : 'white',
-                              cursor: isLancamentoPago ? 'not-allowed' : 'text',
-                              color: isLancamentoPago ? '#9ca3af' : '#1f2937'
+                              padding: '9px',
+                              backgroundColor: isLancamentoPago ? '#d1d5db' : '#fee2e2',
+                              color: isLancamentoPago ? '#9ca3af' : '#ef4444',
+                              border: 'none',
+                              borderRadius: '8px',
+                              cursor: isLancamentoPago ? 'not-allowed' : 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              transition: 'all 0.2s'
                             }}
-                          />
+                            onMouseOver={(e) => {
+                              if (!isLancamentoPago) {
+                                e.currentTarget.style.backgroundColor = '#fecaca'
+                              }
+                            }}
+                            onMouseOut={(e) => {
+                              if (!isLancamentoPago) {
+                                e.currentTarget.style.backgroundColor = '#fee2e2'
+                              }
+                            }}
+                          >
+                            <Trash2 size={16} />
+                          </button>
                         </div>
-                      </div>
-
-                      <div>
-                        <label style={{
-                          display: 'block',
-                          fontSize: '12px',
-                          fontWeight: '500',
-                          color: '#374151',
-                          marginBottom: '6px'
-                        }}>
-                          Detalhe
-                        </label>
-                        <input
-                          type="text"
-                          value={retencao.detalhe || ''}
-                          onChange={(e) => atualizarRetencao(index, 'detalhe', e.target.value)}
-                          disabled={isLancamentoPago}
-                          placeholder="Descrição adicional..."
-                          style={{
-                            width: '100%',
-                            padding: '8px',
-                            border: '1px solid #e5e7eb',
-                            borderRadius: '6px',
-                            fontSize: '13px',
-                            outline: 'none',
-                            backgroundColor: isLancamentoPago ? '#e5e7eb' : 'white',
-                            cursor: isLancamentoPago ? 'not-allowed' : 'text',
-                            color: isLancamentoPago ? '#9ca3af' : '#1f2937'
-                          }}
-                        />
-                      </div>
-
-                      <div style={{
-                        display: 'flex',
-                        alignItems: 'flex-end'
-                      }}>
-                        <button
-                          type="button"
-                          onClick={() => removerRetencao(index)}
-                          disabled={isLancamentoPago}
-                          style={{
-                            padding: '8px',
-                            backgroundColor: isLancamentoPago ? '#d1d5db' : '#fee2e2',
-                            color: isLancamentoPago ? '#6b7280' : '#ef4444',
-                            border: 'none',
-                            borderRadius: '6px',
-                            cursor: isLancamentoPago ? 'not-allowed' : 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            transition: 'all 0.2s'
-                          }}
-                          onMouseOver={(e) => {
-                            if (!isLancamentoPago) {
-                              e.currentTarget.style.backgroundColor = '#fecaca'
-                            }
-                          }}
-                          onMouseOut={(e) => {
-                            if (!isLancamentoPago) {
-                              e.currentTarget.style.backgroundColor = '#fee2e2'
-                            }
-                          }}
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
+                      ))}
                     </div>
-                  ))}
+                  )}
 
                   <div style={{
-                    display: 'flex',
-                    justifyContent: 'flex-end',
-                    gap: '16px',
-                    padding: '14px',
-                    backgroundColor: '#f0f9ff',
-                    borderRadius: '8px',
-                    marginTop: '12px'
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 1fr',
+                    gap: '20px',
+                    padding: '16px',
+                    backgroundColor: '#f9fafb',
+                    borderRadius: '8px'
                   }}>
                     <div>
-                      <div style={{
-                        fontSize: '12px',
+                      <span style={{
+                        display: 'block',
+                        fontSize: '13px',
                         color: '#6b7280',
                         marginBottom: '4px'
                       }}>
-                        Valor Bruto
-                      </div>
-                      <div style={{
-                        fontSize: '16px',
-                        fontWeight: '700',
-                        color: '#1f2937'
-                      }}>
-                        {formatCurrencyBRL(valorBruto)}
-                      </div>
-                    </div>
-                    
-                    <div>
-                      <div style={{
-                        fontSize: '12px',
-                        color: '#6b7280',
-                        marginBottom: '4px'
-                      }}>
-                        Total Retenções
-                      </div>
-                      <div style={{
-                        fontSize: '16px',
+                        Total de Retenções
+                      </span>
+                      <span style={{
+                        fontSize: '18px',
                         fontWeight: '700',
                         color: '#ef4444'
                       }}>
-                        - {formatCurrencyBRL(retencoes.reduce((sum, r) => sum + r.valor, 0))}
-                      </div>
+                        {formatCurrencyBRL(retencoes.reduce((acc, r) => acc + r.valor, 0))}
+                      </span>
                     </div>
-
                     <div>
-                      <div style={{
-                        fontSize: '12px',
+                      <span style={{
+                        display: 'block',
+                        fontSize: '13px',
                         color: '#6b7280',
                         marginBottom: '4px'
                       }}>
                         Valor Líquido
-                      </div>
-                      <div style={{
+                      </span>
+                      <span style={{
                         fontSize: '18px',
                         fontWeight: '700',
                         color: '#10b981'
                       }}>
                         {formatCurrencyBRL(valorLiquido)}
-                      </div>
+                      </span>
                     </div>
                   </div>
                 </div>
 
+                {/* Observações */}
                 <div style={{ marginBottom: '14px' }}>
                   <label style={{
                     display: 'block',
@@ -2451,8 +2917,8 @@ export default function LancamentosPage() {
                   </label>
                   <textarea
                     {...register('observacoes')}
-                    disabled={isLancamentoPago}
                     rows={3}
+                    disabled={isLancamentoPago}
                     style={{
                       width: '100%',
                       padding: '9px 10px',
@@ -2478,60 +2944,65 @@ export default function LancamentosPage() {
                     }}
                   />
                 </div>
+              </div>
 
-                {/* Botões do formulário */}
-                <div style={{
-                  display: 'flex',
-                  gap: '12px',
-                  justifyContent: 'flex-end',
-                  paddingTop: '16px',
-                  borderTop: '1px solid #e5e7eb'
-                }}>
-                  <button
-                    type="button"
-                    onClick={closeModal}
-                    style={{
-                      padding: '12px 24px',
-                      backgroundColor: 'white',
-                      border: '1px solid #e5e7eb',
-                      borderRadius: '8px',
-                      fontSize: '14px',
-                      fontWeight: '600',
-                      color: '#374151',
-                      cursor: 'pointer',
-                      transition: 'all 0.2s'
-                    }}
-                    onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#f9fafb'}
-                    onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'white'}
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="submit"
-                    style={{
-                      padding: '12px 24px',
-                      backgroundColor: '#1555D6',
-                      border: 'none',
-                      borderRadius: '8px',
-                      fontSize: '14px',
-                      fontWeight: '600',
-                      color: 'white',
-                      cursor: 'pointer',
-                      transition: 'all 0.2s'
-                    }}
-                    onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#1044b5'}
-                    onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#1555D6'}
-                  >
-                    {editingId ? 'Atualizar' : 'Criar'} Lançamento
-                  </button>
-                </div>
-              </form>
-            </div>
+              {/* Modal Footer */}
+              <div style={{
+                position: 'sticky',
+                bottom: 0,
+                backgroundColor: 'white',
+                borderTop: '1px solid #e5e7eb',
+                padding: '16px 20px',
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: '12px',
+                borderBottomLeftRadius: '12px',
+                borderBottomRightRadius: '12px'
+              }}>
+                <button
+                  type="button"
+                  onClick={closeModal}
+                  style={{
+                    padding: '10px 24px',
+                    backgroundColor: 'white',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: '8px',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    color: '#374151',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#f9fafb'}
+                  onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'white'}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  style={{
+                    padding: '10px 24px',
+                    backgroundColor: '#1555D6',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '8px',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#1044b5'}
+                  onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#1555D6'}
+                >
+                  {editingId ? 'Atualizar' : 'Criar'} Lançamento
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
 
-      {/* Modal de confirmação de exclusão */}
+      {/* Delete Confirmation Modal */}
       {deleteConfirm.show && (
         <div
           style={{
@@ -2618,7 +3089,7 @@ export default function LancamentosPage() {
                 Cancelar
               </button>
               <button
-                onClick={handleDelete}
+                onClick={() => deleteConfirm.id && handleDelete(deleteConfirm.id)}
                 style={{
                   flex: 1,
                   padding: '12px 24px',
@@ -2641,6 +3112,7 @@ export default function LancamentosPage() {
         </div>
       )}
 
+      {/* Liquidar Modal */}
       {liquidarModal.show && (
         <div
           style={{
