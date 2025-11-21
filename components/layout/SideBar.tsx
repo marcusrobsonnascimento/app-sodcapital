@@ -66,7 +66,8 @@ const menuItems: MenuItem[] = [
         children: [
           { title: 'Movimentos', icon: DollarSign, href: '/financeiro/movimentos' },
           { title: 'Transferências', icon: GitCompare, href: '/financeiro/transferencias' },
-          { title: 'Fechamento Diário', icon: FileSignature, href: '/financeiro/fechamento' }
+          { title: 'Fechamento Diário', icon: FileSignature, href: '/financeiro/fechamento' },
+          { title: 'Extrato de Conta', icon: FileText, href: '/financeiro/extrato' }
         ]
       }
     ]

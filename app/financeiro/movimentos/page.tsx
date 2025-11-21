@@ -86,12 +86,15 @@ export default function MovimentosPage() {
     show: false,
     id: null
   })
+  const [validationModal, setValidationModal] = useState<{ show: boolean; message: string; type?: string }>({ show: false, message: "" })
   
   // Estados para paginação
   const [currentPage, setCurrentPage] = useState(0)
   const [hasMore, setHasMore] = useState(true)
   const [totalCount, setTotalCount] = useState(0)
   const PAGE_SIZE = 100
+  const [saldoAnterior, setSaldoAnterior] = useState(0)
+  const [dataFechamentoAnterior, setDataFechamentoAnterior] = useState<string>('')
 
   const { register, handleSubmit, reset, setValue, formState: { errors }, watch } = useForm<MovimentoForm>({
     resolver: zodResolver(movimentoSchema)
@@ -161,7 +164,10 @@ export default function MovimentosPage() {
 
   useEffect(() => {
     loadEmpresas()
-    loadMovimentos()
+    const hoje = new Date().toISOString().split("T")[0]
+    setDataInicial(hoje)
+    setDataFinal(hoje)
+    loadMovimentos(hoje, hoje)
   }, [])
 
   useEffect(() => {
@@ -271,7 +277,7 @@ export default function MovimentosPage() {
     }
   }
 
-  const loadMovimentos = async (page = 0, append = false) => {
+  const loadMovimentos = async (dataIni?: string, dataFim?: string, page = 0, append = false) => {
     try {
       if (page === 0) {
         setLoading(true)
@@ -283,8 +289,32 @@ export default function MovimentosPage() {
       const from = page * PAGE_SIZE
       const to = from + PAGE_SIZE - 1
 
-      const { data, error, count } = await supabase
-        .from('movimentos_bancarios')
+      // Buscar saldo anterior somente na primeira página e quando houver data inicial
+      if (page === 0 && dataIni) {
+        const { data: fechamentos, error: fechError } = await supabase
+          .from("fechamentos_bancarios")
+          .select("saldo_final, data_fechamento")
+          .eq("fechado", true)
+          .lt("data_fechamento", dataIni)
+          .order("data_fechamento", { ascending: false })
+
+        if (!fechError && fechamentos) {
+          const totalSaldoAnterior = fechamentos.reduce((sum, f) => sum + Number(f.saldo_final), 0)
+          setSaldoAnterior(totalSaldoAnterior)
+          // Pegar a data do fechamento mais recente
+          if (fechamentos.length > 0) {
+            setDataFechamentoAnterior(fechamentos[0].data_fechamento)
+          } else {
+            setDataFechamentoAnterior('')
+          }
+        } else {
+          setSaldoAnterior(0)
+          setDataFechamentoAnterior('')
+        }
+      }
+
+      let query = supabase
+        .from("movimentos_bancarios")
         .select(`
           *,
           bancos_contas!movimentos_bancarios_banco_conta_id_fkey (
@@ -292,10 +322,19 @@ export default function MovimentosPage() {
             banco_nome,
             empresas!bancos_contas_empresa_id_fkey (nome)
           )
-        `, { count: 'exact' })
+        `, { count: "exact" })
+
+      if (dataIni) {
+        query = query.gte("data_movimento", dataIni)
+      }
+      if (dataFim) {
+        query = query.lte("data_movimento", dataFim)
+      }
+
+      const { data, error, count } = await query
         .range(from, to)
-        .order('data_movimento', { ascending: false })
-        .order('created_at', { ascending: false })
+        .order("data_movimento", { ascending: false })
+        .order("created_at", { ascending: false })
 
       if (error) throw error
       
@@ -331,25 +370,27 @@ export default function MovimentosPage() {
   }
 
   const handleLoadMore = () => {
-    loadMovimentos(currentPage + 1, true)
+    loadMovimentos(dataInicial, dataFinal, currentPage + 1, true)
   }
 
   const onSubmit = async (data: MovimentoForm) => {
     try {
-      // Verificar última data de fechamento
-      const { data: ultimaData, error: checkError } = await supabase
-        .rpc('obter_ultima_data_fechamento', { 
-          p_banco_conta_id: data.banco_conta_id 
-        })
+      // Verificar se a data está em período fechado
+      const { data: fechamentoData, error: checkError } = await supabase
+        .from("fechamentos_bancarios")
+        .select("data_fechamento")
+        .eq("banco_conta_id", data.banco_conta_id)
+        .eq("fechado", true)
+        .gte("data_fechamento", data.data_movimento)
+        .limit(1)
 
-      if (checkError && checkError.code !== 'PGRST116') {
-        console.error('Erro ao verificar fechamento:', checkError)
-        showToast('Erro ao verificar data de fechamento', 'error')
-        return
+      if (checkError && checkError.code !== "PGRST116") {
+        console.error("Erro ao verificar fechamento:", checkError)
       }
 
-      if (ultimaData && data.data_movimento <= ultimaData) {
-        showToast(`Não é permitido lançar movimentos em data igual ou anterior ao último fechamento (${new Date(ultimaData).toLocaleDateString('pt-BR')})`, 'warning')
+      if (fechamentoData && fechamentoData.length > 0) {
+        const dataFormatada = new Date(fechamentoData[0].data_fechamento + "T00:00:00").toLocaleDateString("pt-BR")
+        setValidationModal({ show: true, message: `Não é permitido lançar movimentos em data igual ou anterior ao último fechamento (${dataFormatada})!`, type: "warning" })
         return
       }
 
@@ -384,7 +425,7 @@ export default function MovimentosPage() {
         }
         showToast('Movimento criado com sucesso!', 'success')
       }
-
+      loadMovimentos(dataInicial, dataFinal)
       closeModal()
       loadMovimentos()
     } catch (err: any) {
@@ -430,16 +471,20 @@ export default function MovimentosPage() {
 
       if (fetchError) throw fetchError
 
-      // Verificar última data de fechamento
-      const { data: ultimaData, error: checkError } = await supabase
-        .rpc('obter_ultima_data_fechamento', { 
-          p_banco_conta_id: movimento.banco_conta_id 
-        })
+      // Verificar se a data está em período fechado
+      const { data: fechamentoData, error: checkError } = await supabase
+        .from("fechamentos_bancarios")
+        .select("data_fechamento")
+        .eq("banco_conta_id", movimento.banco_conta_id)
+        .eq("fechado", true)
+        .gte("data_fechamento", movimento.data_movimento)
+        .limit(1)
 
-      if (checkError && checkError.code !== 'PGRST116') throw checkError
+      if (checkError && checkError.code !== "PGRST116") throw checkError
 
-      if (ultimaData && movimento.data_movimento <= ultimaData) {
-        showToast(`Não é permitido excluir movimentos em data igual ou anterior ao último fechamento (${new Date(ultimaData).toLocaleDateString('pt-BR')})`, 'warning')
+      if (fechamentoData && fechamentoData.length > 0) {
+        const dataFormatada = new Date(fechamentoData[0].data_fechamento + "T00:00:00").toLocaleDateString("pt-BR")
+        setValidationModal({ show: true, message: `Não é permitido excluir movimentos em data igual ou anterior ao último fechamento (${dataFormatada})!`, type: "warning" })
         setDeleteConfirm({ show: false, id: null })
         return
       }
@@ -449,7 +494,7 @@ export default function MovimentosPage() {
         .delete()
         .eq('id', id)
 
-      if (error) throw error
+      loadMovimentos(dataInicial, dataFinal)
 
       showToast('Movimento excluído com sucesso!', 'success')
       setDeleteConfirm({ show: false, id: null })
@@ -494,7 +539,7 @@ export default function MovimentosPage() {
     .filter(m => m.tipo_movimento === 'SAIDA' || m.tipo_movimento === 'TRANSFERENCIA_ENVIADA')
     .reduce((sum, m) => sum + m.valor, 0)
 
-  const saldoLiquido = totalEntradas - totalSaidas
+  const saldoLiquido = saldoAnterior + totalEntradas - totalSaidas
 
   // Filtros
   const filteredMovimentos = movimentos.filter(m => {
@@ -590,75 +635,112 @@ export default function MovimentosPage() {
       {/* KPI Cards */}
       <div style={{
         display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-        gap: '16px',
+        gridTemplateColumns: 'repeat(4, 1fr)',
+        gap: '12px',
         marginBottom: '24px'
       }}>
         <div style={{
           backgroundColor: 'white',
-          padding: '20px',
+          padding: '16px',
           borderRadius: '12px',
           border: '1px solid #e5e7eb'
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <div>
-              <p style={{ fontSize: '13px', color: '#6b7280', marginBottom: '8px' }}>Total Entradas</p>
-              <p style={{ fontSize: '24px', fontWeight: '700', color: '#10b981' }}>
+              <p style={{ fontSize: '11px', color: '#6b7280', marginBottom: '6px' }}>
+                Saldo Anterior {dataFechamentoAnterior && new Date(dataFechamentoAnterior + 'T00:00:00').toLocaleDateString('pt-BR')}
+              </p>
+              <p style={{
+                fontSize: '20px',
+                fontWeight: '700',
+                color: saldoAnterior >= 0 ? '#6366f1' : '#ef4444'
+              }}>
+                {formatCurrency(saldoAnterior)}
+              </p>
+            </div>
+            <div style={{
+              width: '40px',
+              height: '40px',
+              backgroundColor: saldoAnterior >= 0 ? '#e0e7ff' : '#fee2e2',
+              borderRadius: '10px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}>
+              <Calendar style={{
+                width: '20px',
+                height: '20px',
+                color: saldoAnterior >= 0 ? '#6366f1' : '#ef4444'
+              }} />
+            </div>
+          </div>
+        </div>
+
+        <div style={{
+          backgroundColor: 'white',
+          padding: '16px',
+          borderRadius: '12px',
+          border: '1px solid #e5e7eb'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div>
+              <p style={{ fontSize: '11px', color: '#6b7280', marginBottom: '6px' }}>Total Entradas</p>
+              <p style={{ fontSize: '20px', fontWeight: '700', color: '#10b981' }}>
                 {formatCurrency(totalEntradas)}
               </p>
             </div>
             <div style={{
-              width: '48px',
-              height: '48px',
+              width: '40px',
+              height: '40px',
               backgroundColor: '#dcfce7',
-              borderRadius: '12px',
+              borderRadius: '10px',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center'
             }}>
-              <TrendingUp style={{ width: '24px', height: '24px', color: '#10b981' }} />
+              <TrendingUp style={{ width: '20px', height: '20px', color: '#10b981' }} />
             </div>
           </div>
         </div>
 
         <div style={{
           backgroundColor: 'white',
-          padding: '20px',
+          padding: '16px',
           borderRadius: '12px',
           border: '1px solid #e5e7eb'
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <div>
-              <p style={{ fontSize: '13px', color: '#6b7280', marginBottom: '8px' }}>Total Saídas</p>
-              <p style={{ fontSize: '24px', fontWeight: '700', color: '#ef4444' }}>
+              <p style={{ fontSize: '11px', color: '#6b7280', marginBottom: '6px' }}>Total Saídas</p>
+              <p style={{ fontSize: '20px', fontWeight: '700', color: '#ef4444' }}>
                 {formatCurrency(totalSaidas)}
               </p>
             </div>
             <div style={{
-              width: '48px',
-              height: '48px',
+              width: '40px',
+              height: '40px',
               backgroundColor: '#fee2e2',
-              borderRadius: '12px',
+              borderRadius: '10px',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center'
             }}>
-              <TrendingDown style={{ width: '24px', height: '24px', color: '#ef4444' }} />
+              <TrendingDown style={{ width: '20px', height: '20px', color: '#ef4444' }} />
             </div>
           </div>
         </div>
 
         <div style={{
           backgroundColor: 'white',
-          padding: '20px',
+          padding: '16px',
           borderRadius: '12px',
           border: '1px solid #e5e7eb'
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <div>
-              <p style={{ fontSize: '13px', color: '#6b7280', marginBottom: '8px' }}>Saldo Líquido</p>
+              <p style={{ fontSize: '11px', color: '#6b7280', marginBottom: '6px' }}>Saldo Líquido</p>
               <p style={{
-                fontSize: '24px',
+                fontSize: '20px',
                 fontWeight: '700',
                 color: saldoLiquido >= 0 ? '#1555D6' : '#ef4444'
               }}>
@@ -666,17 +748,17 @@ export default function MovimentosPage() {
               </p>
             </div>
             <div style={{
-              width: '48px',
-              height: '48px',
+              width: '40px',
+              height: '40px',
               backgroundColor: saldoLiquido >= 0 ? '#dbeafe' : '#fee2e2',
-              borderRadius: '12px',
+              borderRadius: '10px',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center'
             }}>
               <DollarSign style={{
-                width: '24px',
-                height: '24px',
+                width: '20px',
+                height: '20px',
                 color: saldoLiquido >= 0 ? '#1555D6' : '#ef4444'
               }} />
             </div>
@@ -1086,52 +1168,64 @@ export default function MovimentosPage() {
                           }}>
                             <button
                               onClick={() => handleEdit(movimento)}
+                              disabled={movimento.tipo_movimento === 'TRANSFERENCIA_ENVIADA' || movimento.tipo_movimento === 'TRANSFERENCIA_RECEBIDA'}
                               style={{
                                 padding: '8px',
-                                backgroundColor: '#f3f4f6',
+                                backgroundColor: (movimento.tipo_movimento === 'TRANSFERENCIA_ENVIADA' || movimento.tipo_movimento === 'TRANSFERENCIA_RECEBIDA') ? '#e5e7eb' : '#f3f4f6',
                                 border: 'none',
                                 borderRadius: '6px',
-                                cursor: 'pointer',
+                                cursor: (movimento.tipo_movimento === 'TRANSFERENCIA_ENVIADA' || movimento.tipo_movimento === 'TRANSFERENCIA_RECEBIDA') ? 'not-allowed' : 'pointer',
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'center',
-                                transition: 'all 0.2s'
+                                transition: 'all 0.2s',
+                                opacity: (movimento.tipo_movimento === 'TRANSFERENCIA_ENVIADA' || movimento.tipo_movimento === 'TRANSFERENCIA_RECEBIDA') ? 0.5 : 1
                               }}
                               onMouseOver={(e) => {
-                                e.currentTarget.style.backgroundColor = '#1555D6'
-                                const icon = e.currentTarget.querySelector('svg')
-                                if (icon) (icon as SVGElement).style.color = 'white'
+                                if (movimento.tipo_movimento !== 'TRANSFERENCIA_ENVIADA' && movimento.tipo_movimento !== 'TRANSFERENCIA_RECEBIDA') {
+                                  e.currentTarget.style.backgroundColor = '#1555D6'
+                                  const icon = e.currentTarget.querySelector('svg')
+                                  if (icon) (icon as SVGElement).style.color = 'white'
+                                }
                               }}
                               onMouseOut={(e) => {
-                                e.currentTarget.style.backgroundColor = '#f3f4f6'
-                                const icon = e.currentTarget.querySelector('svg')
-                                if (icon) (icon as SVGElement).style.color = '#6b7280'
+                                if (movimento.tipo_movimento !== 'TRANSFERENCIA_ENVIADA' && movimento.tipo_movimento !== 'TRANSFERENCIA_RECEBIDA') {
+                                  e.currentTarget.style.backgroundColor = '#f3f4f6'
+                                  const icon = e.currentTarget.querySelector('svg')
+                                  if (icon) (icon as SVGElement).style.color = '#6b7280'
+                                }
                               }}
                             >
                               <Pencil style={{ width: '16px', height: '16px', color: '#6b7280' }} />
                             </button>
                             <button
                               onClick={() => setDeleteConfirm({ show: true, id: movimento.id })}
+                              disabled={movimento.tipo_movimento === 'TRANSFERENCIA_ENVIADA' || movimento.tipo_movimento === 'TRANSFERENCIA_RECEBIDA'}
                               style={{
                                 padding: '8px',
-                                backgroundColor: '#f3f4f6',
+                                backgroundColor: (movimento.tipo_movimento === 'TRANSFERENCIA_ENVIADA' || movimento.tipo_movimento === 'TRANSFERENCIA_RECEBIDA') ? '#e5e7eb' : '#f3f4f6',
                                 border: 'none',
                                 borderRadius: '6px',
-                                cursor: 'pointer',
+                                cursor: (movimento.tipo_movimento === 'TRANSFERENCIA_ENVIADA' || movimento.tipo_movimento === 'TRANSFERENCIA_RECEBIDA') ? 'not-allowed' : 'pointer',
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'center',
-                                transition: 'all 0.2s'
+                                transition: 'all 0.2s',
+                                opacity: (movimento.tipo_movimento === 'TRANSFERENCIA_ENVIADA' || movimento.tipo_movimento === 'TRANSFERENCIA_RECEBIDA') ? 0.5 : 1
                               }}
                               onMouseOver={(e) => {
-                                e.currentTarget.style.backgroundColor = '#ef4444'
-                                const icon = e.currentTarget.querySelector('svg')
-                                if (icon) (icon as SVGElement).style.color = 'white'
+                                if (movimento.tipo_movimento !== 'TRANSFERENCIA_ENVIADA' && movimento.tipo_movimento !== 'TRANSFERENCIA_RECEBIDA') {
+                                  e.currentTarget.style.backgroundColor = '#ef4444'
+                                  const icon = e.currentTarget.querySelector('svg')
+                                  if (icon) (icon as SVGElement).style.color = 'white'
+                                }
                               }}
                               onMouseOut={(e) => {
-                                e.currentTarget.style.backgroundColor = '#f3f4f6'
-                                const icon = e.currentTarget.querySelector('svg')
-                                if (icon) (icon as SVGElement).style.color = '#6b7280'
+                                if (movimento.tipo_movimento !== 'TRANSFERENCIA_ENVIADA' && movimento.tipo_movimento !== 'TRANSFERENCIA_RECEBIDA') {
+                                  e.currentTarget.style.backgroundColor = '#f3f4f6'
+                                  const icon = e.currentTarget.querySelector('svg')
+                                  if (icon) (icon as SVGElement).style.color = '#6b7280'
+                                }
                               }}
                             >
                               <Trash2 style={{ width: '16px', height: '16px', color: '#6b7280' }} />
@@ -1588,6 +1682,20 @@ export default function MovimentosPage() {
       )}
 
       {/* Modal de Confirmação de Exclusão */}
+      {/* Modal de Validação */}
+      {validationModal.show && (
+        <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0, 0, 0, 0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1001, backdropFilter: "blur(4px)" }} onClick={() => setValidationModal({ show: false, message: "" })}>
+          <div style={{ backgroundColor: "white", borderRadius: "16px", boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1)", padding: "32px", width: "100%", maxWidth: "450px", margin: "16px" }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ width: "56px", height: "56px", margin: "0 auto 20px", borderRadius: "50%", backgroundColor: validationModal.type === "warning" ? "#fef3c7" : "#fee2e2", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <AlertTriangle style={{ width: "28px", height: "28px", color: validationModal.type === "warning" ? "#f59e0b" : "#ef4444" }} />
+            </div>
+            <h2 style={{ fontSize: "20px", fontWeight: "700", color: "#111827", marginBottom: "12px", textAlign: "center" }}>Atenção</h2>
+            <p style={{ fontSize: "14px", color: "#6b7280", marginBottom: "24px", textAlign: "center", lineHeight: "1.5" }}>{validationModal.message}</p>
+            <button onClick={() => setValidationModal({ show: false, message: "" })} style={{ width: "100%", padding: "12px 24px", backgroundColor: "#1555D6", border: "none", borderRadius: "8px", fontSize: "14px", fontWeight: "600", color: "white", cursor: "pointer", transition: "all 0.2s" }} onMouseOver={(e) => e.currentTarget.style.backgroundColor = "#1044b5"} onMouseOut={(e) => e.currentTarget.style.backgroundColor = "#1555D6"}>OK</button>
+          </div>
+        </div>
+      )}
+
       {deleteConfirm.show && (
         <div
           style={{

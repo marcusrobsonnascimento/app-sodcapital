@@ -106,7 +106,7 @@ export default function TransferenciasPage() {
     show: false,
     id: null
   })
-  const [validationModal, setValidationModal] = useState<{ show: boolean; message: string }>({
+  const [validationModal, setValidationModal] = useState<{ show: boolean; message: string; type?: string }>({
     show: false,
     message: ''
   })
@@ -598,7 +598,18 @@ export default function TransferenciasPage() {
       closeModal()
       fetchTransferencias()
     } catch (error: any) {
-      addToast('Erro ao salvar transferência: ' + error.message, 'error')
+      if (error.message && error.message.includes("último fechamento")) {
+        const dataMatch = error.message.match(/(\d{4})-(\d{2})-(\d{2})/);
+        let mensagemFormatada = error.message;
+        if (dataMatch) {
+          const [, ano, mes, dia] = dataMatch;
+          const dataFormatada = `${dia}/${mes}/${ano}`;
+          mensagemFormatada = error.message.replace(/\d{4}-\d{2}-\d{2}/, dataFormatada);
+        }
+        setValidationModal({ show: true, message: mensagemFormatada, type: "warning" });
+      } else {
+        addToast("Erro ao salvar transferência: " + error.message, "error");
+      }
     }
   }
 
@@ -1891,16 +1902,20 @@ export default function TransferenciasPage() {
             onClick={(e) => e.stopPropagation()}
           >
             <div style={{
-              width: '56px',
-              height: '56px',
-              margin: '0 auto 20px',
-              borderRadius: '50%',
-              backgroundColor: '#fef3c7',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center'
+              width: "56px",
+              height: "56px",
+              margin: "0 auto 20px",
+              borderRadius: "50%",
+              backgroundColor: validationModal.type === "warning" ? "#fef3c7" : "#fee2e2",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center"
             }}>
-              <AlertTriangle style={{ width: '28px', height: '28px', color: '#f59e0b' }} />
+              {validationModal.type === "warning" ? (
+                <AlertTriangle style={{ width: "28px", height: "28px", color: "#f59e0b" }} />
+              ) : (
+                <XCircle style={{ width: "28px", height: "28px", color: "#ef4444" }} />
+              )}
             </div>
 
             <h2 style={{
