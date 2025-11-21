@@ -437,7 +437,7 @@ export default function ExtratoContaPage() {
         <div class="info">
           <p><strong>Empresa:</strong> ${empresaInfo?.nome || ''}</p>
           <p><strong>Banco:</strong> ${contaInfo?.banco_nome || ''}</p>
-          <p><strong>Agência:</strong> ${contaInfo?.agencia || ''} | <strong>Conta:</strong> ${contaInfo?.numero_conta || ''}</p>
+          <p><strong>Agência:</strong> ${contaInfo?.agencia || ''} | <strong>Conta:</strong> ${contaInfo?.numero_conta || ''} | <strong>Tipo:</strong> ${contaInfo?.tipo_conta || ''}</p>
           <p><strong>Período:</strong> ${formatDate(dataInicial)} a ${formatDate(dataFinal)}</p>
         </div>
         <table>
