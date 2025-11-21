@@ -507,13 +507,15 @@ export default function PlanoContaPicker({
         <div
           style={{
             marginTop: '12px',
-            padding: '12px',
+            padding: '12px 16px',
             backgroundColor: '#f0f9ff',
             border: '1px solid #bfdbfe',
             borderRadius: '8px',
             display: 'flex',
             justifyContent: 'space-between',
-            alignItems: 'center'
+            alignItems: 'center',
+            width: '100%',
+            boxSizing: 'border-box'
           }}
         >
           <div>
