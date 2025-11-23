@@ -422,6 +422,9 @@ export default function ExtratoContaPage() {
           table { width: 100%; border-collapse: collapse; font-size: 11px; }
           th { background-color: #1555D6; color: white; padding: 8px; text-align: left; font-weight: 600; }
           td { padding: 8px; border-bottom: 1px solid #e5e7eb; }
+          th:nth-child(5), td:nth-child(5),
+          th:nth-child(6), td:nth-child(6),
+          th:nth-child(7), td:nth-child(7) { white-space: nowrap; }
           .saldo-anterior { background-color: #f9fafb; font-weight: 600; }
           .right { text-align: right; }
           .debito { color: #dc2626; }
@@ -888,7 +891,8 @@ export default function ExtratoContaPage() {
                     fontWeight: '600',
                     color: '#6b7280',
                     textTransform: 'uppercase',
-                    letterSpacing: '0.05em'
+                    letterSpacing: '0.05em',
+                    whiteSpace: 'nowrap'
                   }}>
                     Débito
                   </th>
@@ -899,7 +903,8 @@ export default function ExtratoContaPage() {
                     fontWeight: '600',
                     color: '#6b7280',
                     textTransform: 'uppercase',
-                    letterSpacing: '0.05em'
+                    letterSpacing: '0.05em',
+                    whiteSpace: 'nowrap'
                   }}>
                     Crédito
                   </th>
@@ -910,7 +915,8 @@ export default function ExtratoContaPage() {
                     fontWeight: '600',
                     color: '#6b7280',
                     textTransform: 'uppercase',
-                    letterSpacing: '0.05em'
+                    letterSpacing: '0.05em',
+                    whiteSpace: 'nowrap'
                   }}>
                     Saldo
                   </th>
@@ -929,10 +935,10 @@ export default function ExtratoContaPage() {
                     <td colSpan={4} style={{ padding: '16px', fontSize: '14px', color: '#374151', fontWeight: '600' }}>
                       Saldo Anterior
                     </td>
-                    <td style={{ padding: '16px', textAlign: 'right', fontSize: '14px', fontWeight: '700', color: '#6366f1' }}>
+                    <td style={{ padding: '16px', textAlign: 'right', fontSize: '14px', fontWeight: '700', color: '#6366f1', whiteSpace: 'nowrap' }}>
                       -
                     </td>
-                    <td style={{ padding: '16px', textAlign: 'right', fontSize: '14px', fontWeight: '700', color: '#6366f1' }}>
+                    <td style={{ padding: '16px', textAlign: 'right', fontSize: '14px', fontWeight: '700', color: '#6366f1', whiteSpace: 'nowrap' }}>
                       {formatCurrency(saldoAnterior.valor)}
                     </td>
                   </tr>
@@ -963,7 +969,8 @@ export default function ExtratoContaPage() {
                         textAlign: 'right',
                         fontSize: '14px',
                         fontWeight: '600',
-                        color: '#dc2626'
+                        color: '#dc2626',
+                        whiteSpace: 'nowrap'
                       }}>
                         {isDebito ? formatCurrency(movimento.valor) : '-'}
                       </td>
@@ -972,7 +979,8 @@ export default function ExtratoContaPage() {
                         textAlign: 'right',
                         fontSize: '14px',
                         fontWeight: '600',
-                        color: '#059669'
+                        color: '#059669',
+                        whiteSpace: 'nowrap'
                       }}>
                         {!isDebito ? formatCurrency(movimento.valor) : '-'}
                       </td>
@@ -981,7 +989,8 @@ export default function ExtratoContaPage() {
                         textAlign: 'right',
                         fontSize: '14px',
                         fontWeight: '700',
-                        color: movimento.saldo_acumulado >= 0 ? '#1555D6' : '#ef4444'
+                        color: movimento.saldo_acumulado >= 0 ? '#1555D6' : '#ef4444',
+                        whiteSpace: 'nowrap'
                       }}>
                         {formatCurrency(movimento.saldo_acumulado)}
                       </td>

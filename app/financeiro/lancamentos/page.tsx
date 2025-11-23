@@ -88,10 +88,13 @@ interface Lancamento {
   documento_numero: string | null
   observacoes: string | null
   created_at: string
+  pagamento_terceiro: boolean
+  empresa_pagadora_id: string | null
   empresa_nome?: string
   projeto_nome?: string
   subprojeto_nome?: string
   contraparte_nome?: string
+  empresa_pagadora_nome?: string
   plano_conta?: PlanoContaFluxo
   retencoes?: Retencao[]
 }
@@ -133,35 +136,26 @@ const formatDateLocal = (dateString: string | null): string => {
   return `${day}/${month}/${year}`
 }
 
-// Schema de validação - projeto opcional quando tipo_fluxo é Corporativo
-const lancamentoSchema = z.object({
-  tipo: z.enum(['Entrada', 'Saida'], { required_error: 'Tipo é obrigatório' }),
-  empresa_id: z.string().min(1, 'Empresa é obrigatória'),
-  tipo_fluxo: z.string().min(1, 'Tipo de Fluxo é obrigatório'),
-  projeto_id: z.string().optional(),
-  subprojeto_id: z.string().optional(),
-  banco_conta_id: z.string().min(1, 'Conta bancária é obrigatória'),
-  contraparte_id: z.string().min(1, 'Contraparte é obrigatória'),
-  plano_conta_id: z.string().min(1, 'Plano de conta é obrigatório'),
-  valor_bruto: z.coerce.number().min(0.01, 'Valor bruto é obrigatório'),
-  data_emissao: z.string().min(1, 'Data de emissão é obrigatória'),
-  data_vencimento: z.string().min(1, 'Data de vencimento é obrigatória'),
-  data_previsao_pagamento: z.string().optional(),
-  documento_tipo: z.string().optional(),
-  documento_numero: z.string().optional(),
-  observacoes: z.string().optional()
-}).refine((data) => {
-  // Se tipo_fluxo não for Corporativo, projeto_id é obrigatório
-  if (data.tipo_fluxo !== 'Corporativo' && !data.projeto_id) {
-    return false
-  }
-  return true
-}, {
-  message: 'Projeto é obrigatório quando Tipo de Fluxo não for Corporativo',
-  path: ['projeto_id']
-})
-
-type LancamentoForm = z.infer<typeof lancamentoSchema>
+// Schema de validação sem Zod - usaremos validação manual
+interface LancamentoForm {
+  tipo: 'Entrada' | 'Saida'
+  empresa_id: string
+  tipo_fluxo: string
+  projeto_id?: string
+  subprojeto_id?: string
+  pagamento_terceiro: boolean
+  empresa_pagadora_id?: string
+  banco_conta_id: string
+  contraparte_id: string
+  plano_conta_id: string
+  valor_bruto: number
+  data_emissao: string
+  data_vencimento: string
+  data_previsao_pagamento?: string
+  documento_tipo?: string
+  documento_numero?: string
+  observacoes?: string
+}
 
 const IMPOSTOS = [
   { value: 'COFINS', label: 'COFINS' },
@@ -179,6 +173,7 @@ export default function LancamentosPage() {
   const [projetos, setProjetos] = useState<Projeto[]>([])
   const [subprojetos, setSubprojetos] = useState<Projeto[]>([])
   const [bancosContas, setBancosContas] = useState<BancoConta[]>([])
+  const [empresasPagadoras, setEmpresasPagadoras] = useState<Empresa[]>([])
   const [contrapartes, setContrapartes] = useState<Contraparte[]>([])
   const [tiposFluxo, setTiposFluxo] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
@@ -232,15 +227,20 @@ export default function LancamentosPage() {
     id: null
   })
   const [dataLiquidacao, setDataLiquidacao] = useState('')
+  const [validationModal, setValidationModal] = useState<{ show: boolean; message: string }>({
+    show: false,
+    message: ''
+  })
 
   const { register, handleSubmit, reset, formState: { errors }, setValue, watch } = useForm<LancamentoForm>({
-    resolver: zodResolver(lancamentoSchema),
     defaultValues: {
       tipo: 'Saida',
       empresa_id: '',
       tipo_fluxo: '',
       projeto_id: '',
       subprojeto_id: '',
+      pagamento_terceiro: false,
+      empresa_pagadora_id: '',
       banco_conta_id: '',
       contraparte_id: '',
       plano_conta_id: '',
@@ -258,6 +258,8 @@ export default function LancamentosPage() {
   const empresaId = watch('empresa_id')
   const tipoFluxo = watch('tipo_fluxo')
   const projetoId = watch('projeto_id')
+  const pagamentoTerceiro = watch('pagamento_terceiro')
+  const empresaPagadoraId = watch('empresa_pagadora_id')
 
   // Toast functions
   const showToast = (message: string, type: ToastType = 'success', requiresConfirmation: boolean = false) => {
@@ -347,17 +349,25 @@ export default function LancamentosPage() {
   useEffect(() => {
     if (empresaId) {
       fetchProjetos(empresaId)
-      fetchBancosContas(empresaId)
+      // Carregar empresas pagadoras (todas menos a selecionada)
+      fetchEmpresasPagadoras(empresaId)
+      // Carregar contas bancárias baseadas se é pagamento por terceiro
+      if (pagamentoTerceiro && empresaPagadoraId) {
+        fetchBancosContas(empresaPagadoraId)
+      } else {
+        fetchBancosContas(empresaId)
+      }
       // Buscar projetos para o filtro
       fetchProjetosFilter(empresaId)
     } else {
       setProjetos([])
       setSubprojetos([])
       setBancosContas([])
+      setEmpresasPagadoras([])
       setProjetosFilter([])
       setSubprojetosFilter([])
     }
-  }, [empresaId])
+  }, [empresaId, pagamentoTerceiro, empresaPagadoraId])
 
   useEffect(() => {
     if (projetoId) {
@@ -412,6 +422,22 @@ export default function LancamentosPage() {
       setEmpresas(data || [])
     } catch (error) {
       console.error('Erro ao carregar empresas:', error)
+    }
+  }
+
+  const fetchEmpresasPagadoras = async (empresaIdExcluir: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('empresas')
+        .select('id, nome')
+        .eq('ativo', true)
+        .neq('id', empresaIdExcluir)
+        .order('nome')
+      
+      if (error) throw error
+      setEmpresasPagadoras(data || [])
+    } catch (error) {
+      console.error('Erro ao carregar empresas pagadoras:', error)
     }
   }
 
@@ -499,6 +525,7 @@ export default function LancamentosPage() {
         `)
         .eq('empresa_id', empresaId)
         .eq('ativo', true)
+        .eq('tipo_conta', 'CC')
         .order('banco_nome')
       
       if (error) throw error
@@ -576,6 +603,8 @@ export default function LancamentosPage() {
           banco_conta_id,
           contraparte_id,
           plano_conta_id,
+          pagamento_terceiro,
+          empresa_pagadora_id,
           valor_bruto,
           valor_liquido,
           data_emissao,
@@ -587,7 +616,8 @@ export default function LancamentosPage() {
           documento_numero,
           observacoes,
           created_at,
-          empresas!inner(nome),
+          empresas!lancamentos_empresa_id_fkey(nome),
+          empresa_pagadora:empresas!lancamentos_empresa_pagadora_id_fkey(nome),
           projeto:projetos!projeto_id(nome),
           subprojeto:projetos!subprojeto_id(nome),
           contrapartes(nome),
@@ -648,6 +678,7 @@ export default function LancamentosPage() {
       const formattedData = (data || []).map((item: any) => ({
         ...item,
         empresa_nome: item.empresas?.nome,
+        empresa_pagadora_nome: Array.isArray(item.empresa_pagadora) ? item.empresa_pagadora[0]?.nome : item.empresa_pagadora?.nome,
         projeto_nome: item.projeto?.nome,
         subprojeto_nome: item.subprojeto?.nome,
         contraparte_nome: Array.isArray(item.contrapartes) ? item.contrapartes[0]?.nome : item.contrapartes?.nome,
@@ -704,7 +735,14 @@ export default function LancamentosPage() {
       
       // Carregar dados dependentes da empresa
       await fetchProjetos(lancamento.empresa_id)
-      await fetchBancosContas(lancamento.empresa_id)
+      await fetchEmpresasPagadoras(lancamento.empresa_id)
+      
+      // Carregar contas bancárias baseadas em pagamento_terceiro
+      if (lancamento.pagamento_terceiro && lancamento.empresa_pagadora_id) {
+        await fetchBancosContas(lancamento.empresa_pagadora_id)
+      } else {
+        await fetchBancosContas(lancamento.empresa_id)
+      }
       
       // Se tiver projeto, carregar subprojetos
       if (lancamento.projeto_id) {
@@ -715,6 +753,8 @@ export default function LancamentosPage() {
       setValue('empresa_id', lancamento.empresa_id)
       setValue('projeto_id', lancamento.projeto_id || '')
       setValue('subprojeto_id', lancamento.subprojeto_id || '')
+      setValue('pagamento_terceiro', lancamento.pagamento_terceiro || false)
+      setValue('empresa_pagadora_id', lancamento.empresa_pagadora_id || '')
       setValue('banco_conta_id', lancamento.banco_conta_id || '')
       setValue('contraparte_id', lancamento.contraparte_id || '')
       setValue('plano_conta_id', lancamento.plano_conta_id)
@@ -796,9 +836,23 @@ export default function LancamentosPage() {
 
   const onSubmit = async (formData: LancamentoForm) => {
     try {
-      // Validação adicional para projeto quando não for Corporativo
-      if (formData.tipo_fluxo !== 'Corporativo' && !formData.projeto_id) {
-        showToast('Projeto é obrigatório quando Tipo de Fluxo não for Corporativo', 'error', true)
+      // Validação de campos obrigatórios
+      const camposFaltando: string[] = []
+
+      if (!formData.empresa_id) camposFaltando.push('Empresa')
+      if (!formData.tipo_fluxo) camposFaltando.push('Tipo de Fluxo')
+      if (formData.tipo_fluxo !== 'Corporativo' && !formData.projeto_id) camposFaltando.push('Projeto')
+      if (formData.pagamento_terceiro && !formData.empresa_pagadora_id) camposFaltando.push('Empresa Pagadora')
+      if (!formData.banco_conta_id) camposFaltando.push('Conta Bancária')
+      if (!formData.contraparte_id) camposFaltando.push('Contraparte')
+      if (!formData.plano_conta_id) camposFaltando.push('Plano de Conta')
+      if (!valorBruto || valorBruto <= 0) camposFaltando.push('Valor Bruto')
+      if (!formData.data_emissao) camposFaltando.push('Data Emissão')
+      if (!formData.data_vencimento) camposFaltando.push('Data Vencimento')
+
+      if (camposFaltando.length > 0) {
+        const mensagem = camposFaltando.join(', ')
+        setValidationModal({ show: true, message: mensagem })
         return
       }
 
@@ -807,6 +861,8 @@ export default function LancamentosPage() {
         empresa_id: formData.empresa_id,
         projeto_id: formData.projeto_id || null,
         subprojeto_id: formData.subprojeto_id || null,
+        pagamento_terceiro: formData.pagamento_terceiro || false,
+        empresa_pagadora_id: formData.pagamento_terceiro ? formData.empresa_pagadora_id || null : null,
         banco_conta_id: formData.banco_conta_id,
         contraparte_id: formData.contraparte_id,
         plano_conta_id: formData.plano_conta_id,
@@ -1463,6 +1519,18 @@ export default function LancamentosPage() {
                 </th>
                 <th style={{
                   padding: '6px 8px',
+                  textAlign: 'center',
+                  fontSize: '8px',
+                  fontWeight: '600',
+                  color: '#6b7280',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.4px',
+                  whiteSpace: 'nowrap',
+                }}>
+                  PGTO TERC
+                </th>
+                <th style={{
+                  padding: '6px 8px',
                   textAlign: 'left',
                   fontSize: '8px',
                   fontWeight: '600',
@@ -1600,6 +1668,41 @@ export default function LancamentosPage() {
                       }}>
                         {tipoStyle.label}
                       </span>
+                    </td>
+
+                    {/* PGTO TERCEIRO */}
+                    <td style={{ padding: '6px 8px', textAlign: 'center' }}>
+                      {lancamento.pagamento_terceiro ? (
+                        <div style={{ position: 'relative', display: 'inline-block' }}>
+                          <span
+                            className="tooltip-btn"
+                            data-tooltip={`Pago por: ${lancamento.empresa_pagadora_nome || 'N/A'}`}
+                            style={{
+                              display: 'inline-block',
+                              padding: '2px 6px',
+                              borderRadius: '4px',
+                              fontSize: '8px',
+                              fontWeight: '600',
+                              backgroundColor: '#dbeafe',
+                              color: '#1e40af',
+                              whiteSpace: 'nowrap',
+                              cursor: 'help'
+                            }}
+                          >
+                            SIM
+                          </span>
+                        </div>
+                      ) : (
+                        <span style={{
+                          display: 'inline-block',
+                          padding: '2px 6px',
+                          fontSize: '8px',
+                          fontWeight: '500',
+                          color: '#6b7280'
+                        }}>
+                          NÃO
+                        </span>
+                      )}
                     </td>
 
                     {/* EMPRESA */}
@@ -1908,42 +2011,6 @@ export default function LancamentosPage() {
                 gap: '14px',
                 marginBottom: '16px'
               }}>
-                {/* Tipo */}
-                <div>
-                  <label style={{
-                    display: 'block',
-                    fontSize: '13px',
-                    fontWeight: '500',
-                    color: '#374151',
-                    marginBottom: '6px'
-                  }}>
-                    Tipo *
-                  </label>
-                  <select
-                    {...register('tipo')}
-                    disabled={isLancamentoPago}
-                    style={{
-                      width: '100%',
-                      padding: '9px 10px',
-                      border: '1px solid #e5e7eb',
-                      borderRadius: '8px',
-                      fontSize: '13px',
-                      outline: 'none',
-                      cursor: isLancamentoPago ? 'not-allowed' : 'pointer',
-                      backgroundColor: isLancamentoPago ? '#f9fafb' : 'white',
-                      color: isLancamentoPago ? '#9ca3af' : '#1f2937'
-                    }}
-                  >
-                    <option value="Entrada">Recebimento</option>
-                    <option value="Saida">Pagamento</option>
-                  </select>
-                  {errors.tipo && (
-                    <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '4px', display: 'block' }}>
-                      {errors.tipo.message}
-                    </span>
-                  )}
-                </div>
-
                 {/* Empresa */}
                 <div>
                   <label style={{
@@ -1977,11 +2044,6 @@ export default function LancamentosPage() {
                       </option>
                     ))}
                   </select>
-                  {errors.empresa_id && (
-                    <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '4px', display: 'block' }}>
-                      {errors.empresa_id.message}
-                    </span>
-                  )}
                 </div>
 
                 {/* Tipo de Fluxo */}
@@ -2017,17 +2079,43 @@ export default function LancamentosPage() {
                       </option>
                     ))}
                   </select>
-                  {errors.tipo_fluxo && (
-                    <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '4px', display: 'block' }}>
-                      {errors.tipo_fluxo.message}
-                    </span>
-                  )}
+                </div>
+
+                {/* Tipo */}
+                <div>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '13px',
+                    fontWeight: '500',
+                    color: '#374151',
+                    marginBottom: '6px'
+                  }}>
+                    Tipo *
+                  </label>
+                  <select
+                    {...register('tipo')}
+                    disabled={isLancamentoPago}
+                    style={{
+                      width: '100%',
+                      padding: '9px 10px',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '8px',
+                      fontSize: '13px',
+                      outline: 'none',
+                      cursor: isLancamentoPago ? 'not-allowed' : 'pointer',
+                      backgroundColor: isLancamentoPago ? '#f9fafb' : 'white',
+                      color: isLancamentoPago ? '#9ca3af' : '#1f2937'
+                    }}
+                  >
+                    <option value="Entrada">Recebimento</option>
+                    <option value="Saida">Pagamento</option>
+                  </select>
                 </div>
               </div>
 
               <div style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(3, 1fr)',
+                gridTemplateColumns: '1.2fr 1.2fr 0.8fr 1fr 1.3fr',
                 gap: '14px',
                 marginBottom: '16px'
               }}>
@@ -2044,7 +2132,7 @@ export default function LancamentosPage() {
                   </label>
                   <select
                     {...register('projeto_id')}
-                    disabled={!empresaId || isLancamentoPago}
+                    disabled={!empresaId || isLancamentoPago || tipoFluxo === 'Corporativo'}
                     style={{
                       width: '100%',
                       padding: '9px 10px',
@@ -2052,9 +2140,9 @@ export default function LancamentosPage() {
                       borderRadius: '8px',
                       fontSize: '13px',
                       outline: 'none',
-                      cursor: empresaId && !isLancamentoPago ? 'pointer' : 'not-allowed',
-                      backgroundColor: empresaId && !isLancamentoPago ? 'white' : '#f9fafb',
-                      color: empresaId && !isLancamentoPago ? '#1f2937' : '#9ca3af'
+                      cursor: empresaId && !isLancamentoPago && tipoFluxo !== 'Corporativo' ? 'pointer' : 'not-allowed',
+                      backgroundColor: empresaId && !isLancamentoPago && tipoFluxo !== 'Corporativo' ? 'white' : '#f9fafb',
+                      color: empresaId && !isLancamentoPago && tipoFluxo !== 'Corporativo' ? '#1f2937' : '#9ca3af'
                     }}
                   >
                     <option value="">Selecione...</option>
@@ -2064,11 +2152,6 @@ export default function LancamentosPage() {
                       </option>
                     ))}
                   </select>
-                  {errors.projeto_id && (
-                    <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '4px', display: 'block' }}>
-                      {errors.projeto_id.message}
-                    </span>
-                  )}
                 </div>
 
                 {/* Subprojeto */}
@@ -2106,6 +2189,83 @@ export default function LancamentosPage() {
                   </select>
                 </div>
 
+                {/* Pagamento por Terceiro */}
+                <div>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '13px',
+                    fontWeight: '500',
+                    color: '#374151',
+                    marginBottom: '6px'
+                  }}>
+                    Pgto Conta/Ordem?
+                  </label>
+                  <select
+                    {...register('pagamento_terceiro')}
+                    disabled={isLancamentoPago}
+                    onChange={(e) => {
+                      const value = e.target.value === 'true'
+                      setValue('pagamento_terceiro', value)
+                      if (!value) {
+                        setValue('empresa_pagadora_id', '')
+                        setValue('banco_conta_id', '')
+                        if (empresaId) {
+                          fetchBancosContas(empresaId)
+                        }
+                      }
+                    }}
+                    style={{
+                      width: '100%',
+                      padding: '9px 10px',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '8px',
+                      fontSize: '13px',
+                      outline: 'none',
+                      cursor: isLancamentoPago ? 'not-allowed' : 'pointer',
+                      backgroundColor: isLancamentoPago ? '#f9fafb' : 'white',
+                      color: isLancamentoPago ? '#9ca3af' : '#1f2937'
+                    }}
+                  >
+                    <option value="false">Não</option>
+                    <option value="true">Sim</option>
+                  </select>
+                </div>
+
+                {/* Empresa Pagadora */}
+                <div>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '13px',
+                    fontWeight: '500',
+                    color: '#374151',
+                    marginBottom: '6px'
+                  }}>
+                    Empresa Pagadora {pagamentoTerceiro && '*'}
+                  </label>
+                  <select
+                    {...register('empresa_pagadora_id')}
+                    disabled={!pagamentoTerceiro || isLancamentoPago}
+                    style={{
+                      width: '100%',
+                      padding: '9px 10px',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '8px',
+                      fontSize: '13px',
+                      outline: 'none',
+                      cursor: pagamentoTerceiro && !isLancamentoPago ? 'pointer' : 'not-allowed',
+                      backgroundColor: pagamentoTerceiro && !isLancamentoPago ? 'white' : '#f9fafb',
+                      color: pagamentoTerceiro && !isLancamentoPago ? '#1f2937' : '#9ca3af'
+                    }}
+                  >
+                    <option value="">Selecione...</option>
+                    {empresasPagadoras.map(empresa => (
+                      <option key={empresa.id} value={empresa.id}>
+                        {empresa.nome}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 {/* Conta Bancária */}
                 <div>
                   <label style={{
@@ -2119,7 +2279,7 @@ export default function LancamentosPage() {
                   </label>
                   <select
                     {...register('banco_conta_id')}
-                    disabled={!empresaId || isLancamentoPago}
+                    disabled={!empresaId || isLancamentoPago || (pagamentoTerceiro && !empresaPagadoraId)}
                     style={{
                       width: '100%',
                       padding: '9px 10px',
@@ -2127,9 +2287,9 @@ export default function LancamentosPage() {
                       borderRadius: '8px',
                       fontSize: '13px',
                       outline: 'none',
-                      cursor: empresaId && !isLancamentoPago ? 'pointer' : 'not-allowed',
-                      backgroundColor: empresaId && !isLancamentoPago ? 'white' : '#f9fafb',
-                      color: empresaId && !isLancamentoPago ? '#1f2937' : '#9ca3af'
+                      cursor: empresaId && !isLancamentoPago && (!pagamentoTerceiro || empresaPagadoraId) ? 'pointer' : 'not-allowed',
+                      backgroundColor: empresaId && !isLancamentoPago && (!pagamentoTerceiro || empresaPagadoraId) ? 'white' : '#f9fafb',
+                      color: empresaId && !isLancamentoPago && (!pagamentoTerceiro || empresaPagadoraId) ? '#1f2937' : '#9ca3af'
                     }}
                   >
                     <option value="">Selecione...</option>
@@ -2144,11 +2304,6 @@ export default function LancamentosPage() {
                       )
                     })}
                   </select>
-                  {errors.banco_conta_id && (
-                    <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '4px', display: 'block' }}>
-                      {errors.banco_conta_id.message}
-                    </span>
-                  )}
                 </div>
               </div>
 
@@ -2254,11 +2409,6 @@ export default function LancamentosPage() {
                         ))}
                       </div>
                     )}
-                    {errors.contraparte_id && (
-                      <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '4px', display: 'block' }}>
-                        {errors.contraparte_id.message}
-                      </span>
-                    )}
                   </div>
                 </div>
               </div>
@@ -2306,11 +2456,6 @@ export default function LancamentosPage() {
                       e.currentTarget.style.boxShadow = 'none'
                     }}
                   />
-                  {errors.data_emissao && (
-                    <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '4px', display: 'block' }}>
-                      {errors.data_emissao.message}
-                    </span>
-                  )}
                 </div>
 
                 {/* Data Vencimento */}
@@ -2348,11 +2493,6 @@ export default function LancamentosPage() {
                       e.currentTarget.style.boxShadow = 'none'
                     }}
                   />
-                  {errors.data_vencimento && (
-                    <span style={{ fontSize: '11px', color: '#ef4444', marginTop: '4px', display: 'block' }}>
-                      {errors.data_vencimento.message}
-                    </span>
-                  )}
                 </div>
 
                 {/* Previsão Pagamento */}
@@ -3130,6 +3270,97 @@ export default function LancamentosPage() {
     </div>
   )}
 
+  {/* Validation Modal */}
+  {validationModal.show && (
+    <div
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 1000,
+        backdropFilter: 'blur(4px)'
+      }}
+      onClick={() => setValidationModal({ show: false, message: '' })}
+    >
+      <div
+        style={{
+          backgroundColor: 'white',
+          borderRadius: '12px',
+          borderTop: '4px solid #f59e0b',
+          boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+          padding: '24px',
+          width: '90%',
+          maxWidth: '400px',
+          margin: '16px',
+          animation: 'scaleIn 0.2s ease-out'
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: '12px',
+          marginBottom: '20px'
+        }}>
+          <div style={{
+            width: '24px',
+            height: '24px',
+            borderRadius: '50%',
+            backgroundColor: '#fef3c7',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+            marginTop: '2px'
+          }}>
+            <AlertTriangle style={{ width: '16px', height: '16px', color: '#f59e0b' }} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <p style={{
+              fontSize: '14px',
+              color: '#111827',
+              margin: 0,
+              lineHeight: '1.5',
+              fontWeight: '500'
+            }}>
+              Faltam os seguintes campos obrigatórios: {validationModal.message}
+            </p>
+          </div>
+        </div>
+
+        <div style={{
+          display: 'flex',
+          justifyContent: 'flex-end'
+        }}>
+          <button
+            onClick={() => setValidationModal({ show: false, message: '' })}
+            style={{
+              padding: '8px 20px',
+              backgroundColor: '#f59e0b',
+              border: 'none',
+              borderRadius: '6px',
+              fontSize: '14px',
+              fontWeight: '600',
+              color: 'white',
+              cursor: 'pointer',
+              transition: 'all 0.2s'
+            }}
+            onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#d97706'}
+            onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#f59e0b'}
+          >
+            OK
+          </button>
+        </div>
+      </div>
+    </div>
+  )}
+
   <div style={{
     position: 'fixed',
     top: '50%',
@@ -3172,7 +3403,8 @@ export default function LancamentosPage() {
               fontWeight: '500',
               flex: 1,
               color: '#374151',
-              lineHeight: '1.5'
+              lineHeight: '1.5',
+              whiteSpace: 'pre-line'
             }}>
               {toast.message}
             </span>

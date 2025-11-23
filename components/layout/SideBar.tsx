@@ -21,7 +21,8 @@ import {
   ChevronDown,
   ChevronRight,
   Landmark,
-  ListTree
+  ListTree,
+  Receipt
 } from 'lucide-react'
 
 type MenuItem = {
@@ -59,6 +60,7 @@ const menuItems: MenuItem[] = [
     icon: DollarSign,
     children: [
       { title: 'Lançamentos', icon: DollarSign, href: '/financeiro/lancamentos' },
+      { title: 'Baixar Pagamentos', icon: Receipt, href: '/financeiro/baixarpgtos' },
       { title: 'Conciliação', icon: GitCompare, href: '/financeiro/conciliacao' },
       { 
         title: 'Movimentação Bancária', 
