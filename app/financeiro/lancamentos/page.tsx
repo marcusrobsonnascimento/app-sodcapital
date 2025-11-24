@@ -200,6 +200,18 @@ export default function LancamentosPage() {
   const [dataVencimentoInicio, setDataVencimentoInicio] = useState('')
   const [dataVencimentoFim, setDataVencimentoFim] = useState('')
 
+  // Filtros de coluna (inline na tabela)
+  const [colFilterTipo, setColFilterTipo] = useState<string>('')
+  const [colFilterPgtoTerc, setColFilterPgtoTerc] = useState<string>('')
+  const [colFilterEmpresa, setColFilterEmpresa] = useState<string>('')
+  const [colFilterProjeto, setColFilterProjeto] = useState<string>('')
+  const [colFilterContraparte, setColFilterContraparte] = useState<string>('')
+  const [colFilterCategoria, setColFilterCategoria] = useState<string>('')
+  const [colFilterValorBruto, setColFilterValorBruto] = useState<string>('')
+  const [colFilterValorLiquido, setColFilterValorLiquido] = useState<string>('')
+  const [colFilterVencimento, setColFilterVencimento] = useState<string>('')
+  const [colFilterStatus, setColFilterStatus] = useState<string>('')
+
   // Listas para os filtros
   const [projetosFilter, setProjetosFilter] = useState<Projeto[]>([])
   const [subprojetosFilter, setSubprojetosFilter] = useState<Projeto[]>([])
@@ -277,6 +289,40 @@ export default function LancamentosPage() {
   const dismissToast = (id: number) => {
     setToasts(prev => prev.filter(toast => toast.id !== id))
   }
+
+  // Funções para filtros de coluna
+  const formatFilterCurrency = (value: string): string => {
+    const numbers = value.replace(/\D/g, '')
+    if (!numbers) return ''
+    const amount = parseInt(numbers, 10) / 100
+    return new Intl.NumberFormat('pt-BR', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    }).format(amount)
+  }
+
+  const parseFilterCurrency = (value: string): number => {
+    if (!value) return 0
+    const cleaned = value.replace(/\./g, '').replace(',', '.')
+    return parseFloat(cleaned) || 0
+  }
+
+  const clearAllColumnFilters = () => {
+    setColFilterTipo('')
+    setColFilterPgtoTerc('')
+    setColFilterEmpresa('')
+    setColFilterProjeto('')
+    setColFilterContraparte('')
+    setColFilterCategoria('')
+    setColFilterValorBruto('')
+    setColFilterValorLiquido('')
+    setColFilterVencimento('')
+    setColFilterStatus('')
+  }
+
+  const hasActiveColumnFilters = colFilterTipo || colFilterPgtoTerc || colFilterEmpresa || 
+    colFilterProjeto || colFilterContraparte || colFilterCategoria || 
+    colFilterValorBruto || colFilterValorLiquido || colFilterVencimento || colFilterStatus
 
   const getToastStyles = (type: ToastType) => {
     switch (type) {
@@ -1007,6 +1053,51 @@ export default function LancamentosPage() {
     setShowContraparteDropdown(false)
   }
 
+  // Filtrar lançamentos pelos filtros de coluna
+  const lancamentosFiltrados = lancamentos.filter((lancamento) => {
+    // Filtro TIPO
+    if (colFilterTipo && lancamento.tipo !== colFilterTipo) return false
+
+    // Filtro PGTO TERC
+    if (colFilterPgtoTerc) {
+      const isPgtoTerc = lancamento.pagamento_terceiro
+      if (colFilterPgtoTerc === 'SIM' && !isPgtoTerc) return false
+      if (colFilterPgtoTerc === 'NAO' && isPgtoTerc) return false
+    }
+
+    // Filtro EMPRESA
+    if (colFilterEmpresa && lancamento.empresa_id !== colFilterEmpresa) return false
+
+    // Filtro PROJETO
+    if (colFilterProjeto && lancamento.projeto_id !== colFilterProjeto) return false
+
+    // Filtro CONTRAPARTE
+    if (colFilterContraparte && lancamento.contraparte_id !== colFilterContraparte) return false
+
+    // Filtro CATEGORIA
+    if (colFilterCategoria && lancamento.plano_conta?.categoria !== colFilterCategoria) return false
+
+    // Filtro VALOR BRUTO
+    if (colFilterValorBruto) {
+      const filterValue = parseFilterCurrency(colFilterValorBruto)
+      if (filterValue > 0 && lancamento.valor_bruto !== filterValue) return false
+    }
+
+    // Filtro VALOR LÍQUIDO
+    if (colFilterValorLiquido) {
+      const filterValue = parseFilterCurrency(colFilterValorLiquido)
+      if (filterValue > 0 && lancamento.valor_liquido !== filterValue) return false
+    }
+
+    // Filtro VENCIMENTO
+    if (colFilterVencimento && lancamento.data_vencimento !== colFilterVencimento) return false
+
+    // Filtro STATUS
+    if (colFilterStatus && lancamento.status !== colFilterStatus) return false
+
+    return true
+  })
+
   return (
     <div style={{ padding: '24px', backgroundColor: '#f8fafc', minHeight: '100vh' }}>
       {/* Cabeçalho */}
@@ -1447,6 +1538,8 @@ export default function LancamentosPage() {
               setDataVencimentoFim('')
               setProjetosFilter([])
               setSubprojetosFilter([])
+              // Limpar filtros de coluna
+              clearAllColumnFilters()
             }}
             style={{
               padding: '9px 18px',
@@ -1501,6 +1594,36 @@ export default function LancamentosPage() {
         overflow: 'hidden',
         boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)'
       }}>
+        {/* Indicador de filtros de coluna ativos */}
+        {hasActiveColumnFilters && (
+          <div style={{
+            padding: '8px 16px',
+            backgroundColor: '#eff6ff',
+            borderBottom: '1px solid #bfdbfe',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between'
+          }}>
+            <span style={{ fontSize: '13px', color: '#1e40af' }}>
+              <strong>{lancamentosFiltrados.length}</strong> de <strong>{lancamentos.length}</strong> lançamentos exibidos (filtros de coluna ativos)
+            </span>
+            <button
+              onClick={clearAllColumnFilters}
+              style={{
+                padding: '4px 12px',
+                fontSize: '12px',
+                fontWeight: '600',
+                color: '#1e40af',
+                backgroundColor: 'white',
+                border: '1px solid #93c5fd',
+                borderRadius: '6px',
+                cursor: 'pointer'
+              }}
+            >
+              Limpar filtros de coluna
+            </button>
+          </div>
+        )}
         <div style={{ overflowX: 'auto', width: '100%' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -1638,9 +1761,253 @@ export default function LancamentosPage() {
                   AÇÕES
                 </th>
               </tr>
+              {/* Linha de Filtros */}
+              <tr style={{ backgroundColor: '#ffffff', borderBottom: '2px solid #e5e7eb' }}>
+                {/* Filtro TIPO */}
+                <td style={{ padding: '4px 8px' }}>
+                  <select
+                    value={colFilterTipo}
+                    onChange={(e) => setColFilterTipo(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '4px 6px',
+                      fontSize: '12px',
+                      fontWeight: '400',
+                      color: '#374151',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '4px',
+                      backgroundColor: 'white',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <option value="">Todos</option>
+                    <option value="Saida">Pagamento</option>
+                    <option value="Entrada">Recebimento</option>
+                  </select>
+                </td>
+                {/* Filtro PGTO TERC */}
+                <td style={{ padding: '4px 8px' }}>
+                  <select
+                    value={colFilterPgtoTerc}
+                    onChange={(e) => setColFilterPgtoTerc(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '4px 6px',
+                      fontSize: '12px',
+                      fontWeight: '400',
+                      color: '#374151',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '4px',
+                      backgroundColor: 'white',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <option value="">Todos</option>
+                    <option value="SIM">Sim</option>
+                    <option value="NAO">Não</option>
+                  </select>
+                </td>
+                {/* Filtro EMPRESA */}
+                <td style={{ padding: '4px 8px' }}>
+                  <select
+                    value={colFilterEmpresa}
+                    onChange={(e) => setColFilterEmpresa(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '4px 6px',
+                      fontSize: '12px',
+                      fontWeight: '400',
+                      color: '#374151',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '4px',
+                      backgroundColor: 'white',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <option value="">Todas</option>
+                    {empresas.map(emp => (
+                      <option key={emp.id} value={emp.id}>{emp.nome}</option>
+                    ))}
+                  </select>
+                </td>
+                {/* Filtro PROJETO */}
+                <td style={{ padding: '4px 8px' }}>
+                  <select
+                    value={colFilterProjeto}
+                    onChange={(e) => setColFilterProjeto(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '4px 6px',
+                      fontSize: '12px',
+                      fontWeight: '400',
+                      color: '#374151',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '4px',
+                      backgroundColor: 'white',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <option value="">Todos</option>
+                    {projetosFilter.map(proj => (
+                      <option key={proj.id} value={proj.id}>{proj.nome}</option>
+                    ))}
+                  </select>
+                </td>
+                {/* Filtro CONTRAPARTE */}
+                <td style={{ padding: '4px 8px' }}>
+                  <select
+                    value={colFilterContraparte}
+                    onChange={(e) => setColFilterContraparte(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '4px 6px',
+                      fontSize: '12px',
+                      fontWeight: '400',
+                      color: '#374151',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '4px',
+                      backgroundColor: 'white',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <option value="">Todas</option>
+                    {contrapartes.map(cp => (
+                      <option key={cp.id} value={cp.id}>{cp.apelido || cp.nome}</option>
+                    ))}
+                  </select>
+                </td>
+                {/* Filtro CATEGORIA */}
+                <td style={{ padding: '4px 8px' }}>
+                  <select
+                    value={colFilterCategoria}
+                    onChange={(e) => setColFilterCategoria(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '4px 6px',
+                      fontSize: '12px',
+                      fontWeight: '400',
+                      color: '#374151',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '4px',
+                      backgroundColor: 'white',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <option value="">Todas</option>
+                    {categorias.map(cat => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
+                  </select>
+                </td>
+                {/* Filtro VALOR BRUTO */}
+                <td style={{ padding: '4px 8px' }}>
+                  <input
+                    type="text"
+                    placeholder="0,00"
+                    value={colFilterValorBruto}
+                    onChange={(e) => setColFilterValorBruto(formatFilterCurrency(e.target.value))}
+                    style={{
+                      width: '100%',
+                      padding: '4px 6px',
+                      fontSize: '12px',
+                      fontWeight: '400',
+                      color: '#374151',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '4px',
+                      textAlign: 'right'
+                    }}
+                  />
+                </td>
+                {/* Filtro VALOR LÍQUIDO */}
+                <td style={{ padding: '4px 8px' }}>
+                  <input
+                    type="text"
+                    placeholder="0,00"
+                    value={colFilterValorLiquido}
+                    onChange={(e) => setColFilterValorLiquido(formatFilterCurrency(e.target.value))}
+                    style={{
+                      width: '100%',
+                      padding: '4px 6px',
+                      fontSize: '12px',
+                      fontWeight: '400',
+                      color: '#374151',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '4px',
+                      textAlign: 'right'
+                    }}
+                  />
+                </td>
+                {/* Filtro VENCIMENTO */}
+                <td style={{ padding: '4px 8px' }}>
+                  <input
+                    type="date"
+                    value={colFilterVencimento}
+                    onChange={(e) => setColFilterVencimento(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '4px 6px',
+                      fontSize: '12px',
+                      fontWeight: '400',
+                      color: '#374151',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '4px'
+                    }}
+                  />
+                </td>
+                {/* Filtro STATUS */}
+                <td style={{ padding: '4px 8px' }}>
+                  <select
+                    value={colFilterStatus}
+                    onChange={(e) => setColFilterStatus(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '4px 6px',
+                      fontSize: '12px',
+                      fontWeight: '400',
+                      color: '#374151',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '4px',
+                      backgroundColor: 'white',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <option value="">Todos</option>
+                    <option value="ABERTO">Aberto</option>
+                    <option value="PAGO_RECEBIDO">Liquidado</option>
+                    <option value="CANCELADO">Cancelado</option>
+                  </select>
+                </td>
+                {/* Botão Limpar Filtros */}
+                <td style={{ padding: '4px 8px' }}>
+                  {hasActiveColumnFilters && (
+                    <button
+                      onClick={clearAllColumnFilters}
+                      title="Limpar todos os filtros"
+                      style={{
+                        width: '100%',
+                        padding: '4px 8px',
+                        fontSize: '11px',
+                        fontWeight: '500',
+                        color: '#dc2626',
+                        backgroundColor: '#fee2e2',
+                        border: '1px solid #fecaca',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '4px'
+                      }}
+                    >
+                      <X size={12} />
+                      Limpar
+                    </button>
+                  )}
+                </td>
+              </tr>
             </thead>
             <tbody>
-              {lancamentos.map((lancamento) => {
+              {lancamentosFiltrados.map((lancamento) => {
                 const statusStyle = getStatusBadgeStyle(lancamento.status)
                 const tipoStyle = getTipoBadgeStyle(lancamento.tipo)
 
