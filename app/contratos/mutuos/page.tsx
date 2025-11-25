@@ -95,6 +95,9 @@ const mutuoSchema = z
     data_fim: z.string().optional(),
     multa_percentual: z.number().min(0).default(0),
     mora_percentual: z.number().min(0).default(0),
+    iof_percentual: z.number().min(0).default(0.38),
+    iof_mensal_percentual: z.number().min(0).default(0.0082),
+    tipo_amortizacao: z.enum(["PRICE", "SAC"]).default("PRICE"),
     contrato_numero: z.string().optional(),
     observacoes: z.string().optional(),
   })
@@ -175,6 +178,56 @@ function formatBRLInput(value: string): string {
   }
 
   return cleaned;
+}
+
+// Função para formatar valores monetários (sempre com 2 casas decimais)
+function formatCurrencyBRLInput(value: string): string {
+  // Remove tudo que não é número
+  const numbers = value.replace(/\D/g, '');
+  if (!numbers) return '';
+  
+  // Converte para número com 2 casas decimais
+  const amount = parseInt(numbers, 10) / 100;
+  
+  // Formata no padrão brasileiro
+  return amount.toLocaleString('pt-BR', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+}
+
+// Função para formatar percentuais (até 4 casas decimais) - padrão brasileiro
+function formatPercentBRLInput(value: string): string {
+  // Remove tudo que não é número
+  const numbers = value.replace(/\D/g, '');
+  if (!numbers) return '';
+  
+  // Se o usuário digitou poucos números, trata como decimal
+  // Ex: 1 -> 0,01 | 12 -> 0,12 | 123 -> 1,23 | 1234 -> 12,34
+  const len = numbers.length;
+  
+  if (len <= 2) {
+    // Até 2 dígitos: são centavos
+    const decimal = parseInt(numbers, 10) / 100;
+    return decimal.toLocaleString('pt-BR', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
+  } else if (len <= 4) {
+    // 3-4 dígitos: divide por 100
+    const decimal = parseInt(numbers, 10) / 100;
+    return decimal.toLocaleString('pt-BR', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
+  } else {
+    // Mais de 4 dígitos: divide por 100 e limita
+    const decimal = parseInt(numbers.substring(0, 6), 10) / 100;
+    return decimal.toLocaleString('pt-BR', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
+  }
 }
 
 function calcularDiasAtraso(dataVencimento: string): number {
@@ -471,6 +524,19 @@ export default function MutuosPage() {
   const [spreadFormatado, setSpreadFormatado] = useState("");
   const [multaFormatada, setMultaFormatada] = useState("");
   const [moraFormatada, setMoraFormatada] = useState("");
+  const [iofFormatado, setIofFormatado] = useState("0,38");
+  const [iofMensalFormatado, setIofMensalFormatado] = useState("0,0082");
+  
+  // Estados para simulação de parcelas
+  const [showSimulacao, setShowSimulacao] = useState(false);
+  const [simulacaoParcelas, setSimulacaoParcelas] = useState<Parcela[]>([]);
+  const [simulacaoResumo, setSimulacaoResumo] = useState({
+    totalPrincipal: 0,
+    totalJuros: 0,
+    totalIOF: 0,
+    totalGeral: 0,
+    valorParcela: 0
+  });
 
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [toastIdCounter, setToastIdCounter] = useState(0);
@@ -491,6 +557,9 @@ export default function MutuosPage() {
       periodicidade: "MENSAL",
       multa_percentual: 0,
       mora_percentual: 0,
+      iof_percentual: 0.38,
+      iof_mensal_percentual: 0.0082,
+      tipo_amortizacao: "PRICE",
       indice: "CDI",
     },
   });
@@ -509,6 +578,93 @@ export default function MutuosPage() {
   const liquidarForm = useForm<LiquidarParcelaForm>({
     resolver: zodResolver(liquidarParcelaSchema),
   });
+
+  // ============================================================================
+  // SIMULAÇÃO DE PARCELAS
+  // ============================================================================
+
+  const simularParcelas = () => {
+    const formData = mutuoForm.getValues();
+    
+    if (!formData.principal || formData.principal <= 0) {
+      showToast("Informe o valor do Principal", "error");
+      return;
+    }
+    if (!formData.qtd_parcelas || formData.qtd_parcelas < 1) {
+      showToast("Informe a quantidade de parcelas", "error");
+      return;
+    }
+    if (!formData.data_inicio) {
+      showToast("Informe a data de início", "error");
+      return;
+    }
+
+    const principal = formData.principal;
+    const spreadAnual = formData.spread_anual || 0;
+    const qtdParcelas = formData.qtd_parcelas;
+    const carenciaMeses = formData.carencia_meses || 0;
+    const iofPercentual = formData.iof_percentual || 0;
+    const iofMensalPercentual = formData.iof_mensal_percentual || 0;
+    const tipoAmortizacao = formData.tipo_amortizacao || "PRICE";
+    const dataInicio = formData.data_inicio;
+
+    // Calcular IOF total (IOF fixo + IOF mensal * prazo)
+    const iofTotal = iofPercentual + (iofMensalPercentual * qtdParcelas);
+    const valorIOFTotal = principal * (iofTotal / 100);
+    
+    // IOF por parcela (distribuído igualmente)
+    const iofPorParcela = valorIOFTotal / qtdParcelas;
+
+    // Calcular parcelas
+    let parcelasCalculadas: Parcela[];
+    
+    if (tipoAmortizacao === "PRICE") {
+      parcelasCalculadas = calcularParcelasPRICE(
+        principal,
+        spreadAnual,
+        qtdParcelas,
+        carenciaMeses,
+        0,
+        dataInicio
+      );
+    } else {
+      parcelasCalculadas = calcularParcelasSAC(
+        principal,
+        spreadAnual,
+        qtdParcelas,
+        carenciaMeses,
+        0,
+        dataInicio
+      );
+    }
+
+    // Adicionar IOF a cada parcela
+    parcelasCalculadas = parcelasCalculadas.map(p => ({
+      ...p,
+      valor_iof: Math.round(iofPorParcela * 100) / 100
+    }));
+
+    // Calcular resumo
+    const totalPrincipal = parcelasCalculadas.reduce((acc, p) => acc + p.valor_principal, 0);
+    const totalJuros = parcelasCalculadas.reduce((acc, p) => acc + p.valor_juros, 0);
+    const totalIOF = parcelasCalculadas.reduce((acc, p) => acc + p.valor_iof, 0);
+    const totalGeral = totalPrincipal + totalJuros + totalIOF;
+    
+    // Valor médio da parcela (para PRICE será sempre igual, para SAC varia)
+    const valorParcela = tipoAmortizacao === "PRICE" 
+      ? (parcelasCalculadas[0]?.valor_principal || 0) + (parcelasCalculadas[0]?.valor_juros || 0) + (parcelasCalculadas[0]?.valor_iof || 0)
+      : totalGeral / qtdParcelas;
+
+    setSimulacaoParcelas(parcelasCalculadas);
+    setSimulacaoResumo({
+      totalPrincipal,
+      totalJuros,
+      totalIOF,
+      totalGeral,
+      valorParcela
+    });
+    setShowSimulacao(true);
+  };
 
   // ============================================================================
   // TOAST FUNCTIONS
@@ -839,6 +995,10 @@ export default function MutuosPage() {
     setSpreadFormatado("");
     setMultaFormatada("");
     setMoraFormatada("");
+    setIofFormatado("0,38");
+    setIofMensalFormatado("0,0082");
+    setShowSimulacao(false);
+    setSimulacaoParcelas([]);
     mutuoForm.reset({
       de_empresa_id: "",
       para_empresa_id: "",
@@ -852,6 +1012,9 @@ export default function MutuosPage() {
       data_fim: "",
       multa_percentual: 0,
       mora_percentual: 0,
+      iof_percentual: 0.38,
+      iof_mensal_percentual: 0.0082,
+      tipo_amortizacao: "PRICE",
       contrato_numero: "",
       observacoes: "",
       indice: "CDI",
@@ -862,6 +1025,8 @@ export default function MutuosPage() {
   const closeMutuoModal = () => {
     setShowMutuoModal(false);
     setEditingMutuoId(null);
+    setShowSimulacao(false);
+    setSimulacaoParcelas([]);
   };
 
   const handleEditMutuo = (mutuo: Mutuo) => {
@@ -1816,7 +1981,7 @@ export default function MutuosPage() {
                       type="text"
                       value={principalFormatado}
                       onChange={(e) => {
-                        const formatted = formatBRLInput(e.target.value);
+                        const formatted = formatCurrencyBRLInput(e.target.value);
                         setPrincipalFormatado(formatted);
                         mutuoForm.setValue("principal", parseBRL(formatted));
                       }}
@@ -1827,6 +1992,7 @@ export default function MutuosPage() {
                         borderRadius: "8px",
                         fontSize: "14px",
                         outline: "none",
+                        textAlign: "right",
                       }}
                       placeholder="0,00"
                     />
@@ -1881,7 +2047,7 @@ export default function MutuosPage() {
                       type="text"
                       value={spreadFormatado}
                       onChange={(e) => {
-                        const formatted = formatBRLInput(e.target.value);
+                        const formatted = formatPercentBRLInput(e.target.value);
                         setSpreadFormatado(formatted);
                         mutuoForm.setValue("spread_anual", parseBRL(formatted));
                       }}
@@ -1892,6 +2058,7 @@ export default function MutuosPage() {
                         borderRadius: "8px",
                         fontSize: "14px",
                         outline: "none",
+                        textAlign: "right",
                       }}
                       placeholder="0,00"
                     />
@@ -2077,7 +2244,7 @@ export default function MutuosPage() {
                       type="text"
                       value={multaFormatada}
                       onChange={(e) => {
-                        const formatted = formatBRLInput(e.target.value);
+                        const formatted = formatPercentBRLInput(e.target.value);
                         setMultaFormatada(formatted);
                         mutuoForm.setValue("multa_percentual", parseBRL(formatted));
                       }}
@@ -2088,6 +2255,7 @@ export default function MutuosPage() {
                         borderRadius: "8px",
                         fontSize: "14px",
                         outline: "none",
+                        textAlign: "right",
                       }}
                       placeholder="0,00"
                     />
@@ -2109,7 +2277,7 @@ export default function MutuosPage() {
                       type="text"
                       value={moraFormatada}
                       onChange={(e) => {
-                        const formatted = formatBRLInput(e.target.value);
+                        const formatted = formatPercentBRLInput(e.target.value);
                         setMoraFormatada(formatted);
                         mutuoForm.setValue("mora_percentual", parseBRL(formatted));
                       }}
@@ -2120,11 +2288,435 @@ export default function MutuosPage() {
                         borderRadius: "8px",
                         fontSize: "14px",
                         outline: "none",
+                        textAlign: "right",
                       }}
                       placeholder="0,00"
                     />
                   </div>
                 </div>
+
+                {/* IOF e Tipo de Amortização */}
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr 1fr",
+                    gap: "12px",
+                  }}
+                >
+                  <div>
+                    <label
+                      style={{
+                        display: "block",
+                        fontSize: "14px",
+                        fontWeight: "500",
+                        color: "#374151",
+                        marginBottom: "6px",
+                      }}
+                    >
+                      IOF Fixo (%)
+                    </label>
+                    <input
+                      type="text"
+                      value={iofFormatado}
+                      onChange={(e) => {
+                        const formatted = formatPercentBRLInput(e.target.value);
+                        setIofFormatado(formatted);
+                        mutuoForm.setValue("iof_percentual", parseBRL(formatted));
+                      }}
+                      style={{
+                        width: "100%",
+                        padding: "12px",
+                        border: "1px solid #e5e7eb",
+                        borderRadius: "8px",
+                        fontSize: "14px",
+                        outline: "none",
+                        textAlign: "right",
+                      }}
+                      placeholder="0,38"
+                    />
+                  </div>
+
+                  <div>
+                    <label
+                      style={{
+                        display: "block",
+                        fontSize: "14px",
+                        fontWeight: "500",
+                        color: "#374151",
+                        marginBottom: "6px",
+                      }}
+                    >
+                      IOF Mensal (%)
+                    </label>
+                    <input
+                      type="text"
+                      value={iofMensalFormatado}
+                      onChange={(e) => {
+                        const formatted = formatPercentBRLInput(e.target.value);
+                        setIofMensalFormatado(formatted);
+                        mutuoForm.setValue("iof_mensal_percentual", parseBRL(formatted));
+                      }}
+                      style={{
+                        width: "100%",
+                        padding: "12px",
+                        border: "1px solid #e5e7eb",
+                        borderRadius: "8px",
+                        fontSize: "14px",
+                        outline: "none",
+                        textAlign: "right",
+                      }}
+                      placeholder="0,0082"
+                    />
+                  </div>
+
+                  <div>
+                    <label
+                      style={{
+                        display: "block",
+                        fontSize: "14px",
+                        fontWeight: "500",
+                        color: "#374151",
+                        marginBottom: "6px",
+                      }}
+                    >
+                      Tipo Amortização
+                    </label>
+                    <select
+                      {...mutuoForm.register("tipo_amortizacao")}
+                      style={{
+                        width: "100%",
+                        padding: "12px",
+                        border: "1px solid #e5e7eb",
+                        borderRadius: "8px",
+                        fontSize: "14px",
+                        outline: "none",
+                        backgroundColor: "white",
+                      }}
+                    >
+                      <option value="PRICE">PRICE</option>
+                      <option value="SAC">SAC</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Botão Simular Parcelas */}
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "center",
+                    padding: "16px 0",
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={simularParcelas}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "8px",
+                      padding: "12px 24px",
+                      backgroundColor: "#059669",
+                      color: "white",
+                      border: "none",
+                      borderRadius: "8px",
+                      fontSize: "14px",
+                      fontWeight: "600",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <Calculator size={18} />
+                    Simular Parcelas
+                  </button>
+                </div>
+
+                {/* Área de Simulação */}
+                {showSimulacao && simulacaoParcelas.length > 0 && (
+                  <div
+                    style={{
+                      backgroundColor: "#f0fdf4",
+                      border: "1px solid #86efac",
+                      borderRadius: "12px",
+                      padding: "16px",
+                      marginBottom: "16px",
+                    }}
+                  >
+                    <h4
+                      style={{
+                        fontSize: "16px",
+                        fontWeight: "600",
+                        color: "#166534",
+                        marginBottom: "16px",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                      }}
+                    >
+                      <Calculator size={20} />
+                      Simulação de Parcelas
+                    </h4>
+
+                    {/* Resumo */}
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(5, 1fr)",
+                        gap: "12px",
+                        marginBottom: "16px",
+                      }}
+                    >
+                      <div
+                        style={{
+                          backgroundColor: "white",
+                          padding: "12px",
+                          borderRadius: "8px",
+                          textAlign: "center",
+                        }}
+                      >
+                        <p style={{ fontSize: "11px", color: "#6b7280", marginBottom: "4px" }}>
+                          Principal
+                        </p>
+                        <p style={{ fontSize: "16px", fontWeight: "700", color: "#1f2937" }}>
+                          {formatBRL(simulacaoResumo.totalPrincipal)}
+                        </p>
+                      </div>
+                      <div
+                        style={{
+                          backgroundColor: "white",
+                          padding: "12px",
+                          borderRadius: "8px",
+                          textAlign: "center",
+                        }}
+                      >
+                        <p style={{ fontSize: "11px", color: "#6b7280", marginBottom: "4px" }}>
+                          Total Juros
+                        </p>
+                        <p style={{ fontSize: "16px", fontWeight: "700", color: "#f59e0b" }}>
+                          {formatBRL(simulacaoResumo.totalJuros)}
+                        </p>
+                      </div>
+                      <div
+                        style={{
+                          backgroundColor: "white",
+                          padding: "12px",
+                          borderRadius: "8px",
+                          textAlign: "center",
+                        }}
+                      >
+                        <p style={{ fontSize: "11px", color: "#6b7280", marginBottom: "4px" }}>
+                          IOF Total
+                        </p>
+                        <p style={{ fontSize: "16px", fontWeight: "700", color: "#ef4444" }}>
+                          {formatBRL(simulacaoResumo.totalIOF)}
+                        </p>
+                      </div>
+                      <div
+                        style={{
+                          backgroundColor: "white",
+                          padding: "12px",
+                          borderRadius: "8px",
+                          textAlign: "center",
+                        }}
+                      >
+                        <p style={{ fontSize: "11px", color: "#6b7280", marginBottom: "4px" }}>
+                          Total Geral
+                        </p>
+                        <p style={{ fontSize: "16px", fontWeight: "700", color: "#166534" }}>
+                          {formatBRL(simulacaoResumo.totalGeral)}
+                        </p>
+                      </div>
+                      <div
+                        style={{
+                          backgroundColor: "white",
+                          padding: "12px",
+                          borderRadius: "8px",
+                          textAlign: "center",
+                        }}
+                      >
+                        <p style={{ fontSize: "11px", color: "#6b7280", marginBottom: "4px" }}>
+                          Valor Parcela
+                        </p>
+                        <p style={{ fontSize: "16px", fontWeight: "700", color: "#1555D6" }}>
+                          {formatBRL(simulacaoResumo.valorParcela)}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Tabela de Parcelas */}
+                    <div
+                      style={{
+                        maxHeight: "250px",
+                        overflowY: "auto",
+                        backgroundColor: "white",
+                        borderRadius: "8px",
+                      }}
+                    >
+                      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                        <thead>
+                          <tr style={{ backgroundColor: "#f9fafb" }}>
+                            <th
+                              style={{
+                                padding: "10px",
+                                textAlign: "center",
+                                fontSize: "12px",
+                                fontWeight: "600",
+                                color: "#374151",
+                                borderBottom: "1px solid #e5e7eb",
+                              }}
+                            >
+                              Nº
+                            </th>
+                            <th
+                              style={{
+                                padding: "10px",
+                                textAlign: "center",
+                                fontSize: "12px",
+                                fontWeight: "600",
+                                color: "#374151",
+                                borderBottom: "1px solid #e5e7eb",
+                              }}
+                            >
+                              Vencimento
+                            </th>
+                            <th
+                              style={{
+                                padding: "10px",
+                                textAlign: "right",
+                                fontSize: "12px",
+                                fontWeight: "600",
+                                color: "#374151",
+                                borderBottom: "1px solid #e5e7eb",
+                              }}
+                            >
+                              Principal
+                            </th>
+                            <th
+                              style={{
+                                padding: "10px",
+                                textAlign: "right",
+                                fontSize: "12px",
+                                fontWeight: "600",
+                                color: "#374151",
+                                borderBottom: "1px solid #e5e7eb",
+                              }}
+                            >
+                              Juros
+                            </th>
+                            <th
+                              style={{
+                                padding: "10px",
+                                textAlign: "right",
+                                fontSize: "12px",
+                                fontWeight: "600",
+                                color: "#374151",
+                                borderBottom: "1px solid #e5e7eb",
+                              }}
+                            >
+                              IOF
+                            </th>
+                            <th
+                              style={{
+                                padding: "10px",
+                                textAlign: "right",
+                                fontSize: "12px",
+                                fontWeight: "600",
+                                color: "#374151",
+                                borderBottom: "1px solid #e5e7eb",
+                              }}
+                            >
+                              Total
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {simulacaoParcelas.map((parcela) => (
+                            <tr key={parcela.num_parcela}>
+                              <td
+                                style={{
+                                  padding: "8px 10px",
+                                  textAlign: "center",
+                                  fontSize: "13px",
+                                  borderBottom: "1px solid #f3f4f6",
+                                }}
+                              >
+                                {parcela.num_parcela}
+                              </td>
+                              <td
+                                style={{
+                                  padding: "8px 10px",
+                                  textAlign: "center",
+                                  fontSize: "13px",
+                                  borderBottom: "1px solid #f3f4f6",
+                                }}
+                              >
+                                {formatDate(parcela.data_vencimento)}
+                              </td>
+                              <td
+                                style={{
+                                  padding: "8px 10px",
+                                  textAlign: "right",
+                                  fontSize: "13px",
+                                  borderBottom: "1px solid #f3f4f6",
+                                }}
+                              >
+                                {formatBRL(parcela.valor_principal)}
+                              </td>
+                              <td
+                                style={{
+                                  padding: "8px 10px",
+                                  textAlign: "right",
+                                  fontSize: "13px",
+                                  color: "#f59e0b",
+                                  borderBottom: "1px solid #f3f4f6",
+                                }}
+                              >
+                                {formatBRL(parcela.valor_juros)}
+                              </td>
+                              <td
+                                style={{
+                                  padding: "8px 10px",
+                                  textAlign: "right",
+                                  fontSize: "13px",
+                                  color: "#ef4444",
+                                  borderBottom: "1px solid #f3f4f6",
+                                }}
+                              >
+                                {formatBRL(parcela.valor_iof)}
+                              </td>
+                              <td
+                                style={{
+                                  padding: "8px 10px",
+                                  textAlign: "right",
+                                  fontSize: "13px",
+                                  fontWeight: "600",
+                                  borderBottom: "1px solid #f3f4f6",
+                                }}
+                              >
+                                {formatBRL(parcela.valor_principal + parcela.valor_juros + parcela.valor_iof)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowSimulacao(false)}
+                      style={{
+                        marginTop: "12px",
+                        padding: "8px 16px",
+                        backgroundColor: "#f3f4f6",
+                        color: "#6b7280",
+                        border: "none",
+                        borderRadius: "6px",
+                        fontSize: "13px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Fechar Simulação
+                    </button>
+                  </div>
+                )}
 
                 {/* Nº Contrato */}
                 <div>

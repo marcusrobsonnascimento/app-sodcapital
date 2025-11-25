@@ -10,6 +10,7 @@ import {
   XCircle, 
   Clock, 
   Link2, 
+  Link2Off,
   Eye,
   RefreshCw, 
   Download,
@@ -20,7 +21,11 @@ import {
   ChevronUp,
   Ban,
   Check,
-  ArrowRightLeft
+  ArrowRightLeft,
+  Lightbulb,
+  FileSpreadsheet,
+  Building2,
+  CreditCard
 } from 'lucide-react'
 
 // ==================== TYPES ====================
@@ -58,11 +63,12 @@ interface ExtratoBancario {
   valor: number
   documento_ref: string | null
   created_at: string
-  // Dados da conciliação (join)
+  selecionado?: boolean
   conciliacao?: {
     id: string
     status: string
     lancamento_id: string | null
+    movimento_id: string | null
     observacoes: string | null
   } | null
 }
@@ -75,6 +81,40 @@ interface Lancamento {
   data_liquidacao: string | null
   contraparte_nome: string
   status: string
+  documento_numero?: string
+  origem: 'LANCAMENTO'
+  selecionado?: boolean
+}
+
+interface MovimentoBancario {
+  id: string
+  org_id: string
+  banco_conta_id: string
+  tipo_movimento: string
+  valor: number
+  data_movimento: string
+  historico: string | null
+  conta_destino_id?: string
+  conta_destino_nome?: string
+  origem: 'TRANSFERENCIA'
+  selecionado?: boolean
+}
+
+type LancamentoOuMovimento = Lancamento | MovimentoBancario
+
+interface Conciliacao {
+  id: string
+  org_id: string
+  banco_conta_id: string
+  extrato_id: string
+  lancamento_id: string | null
+  movimento_id: string | null
+  status: string
+  observacoes: string | null
+  created_at: string
+  extrato?: ExtratoBancario
+  lancamento?: Lancamento
+  movimento?: MovimentoBancario
 }
 
 interface DadosOFX {
@@ -90,7 +130,6 @@ interface DadosOFX {
 
 const parseOFX = (conteudo: string): DadosOFX | null => {
   try {
-    // Extrair dados do banco
     const bankIdMatch = conteudo.match(/<BANKID>(\d+)/)
     const acctIdMatch = conteudo.match(/<ACCTID>(\d+)/)
     const dtStartMatch = conteudo.match(/<DTSTART>(\d{8})/)
@@ -103,7 +142,6 @@ const parseOFX = (conteudo: string): DadosOFX | null => {
     const dataFim = dtEndMatch ? formatarDataOFX(dtEndMatch[1]) : ''
     const saldoFinal = balAmtMatch ? parseFloat(balAmtMatch[1]) : 0
 
-    // Extrair transações
     const transacoes: TransacaoOFX[] = []
     const stmtTrnRegex = /<STMTTRN>([\s\S]*?)<\/STMTTRN>/g
     let match
@@ -130,14 +168,7 @@ const parseOFX = (conteudo: string): DadosOFX | null => {
       }
     }
 
-    return {
-      banco,
-      conta,
-      dataInicio,
-      dataFim,
-      saldoFinal,
-      transacoes
-    }
+    return { banco, conta, dataInicio, dataFim, saldoFinal, transacoes }
   } catch (error) {
     console.error('Erro ao parsear OFX:', error)
     return null
@@ -145,7 +176,6 @@ const parseOFX = (conteudo: string): DadosOFX | null => {
 }
 
 const formatarDataOFX = (data: string): string => {
-  // Converte 20251110 para 2025-11-10
   return `${data.substring(0, 4)}-${data.substring(4, 6)}-${data.substring(6, 8)}`
 }
 
@@ -156,6 +186,13 @@ const formatCurrency = (value: number): string => {
     style: 'currency',
     currency: 'BRL'
   }).format(value)
+}
+
+const formatCurrencySimple = (value: number): string => {
+  return new Intl.NumberFormat('pt-BR', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(Math.abs(value))
 }
 
 const formatDateBR = (dateString: string | null): string => {
@@ -171,14 +208,6 @@ const getNomeBanco = (codigo: string): string => {
     '104': 'Caixa Econômica',
     '237': 'Bradesco',
     '341': 'Itaú',
-    '356': 'Banco Real',
-    '389': 'Banco Mercantil',
-    '399': 'HSBC',
-    '422': 'Safra',
-    '453': 'Banco Rural',
-    '633': 'Rendimento',
-    '652': 'Itaú Unibanco',
-    '745': 'Citibank',
     '0341': 'Itaú'
   }
   return bancos[codigo] || `Banco ${codigo}`
@@ -192,6 +221,8 @@ export default function ConciliacaoBancariaPage() {
   const [bancosContas, setBancosContas] = useState<BancoConta[]>([])
   const [extratos, setExtratos] = useState<ExtratoBancario[]>([])
   const [lancamentos, setLancamentos] = useState<Lancamento[]>([])
+  const [movimentos, setMovimentos] = useState<MovimentoBancario[]>([])
+  const [conciliacoes, setConciliacoes] = useState<Conciliacao[]>([])
   
   // Estados de seleção
   const [empresaSelecionada, setEmpresaSelecionada] = useState('')
@@ -209,13 +240,20 @@ export default function ConciliacaoBancariaPage() {
   const [importando, setImportando] = useState(false)
   
   // Estados de filtro
-  const [filtroStatus, setFiltroStatus] = useState<string>('')
-  const [searchTerm, setSearchTerm] = useState('')
+  const [filtroStatusExtrato, setFiltroStatusExtrato] = useState<string>('PENDENTE')
+  const [searchTermExtrato, setSearchTermExtrato] = useState('')
+  const [searchTermConta, setSearchTermConta] = useState('')
+  const [periodoInicio, setPeriodoInicio] = useState('')
+  const [periodoFim, setPeriodoFim] = useState('')
+  const [mostrarConciliados, setMostrarConciliados] = useState(false)
   
-  // Modal de vinculação manual
-  const [showVincularModal, setShowVincularModal] = useState(false)
-  const [extratoSelecionado, setExtratoSelecionado] = useState<ExtratoBancario | null>(null)
-  const [lancamentosFiltradosModal, setLancamentosFiltradosModal] = useState<Lancamento[]>([])
+  // Estados de seleção para conciliação
+  const [extratosSelecionados, setExtratosSelecionados] = useState<string[]>([])
+  const [lancamentosSelecionados, setLancamentosSelecionados] = useState<string[]>([])
+  
+  // Modal de edição de lançamento
+  const [showEditarLancamentoModal, setShowEditarLancamentoModal] = useState(false)
+  const [lancamentoParaEditar, setLancamentoParaEditar] = useState<Lancamento | null>(null)
   
   // Toast
   const [toast, setToast] = useState<{ show: boolean; message: string; type: 'success' | 'error' | 'warning' }>({
@@ -260,7 +298,6 @@ export default function ConciliacaoBancariaPage() {
         `)
         .eq('empresa_id', empresaId)
         .eq('ativo', true)
-        .eq('tipo_conta', 'CC')
         .order('numero_conta')
       
       if (error) throw error
@@ -281,41 +318,42 @@ export default function ConciliacaoBancariaPage() {
     }
   }
 
-  const fetchExtratos = async (bancoContaId: string) => {
+  const fetchExtratos = async (contaId: string) => {
     try {
       setLoading(true)
       
-      // Buscar extratos com conciliações relacionadas
+      // Buscar extratos
       const { data: extratosData, error: extratosError } = await supabase
         .from('extratos_bancarios')
         .select('*')
-        .eq('banco_conta_id', bancoContaId)
+        .eq('banco_conta_id', contaId)
         .order('data_lancamento', { ascending: false })
       
       if (extratosError) throw extratosError
 
-      // Buscar conciliações para esses extratos
+      // Buscar conciliações
       const extratosIds = (extratosData || []).map(e => e.id)
       
-      let conciliacoesMap = new Map()
+      let conciliacoesData: any[] = []
       if (extratosIds.length > 0) {
-        const { data: conciliacoesData } = await supabase
+        const { data, error } = await supabase
           .from('conciliacoes')
           .select('*')
           .in('extrato_id', extratosIds)
         
-        conciliacoesData?.forEach(c => {
-          conciliacoesMap.set(c.extrato_id, c)
-        })
+        if (!error) conciliacoesData = data || []
       }
 
       // Combinar dados
-      const extratosComConciliacao = (extratosData || []).map(e => ({
+      const conciliacoesMap = new Map(conciliacoesData.map(c => [c.extrato_id, c]))
+      
+      const formatted = (extratosData || []).map(e => ({
         ...e,
-        conciliacao: conciliacoesMap.get(e.id) || null
+        conciliacao: conciliacoesMap.get(e.id) || null,
+        selecionado: false
       }))
-
-      setExtratos(extratosComConciliacao)
+      
+      setExtratos(formatted)
     } catch (error) {
       console.error('Erro ao carregar extratos:', error)
     } finally {
@@ -323,9 +361,9 @@ export default function ConciliacaoBancariaPage() {
     }
   }
 
-  const fetchLancamentos = async (bancoContaId: string, dataInicio?: string, dataFim?: string) => {
+  const fetchLancamentos = async (contaId: string) => {
     try {
-      let query = supabase
+      const { data, error } = await supabase
         .from('lancamentos')
         .select(`
           id,
@@ -334,37 +372,135 @@ export default function ConciliacaoBancariaPage() {
           data_vencimento,
           data_liquidacao,
           status,
-          contrapartes(nome)
+          documento_numero,
+          contrapartes(nome, apelido)
         `)
-        .eq('banco_conta_id', bancoContaId)
-        .order('data_vencimento', { ascending: false })
-      
-      if (dataInicio) {
-        query = query.gte('data_vencimento', dataInicio)
-      }
-      if (dataFim) {
-        query = query.lte('data_vencimento', dataFim)
-      }
-      
-      const { data, error } = await query
+        .eq('banco_conta_id', contaId)
+        .eq('status', 'PAGO_RECEBIDO')
+        .order('data_liquidacao', { ascending: false })
       
       if (error) throw error
       
-      const formatted = (data || []).map((item: any) => ({
+      const formatted: Lancamento[] = (data || []).map((item: any) => ({
         id: item.id,
         tipo: item.tipo,
         valor_liquido: item.valor_liquido,
         data_vencimento: item.data_vencimento,
         data_liquidacao: item.data_liquidacao,
         status: item.status,
+        documento_numero: item.documento_numero,
         contraparte_nome: Array.isArray(item.contrapartes) 
-          ? item.contrapartes[0]?.nome 
-          : item.contrapartes?.nome || ''
+          ? (item.contrapartes[0]?.apelido || item.contrapartes[0]?.nome)
+          : (item.contrapartes?.apelido || item.contrapartes?.nome) || '',
+        origem: 'LANCAMENTO',
+        selecionado: false
       }))
       
       setLancamentos(formatted)
     } catch (error) {
       console.error('Erro ao carregar lançamentos:', error)
+    }
+  }
+
+  const fetchMovimentos = async (contaId: string) => {
+    try {
+      // Buscar movimentos bancários de transferência da conta
+      const { data, error } = await supabase
+        .from('movimentos_bancarios')
+        .select(`
+          id,
+          org_id,
+          banco_conta_id,
+          tipo_movimento,
+          valor,
+          data_movimento,
+          historico,
+          documento,
+          conciliado,
+          transferencia_id,
+          lancamento_id
+        `)
+        .eq('banco_conta_id', contaId)
+        .in('tipo_movimento', ['TRANSFERENCIA_ENVIADA', 'TRANSFERENCIA_RECEBIDA'])
+        .order('data_movimento', { ascending: false })
+      
+      if (error) {
+        console.error('Erro na query movimentos_bancarios:', error)
+        // Se der erro, tenta sem o filtro de tipo
+        const { data: dataAll, error: errorAll } = await supabase
+          .from('movimentos_bancarios')
+          .select('*')
+          .eq('banco_conta_id', contaId)
+          .order('data_movimento', { ascending: false })
+        
+        if (errorAll) {
+          console.error('Erro também sem filtro:', errorAll)
+          setMovimentos([])
+          return
+        }
+        
+        console.log('Todos movimentos:', dataAll)
+        
+        // Filtrar manualmente
+        const transferencias = (dataAll || []).filter((item: any) => 
+          item.tipo_movimento === 'TRANSFERENCIA_ENVIADA' || 
+          item.tipo_movimento === 'TRANSFERENCIA_RECEBIDA'
+        )
+        
+        const formatted: MovimentoBancario[] = transferencias.map((item: any) => ({
+          id: item.id,
+          org_id: item.org_id,
+          banco_conta_id: item.banco_conta_id,
+          tipo_movimento: item.tipo_movimento,
+          valor: item.tipo_movimento === 'TRANSFERENCIA_ENVIADA' ? -item.valor : item.valor,
+          data_movimento: item.data_movimento,
+          historico: item.historico || `${item.tipo_movimento} - ${item.documento || ''}`,
+          conta_destino_id: item.transferencia_id,
+          conta_destino_nome: '',
+          origem: 'TRANSFERENCIA',
+          selecionado: false
+        }))
+        
+        setMovimentos(formatted)
+        return
+      }
+      
+      console.log('Movimentos encontrados:', data?.length || 0)
+      
+      const formatted: MovimentoBancario[] = (data || []).map((item: any) => ({
+        id: item.id,
+        org_id: item.org_id,
+        banco_conta_id: item.banco_conta_id,
+        tipo_movimento: item.tipo_movimento,
+        valor: item.tipo_movimento === 'TRANSFERENCIA_ENVIADA' ? -item.valor : item.valor,
+        data_movimento: item.data_movimento,
+        historico: item.historico || `${item.tipo_movimento} - ${item.documento || ''}`,
+        conta_destino_id: item.transferencia_id,
+        conta_destino_nome: '',
+        origem: 'TRANSFERENCIA',
+        selecionado: false
+      }))
+      
+      setMovimentos(formatted)
+    } catch (error) {
+      console.error('Erro ao carregar movimentos:', error)
+      setMovimentos([])
+    }
+  }
+
+  const fetchConciliacoes = async (contaId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('conciliacoes')
+        .select('*')
+        .eq('banco_conta_id', contaId)
+        .eq('status', 'CONCILIADO')
+        .order('created_at', { ascending: false })
+      
+      if (error) throw error
+      setConciliacoes(data || [])
+    } catch (error) {
+      console.error('Erro ao carregar conciliações:', error)
     }
   }
 
@@ -381,6 +517,8 @@ export default function ConciliacaoBancariaPage() {
       setContaInfo(null)
       setDadosOFX(null)
       setExtratos([])
+      setLancamentos([])
+      setMovimentos([])
     }
   }, [empresaSelecionada])
 
@@ -390,6 +528,8 @@ export default function ConciliacaoBancariaPage() {
       setContaInfo(conta || null)
       fetchExtratos(contaSelecionada)
       fetchLancamentos(contaSelecionada)
+      fetchMovimentos(contaSelecionada)
+      fetchConciliacoes(contaSelecionada)
     }
   }, [contaSelecionada])
 
@@ -449,265 +589,269 @@ export default function ConciliacaoBancariaPage() {
     try {
       const conteudo = await file.text()
       const dados = parseOFX(conteudo)
-
+      
       if (!dados) {
-        showError('Não foi possível ler o arquivo OFX. Verifique se o formato está correto.')
-        return
-      }
-
-      if (dados.transacoes.length === 0) {
-        showError('Nenhuma transação encontrada no arquivo OFX.')
+        showError('Erro ao processar arquivo OFX. Verifique se o arquivo está no formato correto.')
         return
       }
 
       setDadosOFX(dados)
-      
-      // Buscar lançamentos no período do OFX para conciliação
-      await fetchLancamentos(contaSelecionada, dados.dataInicio, dados.dataFim)
-      
-      showToast(`Arquivo processado com sucesso! ${dados.transacoes.length} transações encontradas.`, 'success')
-    } catch (error) {
-      console.error('Erro ao processar arquivo:', error)
-      showError('Erro ao processar o arquivo. Tente novamente.')
+      showToast(`Arquivo processado: ${dados.transacoes.length} transações encontradas`, 'success')
+    } catch (error: any) {
+      showError(`Erro ao ler arquivo: ${error.message}`)
     } finally {
       setProcessando(false)
     }
   }
 
-  const importarTransacoes = async () => {
-    if (!dadosOFX || !contaSelecionada || !contaInfo) return
+  const importarOFX = async () => {
+    if (!dadosOFX || !contaInfo) return
 
     setImportando(true)
-
     try {
-      const orgId = contaInfo.org_id
+      let importados = 0
+      let ignorados = 0
 
-      // Preparar transações para inserção na tabela extratos_bancarios
-      const extratosParaInserir = dadosOFX.transacoes.map(t => ({
-        org_id: orgId,
-        banco_conta_id: contaSelecionada,
-        data_lancamento: t.data,
-        historico: t.memo,
-        valor: t.valor, // Positivo para crédito, negativo para débito (já vem do OFX)
-        documento_ref: t.fitid
-      }))
-
-      // Inserir extratos (ignorar duplicatas pelo documento_ref)
-      for (const extrato of extratosParaInserir) {
+      for (const transacao of dadosOFX.transacoes) {
         // Verificar se já existe
         const { data: existente } = await supabase
           .from('extratos_bancarios')
           .select('id')
-          .eq('banco_conta_id', extrato.banco_conta_id)
-          .eq('documento_ref', extrato.documento_ref)
+          .eq('banco_conta_id', contaSelecionada)
+          .eq('documento_ref', transacao.fitid)
           .single()
 
         if (!existente) {
           const { error } = await supabase
             .from('extratos_bancarios')
-            .insert(extrato)
-          
-          if (error) {
-            console.error('Erro ao inserir extrato:', error)
-          }
+            .insert({
+              org_id: contaInfo.org_id,
+              banco_conta_id: contaSelecionada,
+              data_lancamento: transacao.data,
+              historico: transacao.memo,
+              valor: transacao.valor,
+              documento_ref: transacao.fitid
+            })
+
+          if (!error) importados++
+        } else {
+          ignorados++
         }
       }
 
-      // Executar conciliação automática
-      await conciliacaoAutomatica()
-
-      // Recarregar extratos
-      await fetchExtratos(contaSelecionada)
-
-      showToast('Transações importadas e conciliação automática realizada!', 'success')
+      showToast(`Importação concluída: ${importados} novos, ${ignorados} já existentes`, 'success')
       setDadosOFX(null)
       setArquivoNome('')
+      await fetchExtratos(contaSelecionada)
     } catch (error: any) {
-      console.error('Erro ao importar:', error)
-      showError(`Erro ao importar transações: ${error.message}`)
+      showError(`Erro na importação: ${error.message}`)
     } finally {
       setImportando(false)
     }
   }
 
-  const conciliacaoAutomatica = async () => {
-    if (!contaSelecionada || !contaInfo) return
+  // ==================== SELEÇÃO ====================
 
-    try {
-      // Buscar extratos sem conciliação
-      const { data: extratosData } = await supabase
-        .from('extratos_bancarios')
-        .select('*')
-        .eq('banco_conta_id', contaSelecionada)
+  const toggleExtratoSelecionado = (id: string) => {
+    setExtratosSelecionados(prev => 
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    )
+  }
 
-      if (!extratosData || extratosData.length === 0) return
+  const toggleLancamentoSelecionado = (id: string, origem: 'LANCAMENTO' | 'TRANSFERENCIA') => {
+    const chave = `${origem}:${id}`
+    setLancamentosSelecionados(prev => 
+      prev.includes(chave) ? prev.filter(x => x !== chave) : [...prev, chave]
+    )
+  }
 
-      // Buscar conciliações existentes
-      const { data: conciliacoesExistentes } = await supabase
-        .from('conciliacoes')
-        .select('extrato_id')
-        .eq('banco_conta_id', contaSelecionada)
-
-      const extratosJaConciliados = new Set((conciliacoesExistentes || []).map(c => c.extrato_id))
-
-      // Filtrar apenas extratos não conciliados
-      const extratosPendentes = extratosData.filter(e => !extratosJaConciliados.has(e.id))
-
-      if (extratosPendentes.length === 0) return
-
-      // Buscar lançamentos liquidados da conta
-      const { data: lancamentosData } = await supabase
-        .from('lancamentos')
-        .select('id, tipo, valor_liquido, data_liquidacao, data_vencimento')
-        .eq('banco_conta_id', contaSelecionada)
-        .eq('status', 'PAGO_RECEBIDO')
-
-      if (!lancamentosData) return
-
-      // Para cada extrato pendente, tentar encontrar match
-      for (const extrato of extratosPendentes) {
-        const valorExtrato = Math.abs(extrato.valor)
-        const isCredito = extrato.valor > 0
-
-        // Buscar lançamento com mesmo valor e data
-        const matchExato = lancamentosData.find(l => {
-          const valorLanc = Math.abs(l.valor_liquido)
-          const tipoMatch = (isCredito && l.tipo === 'Entrada') || (!isCredito && l.tipo === 'Saida')
-          const dataMatch = l.data_liquidacao === extrato.data_lancamento || 
-                           l.data_vencimento === extrato.data_lancamento
-          return Math.abs(valorLanc - valorExtrato) < 0.01 && tipoMatch && dataMatch
-        })
-
-        if (matchExato) {
-          // Criar conciliação
-          await supabase
-            .from('conciliacoes')
-            .insert({
-              org_id: contaInfo.org_id,
-              banco_conta_id: contaSelecionada,
-              extrato_id: extrato.id,
-              lancamento_id: matchExato.id,
-              status: 'CONCILIADO'
-            })
-          continue
-        }
-
-        // Tentar match por valor com data ±3 dias
-        const dataExtrato = new Date(extrato.data_lancamento)
-        const matchAproximado = lancamentosData.find(l => {
-          const valorLanc = Math.abs(l.valor_liquido)
-          const tipoMatch = (isCredito && l.tipo === 'Entrada') || (!isCredito && l.tipo === 'Saida')
-          
-          const dataLanc = new Date(l.data_liquidacao || l.data_vencimento)
-          const diffDias = Math.abs((dataExtrato.getTime() - dataLanc.getTime()) / (1000 * 60 * 60 * 24))
-          
-          return Math.abs(valorLanc - valorExtrato) < 0.01 && tipoMatch && diffDias <= 3
-        })
-
-        if (matchAproximado) {
-          await supabase
-            .from('conciliacoes')
-            .insert({
-              org_id: contaInfo.org_id,
-              banco_conta_id: contaSelecionada,
-              extrato_id: extrato.id,
-              lancamento_id: matchAproximado.id,
-              status: 'CONCILIADO'
-            })
-        }
-      }
-    } catch (error) {
-      console.error('Erro na conciliação automática:', error)
+  const selecionarTodosExtratos = () => {
+    const pendentes = extratosFiltrados.filter(e => !e.conciliacao || e.conciliacao.status === 'PENDENTE')
+    if (extratosSelecionados.length === pendentes.length) {
+      setExtratosSelecionados([])
+    } else {
+      setExtratosSelecionados(pendentes.map(e => e.id))
     }
   }
 
-  const abrirModalVincular = (extrato: ExtratoBancario) => {
-    setExtratoSelecionado(extrato)
-    
-    // Filtrar lançamentos compatíveis (mesmo tipo)
-    const isCredito = extrato.valor > 0
-    const tipoEsperado = isCredito ? 'Entrada' : 'Saida'
-    const filtrados = lancamentos.filter(l => l.tipo === tipoEsperado)
-    setLancamentosFiltradosModal(filtrados)
-    
-    setShowVincularModal(true)
+  const selecionarTodosLancamentos = () => {
+    const chaves = lancamentosFiltrados.map(item => `${item.origem}:${item.id}`)
+    if (lancamentosSelecionados.length === chaves.length) {
+      setLancamentosSelecionados([])
+    } else {
+      setLancamentosSelecionados(chaves)
+    }
   }
 
-  const vincularManualmente = async (lancamento: Lancamento) => {
-    if (!extratoSelecionado || !contaInfo) return
+  // ==================== CONCILIAÇÃO ====================
+
+  const vincular = async () => {
+    if (extratosSelecionados.length === 0) {
+      showToast('Selecione ao menos um lançamento do arquivo', 'warning')
+      return
+    }
+
+    if (lancamentosSelecionados.length === 0) {
+      showToast('Selecione ao menos um lançamento da conta', 'warning')
+      return
+    }
+
+    if (extratosSelecionados.length !== lancamentosSelecionados.length) {
+      showToast('Selecione a mesma quantidade de itens em ambos os lados', 'warning')
+      return
+    }
 
     try {
-      // Verificar se já existe conciliação para este extrato
-      const { data: existente } = await supabase
-        .from('conciliacoes')
-        .select('id')
-        .eq('extrato_id', extratoSelecionado.id)
-        .single()
+      for (let i = 0; i < extratosSelecionados.length; i++) {
+        const extratoId = extratosSelecionados[i]
+        const [origem, id] = lancamentosSelecionados[i].split(':')
 
-      if (existente) {
-        // Atualizar
+        const insertData: any = {
+          org_id: contaInfo!.org_id,
+          banco_conta_id: contaSelecionada,
+          extrato_id: extratoId,
+          status: 'CONCILIADO'
+        }
+
+        if (origem === 'LANCAMENTO') {
+          insertData.lancamento_id = id
+        } else {
+          insertData.movimento_id = id
+        }
+
         const { error } = await supabase
           .from('conciliacoes')
-          .update({
-            lancamento_id: lancamento.id,
-            status: 'CONCILIADO'
-          })
-          .eq('id', existente.id)
-
-        if (error) throw error
-      } else {
-        // Inserir nova
-        const { error } = await supabase
-          .from('conciliacoes')
-          .insert({
-            org_id: contaInfo.org_id,
-            banco_conta_id: contaSelecionada,
-            extrato_id: extratoSelecionado.id,
-            lancamento_id: lancamento.id,
-            status: 'CONCILIADO'
-          })
+          .insert(insertData)
 
         if (error) throw error
       }
 
-      showToast('Transação vinculada com sucesso!', 'success')
-      setShowVincularModal(false)
+      showToast(`${extratosSelecionados.length} conciliação(ões) realizada(s)`, 'success')
+      setExtratosSelecionados([])
+      setLancamentosSelecionados([])
       await fetchExtratos(contaSelecionada)
+      await fetchConciliacoes(contaSelecionada)
     } catch (error: any) {
       showError(`Erro ao vincular: ${error.message}`)
     }
   }
 
-  const ignorarTransacao = async (extrato: ExtratoBancario) => {
+  const desvincular = async (conciliacaoId: string) => {
+    try {
+      const { error } = await supabase
+        .from('conciliacoes')
+        .delete()
+        .eq('id', conciliacaoId)
+
+      if (error) throw error
+
+      showToast('Conciliação desfeita', 'success')
+      await fetchExtratos(contaSelecionada)
+      await fetchConciliacoes(contaSelecionada)
+    } catch (error: any) {
+      showError(`Erro ao desvincular: ${error.message}`)
+    }
+  }
+
+  const desvincularTodos = async () => {
+    if (conciliacoes.length === 0) return
+
+    try {
+      const { error } = await supabase
+        .from('conciliacoes')
+        .delete()
+        .eq('banco_conta_id', contaSelecionada)
+        .eq('status', 'CONCILIADO')
+
+      if (error) throw error
+
+      showToast('Todas as conciliações foram desfeitas', 'success')
+      await fetchExtratos(contaSelecionada)
+      await fetchConciliacoes(contaSelecionada)
+    } catch (error: any) {
+      showError(`Erro ao desvincular: ${error.message}`)
+    }
+  }
+
+  const sugestaoAutomatica = async () => {
     if (!contaInfo) return
 
     try {
-      // Verificar se já existe conciliação
-      const { data: existente } = await supabase
-        .from('conciliacoes')
-        .select('id')
-        .eq('extrato_id', extrato.id)
-        .single()
+      let matches = 0
+      const extratosPendentes = extratos.filter(e => !e.conciliacao || e.conciliacao.status === 'PENDENTE')
 
-      if (existente) {
-        const { error } = await supabase
+      for (const extrato of extratosPendentes) {
+        // Buscar match em lançamentos
+        const lancMatch = lancamentos.find(l => {
+          const valorMatch = Math.abs(Math.abs(l.valor_liquido) - Math.abs(extrato.valor)) < 0.01
+          const dataMatch = l.data_liquidacao === extrato.data_lancamento
+          const tipoMatch = (extrato.valor > 0 && l.tipo === 'Entrada') || (extrato.valor < 0 && l.tipo === 'Saida')
+          return valorMatch && dataMatch && tipoMatch
+        })
+
+        if (lancMatch) {
+          const { error } = await supabase
+            .from('conciliacoes')
+            .insert({
+              org_id: contaInfo.org_id,
+              banco_conta_id: contaSelecionada,
+              extrato_id: extrato.id,
+              lancamento_id: lancMatch.id,
+              status: 'CONCILIADO'
+            })
+
+          if (!error) matches++
+          continue
+        }
+
+        // Buscar match em movimentos
+        const movMatch = movimentos.find(m => {
+          const valorMatch = Math.abs(Math.abs(m.valor) - Math.abs(extrato.valor)) < 0.01
+          const dataMatch = m.data_movimento === extrato.data_lancamento
+          return valorMatch && dataMatch
+        })
+
+        if (movMatch) {
+          const { error } = await supabase
+            .from('conciliacoes')
+            .insert({
+              org_id: contaInfo.org_id,
+              banco_conta_id: contaSelecionada,
+              extrato_id: extrato.id,
+              movimento_id: movMatch.id,
+              status: 'CONCILIADO'
+            })
+
+          if (!error) matches++
+        }
+      }
+
+      showToast(`Sugestão automática: ${matches} conciliação(ões) realizada(s)`, 'success')
+      await fetchExtratos(contaSelecionada)
+      await fetchConciliacoes(contaSelecionada)
+    } catch (error: any) {
+      showError(`Erro na sugestão: ${error.message}`)
+    }
+  }
+
+  const ignorarExtrato = async (extrato: ExtratoBancario) => {
+    if (!contaInfo) return
+
+    try {
+      if (extrato.conciliacao) {
+        await supabase
           .from('conciliacoes')
-          .update({ status: 'IGNORADO', lancamento_id: null })
-          .eq('id', existente.id)
-
-        if (error) throw error
+          .update({ status: 'IGNORADO' })
+          .eq('id', extrato.conciliacao.id)
       } else {
-        const { error } = await supabase
+        await supabase
           .from('conciliacoes')
           .insert({
             org_id: contaInfo.org_id,
             banco_conta_id: contaSelecionada,
             extrato_id: extrato.id,
-            lancamento_id: null,
             status: 'IGNORADO'
           })
-
-        if (error) throw error
       }
 
       showToast('Transação marcada como ignorada', 'success')
@@ -717,35 +861,41 @@ export default function ConciliacaoBancariaPage() {
     }
   }
 
-  const desfazerConciliacao = async (extrato: ExtratoBancario) => {
-    if (!extrato.conciliacao) return
-
-    try {
-      const { error } = await supabase
-        .from('conciliacoes')
-        .delete()
-        .eq('id', extrato.conciliacao.id)
-
-      if (error) throw error
-
-      showToast('Conciliação desfeita', 'success')
-      await fetchExtratos(contaSelecionada)
-    } catch (error: any) {
-      showError(`Erro ao desfazer: ${error.message}`)
-    }
-  }
-
   // ==================== COMPUTED VALUES ====================
 
   const extratosFiltrados = extratos.filter(e => {
-    // Determinar status do extrato
     const status = e.conciliacao?.status || 'PENDENTE'
     
-    if (filtroStatus && status !== filtroStatus) return false
-    if (searchTerm) {
-      const termo = searchTerm.toLowerCase()
+    if (!mostrarConciliados && status === 'CONCILIADO') return false
+    if (filtroStatusExtrato && filtroStatusExtrato !== 'TODOS' && status !== filtroStatusExtrato) return false
+    
+    if (searchTermExtrato) {
+      const termo = searchTermExtrato.toLowerCase()
       return e.historico?.toLowerCase().includes(termo) ||
              e.documento_ref?.toLowerCase().includes(termo)
+    }
+    return true
+  })
+
+  // Combinar lançamentos e movimentos
+  const lancamentosEMovimentos: LancamentoOuMovimento[] = [
+    ...lancamentos,
+    ...movimentos
+  ].sort((a, b) => {
+    const dataA = 'data_liquidacao' in a ? a.data_liquidacao : a.data_movimento
+    const dataB = 'data_liquidacao' in b ? b.data_liquidacao : b.data_movimento
+    return (dataB || '').localeCompare(dataA || '')
+  })
+
+  const lancamentosFiltrados = lancamentosEMovimentos.filter(item => {
+    if (searchTermConta) {
+      const termo = searchTermConta.toLowerCase()
+      if ('contraparte_nome' in item) {
+        return item.contraparte_nome?.toLowerCase().includes(termo) ||
+               item.documento_numero?.toLowerCase().includes(termo)
+      } else {
+        return item.historico?.toLowerCase().includes(termo)
+      }
     }
     return true
   })
@@ -754,95 +904,97 @@ export default function ConciliacaoBancariaPage() {
     total: extratos.length,
     conciliados: extratos.filter(e => e.conciliacao?.status === 'CONCILIADO').length,
     pendentes: extratos.filter(e => !e.conciliacao || e.conciliacao.status === 'PENDENTE').length,
-    ignorados: extratos.filter(e => e.conciliacao?.status === 'IGNORADO').length,
-    divergentes: extratos.filter(e => e.conciliacao?.status === 'DIVERGENTE').length
+    ignorados: extratos.filter(e => e.conciliacao?.status === 'IGNORADO').length
   }
 
-  const getStatusInfo = (extrato: ExtratoBancario) => {
-    const status = extrato.conciliacao?.status || 'PENDENTE'
-    switch (status) {
-      case 'CONCILIADO':
-        return { bg: '#dcfce7', color: '#166534', icon: CheckCircle2, label: 'Conciliado' }
-      case 'PENDENTE':
-        return { bg: '#fef3c7', color: '#92400e', icon: Clock, label: 'Pendente' }
-      case 'IGNORADO':
-        return { bg: '#f3f4f6', color: '#6b7280', icon: Ban, label: 'Ignorado' }
-      case 'DIVERGENTE':
-        return { bg: '#fee2e2', color: '#991b1b', icon: AlertCircle, label: 'Divergente' }
-      default:
-        return { bg: '#f3f4f6', color: '#374151', icon: Clock, label: 'Pendente' }
+  const totalExtratosSelecionados = extratosSelecionados.reduce((acc, id) => {
+    const extrato = extratos.find(e => e.id === id)
+    return acc + (extrato?.valor || 0)
+  }, 0)
+
+  const totalLancamentosSelecionados = lancamentosSelecionados.reduce((acc, chave) => {
+    const [origem, id] = chave.split(':')
+    if (origem === 'LANCAMENTO') {
+      const lanc = lancamentos.find(l => l.id === id)
+      return acc + (lanc?.valor_liquido || 0)
+    } else {
+      const mov = movimentos.find(m => m.id === id)
+      return acc + (mov?.valor || 0)
     }
-  }
+  }, 0)
+
+  const diferenca = Math.abs(totalExtratosSelecionados) - Math.abs(totalLancamentosSelecionados)
 
   // ==================== RENDER ====================
 
   return (
-    <div style={{ padding: '24px', backgroundColor: '#f8fafc', minHeight: '100vh' }}>
+    <div style={{ padding: '16px', backgroundColor: '#f1f5f9', minHeight: '100vh' }}>
       {/* Cabeçalho */}
       <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: '24px'
-      }}>
-        <div>
-          <h1 style={{ fontSize: '24px', fontWeight: '700', color: '#1e293b', marginBottom: '4px' }}>
-            Conciliação Bancária
-          </h1>
-          <p style={{ fontSize: '14px', color: '#64748b' }}>
-            Importe arquivos OFX e concilie com os lançamentos do sistema
-          </p>
-        </div>
-        
-        {extratos.length > 0 && (
-          <button
-            onClick={() => fetchExtratos(contaSelecionada)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              padding: '10px 16px',
-              backgroundColor: '#1555D6',
-              color: 'white',
-              border: 'none',
-              borderRadius: '8px',
-              fontSize: '14px',
-              fontWeight: '600',
-              cursor: 'pointer'
-            }}
-          >
-            <RefreshCw size={16} />
-            Atualizar
-          </button>
-        )}
-      </div>
-
-      {/* Seleção de Empresa e Conta */}
-      <div style={{
         backgroundColor: 'white',
-        borderRadius: '12px',
-        padding: '20px',
-        marginBottom: '24px',
+        borderRadius: '8px',
+        padding: '16px',
+        marginBottom: '16px',
         boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
       }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
           <div>
-            <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', color: '#374151', marginBottom: '6px' }}>
-              Empresa *
+            <h1 style={{ fontSize: '20px', fontWeight: '700', color: '#1e293b', marginBottom: '4px' }}>
+              Conciliação Bancária
+            </h1>
+            {contaInfo && (
+              <p style={{ fontSize: '13px', color: '#64748b' }}>
+                {contaInfo.banco_nome} - AG: {contaInfo.agencia} / CC: {contaInfo.numero_conta}
+              </p>
+            )}
+          </div>
+          
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              onClick={() => {
+                fetchExtratos(contaSelecionada)
+                fetchLancamentos(contaSelecionada)
+                fetchMovimentos(contaSelecionada)
+              }}
+              disabled={!contaSelecionada}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '8px 12px',
+                backgroundColor: '#f1f5f9',
+                color: '#475569',
+                border: '1px solid #e2e8f0',
+                borderRadius: '6px',
+                fontSize: '13px',
+                cursor: contaSelecionada ? 'pointer' : 'not-allowed',
+                opacity: contaSelecionada ? 1 : 0.5
+              }}
+            >
+              <RefreshCw size={14} />
+              Atualizar
+            </button>
+          </div>
+        </div>
+
+        {/* Seleção de Empresa e Conta */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+          <div>
+            <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
+              Empresa
             </label>
             <select
               value={empresaSelecionada}
               onChange={(e) => setEmpresaSelecionada(e.target.value)}
               style={{
                 width: '100%',
-                padding: '10px 12px',
+                padding: '8px 10px',
                 border: '1px solid #e5e7eb',
-                borderRadius: '8px',
-                fontSize: '14px',
-                cursor: 'pointer'
+                borderRadius: '6px',
+                fontSize: '13px'
               }}
             >
-              <option value="">Selecione uma empresa</option>
+              <option value="">Selecione...</option>
               {empresas.map(emp => (
                 <option key={emp.id} value={emp.id}>{emp.nome}</option>
               ))}
@@ -850,8 +1002,8 @@ export default function ConciliacaoBancariaPage() {
           </div>
 
           <div>
-            <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', color: '#374151', marginBottom: '6px' }}>
-              Conta Bancária *
+            <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
+              Conta Bancária
             </label>
             <select
               value={contaSelecionada}
@@ -859,620 +1011,596 @@ export default function ConciliacaoBancariaPage() {
               disabled={!empresaSelecionada}
               style={{
                 width: '100%',
-                padding: '10px 12px',
+                padding: '8px 10px',
                 border: '1px solid #e5e7eb',
-                borderRadius: '8px',
-                fontSize: '14px',
-                cursor: empresaSelecionada ? 'pointer' : 'not-allowed',
-                backgroundColor: empresaSelecionada ? 'white' : '#f9fafb'
+                borderRadius: '6px',
+                fontSize: '13px'
               }}
             >
-              <option value="">Selecione uma conta</option>
+              <option value="">Selecione...</option>
               {bancosContas.map(conta => (
                 <option key={conta.id} value={conta.id}>
-                  {conta.banco_nome} - Ag: {conta.agencia} - CC: {conta.numero_conta}
+                  {conta.banco_nome} - {conta.numero_conta} ({conta.tipo_conta})
                 </option>
               ))}
             </select>
           </div>
-        </div>
-      </div>
 
-      {/* Área de Upload */}
-      {contaSelecionada && (
-        <div style={{
-          backgroundColor: 'white',
-          borderRadius: '12px',
-          padding: '24px',
-          marginBottom: '24px',
-          boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
-        }}>
-          <h2 style={{ fontSize: '16px', fontWeight: '600', color: '#1e293b', marginBottom: '16px' }}>
-            Importar Arquivo OFX
-          </h2>
-
-          <div
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            style={{
-              border: `2px dashed ${isDragging ? '#1555D6' : '#d1d5db'}`,
-              borderRadius: '12px',
-              padding: '40px',
-              textAlign: 'center',
-              backgroundColor: isDragging ? '#eff6ff' : '#f9fafb',
-              transition: 'all 0.2s',
-              cursor: 'pointer'
-            }}
-            onClick={() => document.getElementById('fileInput')?.click()}
-          >
-            <input
-              id="fileInput"
-              type="file"
-              accept=".ofx"
-              onChange={handleFileSelect}
-              style={{ display: 'none' }}
-            />
-            
-            {processando ? (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
-                <RefreshCw size={40} style={{ color: '#1555D6', animation: 'spin 1s linear infinite' }} />
-                <p style={{ fontSize: '14px', color: '#6b7280' }}>Processando arquivo...</p>
-              </div>
-            ) : dadosOFX ? (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
-                <CheckCircle2 size={40} style={{ color: '#10b981' }} />
-                <p style={{ fontSize: '14px', fontWeight: '600', color: '#1e293b' }}>{arquivoNome}</p>
-                <p style={{ fontSize: '13px', color: '#6b7280' }}>
-                  {dadosOFX.transacoes.length} transações • {getNomeBanco(dadosOFX.banco)} • Conta: {dadosOFX.conta}
-                </p>
-                <p style={{ fontSize: '13px', color: '#6b7280' }}>
-                  Período: {formatDateBR(dadosOFX.dataInicio)} a {formatDateBR(dadosOFX.dataFim)} • Saldo: {formatCurrency(dadosOFX.saldoFinal)}
-                </p>
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
-                <Upload size={40} style={{ color: '#9ca3af' }} />
-                <p style={{ fontSize: '14px', color: '#6b7280' }}>
-                  Arraste o arquivo OFX aqui ou <span style={{ color: '#1555D6', fontWeight: '600' }}>clique para selecionar</span>
-                </p>
-                <p style={{ fontSize: '12px', color: '#9ca3af' }}>
-                  Formatos aceitos: .OFX (Open Financial Exchange)
-                </p>
-              </div>
-            )}
+          {/* Upload OFX */}
+          <div>
+            <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#374151', marginBottom: '4px' }}>
+              Importar OFX
+            </label>
+            <div
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              style={{
+                border: `2px dashed ${isDragging ? '#1555D6' : '#e5e7eb'}`,
+                borderRadius: '6px',
+                padding: '8px',
+                textAlign: 'center',
+                backgroundColor: isDragging ? '#eff6ff' : 'white',
+                cursor: contaSelecionada ? 'pointer' : 'not-allowed',
+                opacity: contaSelecionada ? 1 : 0.5
+              }}
+              onClick={() => contaSelecionada && document.getElementById('file-input')?.click()}
+            >
+              <input
+                id="file-input"
+                type="file"
+                accept=".ofx"
+                onChange={handleFileSelect}
+                style={{ display: 'none' }}
+              />
+              <span style={{ fontSize: '12px', color: '#64748b' }}>
+                {arquivoNome || 'Arraste .OFX ou clique'}
+              </span>
+            </div>
           </div>
+        </div>
 
-          {dadosOFX && (
-            <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+        {/* Preview OFX */}
+        {dadosOFX && (
+          <div style={{
+            marginTop: '12px',
+            padding: '12px',
+            backgroundColor: '#f0fdf4',
+            borderRadius: '6px',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center'
+          }}>
+            <div style={{ fontSize: '13px', color: '#166534' }}>
+              <strong>{dadosOFX.transacoes.length}</strong> transações encontradas | 
+              Período: {formatDateBR(dadosOFX.dataInicio)} a {formatDateBR(dadosOFX.dataFim)} | 
+              Saldo: {formatCurrency(dadosOFX.saldoFinal)}
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
               <button
                 onClick={() => { setDadosOFX(null); setArquivoNome('') }}
                 style={{
-                  padding: '10px 20px',
-                  backgroundColor: 'white',
-                  color: '#6b7280',
-                  border: '1px solid #e5e7eb',
-                  borderRadius: '8px',
-                  fontSize: '14px',
-                  fontWeight: '600',
+                  padding: '6px 12px',
+                  backgroundColor: '#fee2e2',
+                  color: '#991b1b',
+                  border: 'none',
+                  borderRadius: '4px',
+                  fontSize: '12px',
                   cursor: 'pointer'
                 }}
               >
                 Cancelar
               </button>
               <button
-                onClick={importarTransacoes}
+                onClick={importarOFX}
                 disabled={importando}
                 style={{
-                  padding: '10px 20px',
-                  backgroundColor: importando ? '#9ca3af' : '#10b981',
+                  padding: '6px 12px',
+                  backgroundColor: '#166534',
                   color: 'white',
                   border: 'none',
-                  borderRadius: '8px',
-                  fontSize: '14px',
-                  fontWeight: '600',
-                  cursor: importando ? 'not-allowed' : 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px'
+                  borderRadius: '4px',
+                  fontSize: '12px',
+                  cursor: 'pointer'
                 }}
               >
-                {importando ? (
-                  <>
-                    <RefreshCw size={16} style={{ animation: 'spin 1s linear infinite' }} />
-                    Importando...
-                  </>
-                ) : (
-                  <>
-                    <Download size={16} />
-                    Importar e Conciliar
-                  </>
-                )}
+                {importando ? 'Importando...' : 'Importar'}
               </button>
             </div>
-          )}
-        </div>
-      )}
+          </div>
+        )}
+      </div>
 
-      {/* Estatísticas */}
-      {extratos.length > 0 && (
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(5, 1fr)',
-          gap: '16px',
-          marginBottom: '24px'
-        }}>
+      {/* Área de Conciliação - Duas Colunas */}
+      {contaSelecionada && (
+        <>
+          {/* Barra de Ações */}
           <div style={{
-            backgroundColor: 'white',
-            padding: '16px',
-            borderRadius: '12px',
-            boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
-          }}>
-            <p style={{ fontSize: '12px', color: '#6b7280', marginBottom: '4px' }}>Total Importado</p>
-            <p style={{ fontSize: '24px', fontWeight: '700', color: '#1e293b' }}>{estatisticas.total}</p>
-          </div>
-
-          <div style={{
-            backgroundColor: '#dcfce7',
-            padding: '16px',
-            borderRadius: '12px'
-          }}>
-            <p style={{ fontSize: '12px', color: '#166534', marginBottom: '4px' }}>Conciliados</p>
-            <p style={{ fontSize: '24px', fontWeight: '700', color: '#166534' }}>{estatisticas.conciliados}</p>
-          </div>
-
-          <div style={{
-            backgroundColor: '#fef3c7',
-            padding: '16px',
-            borderRadius: '12px'
-          }}>
-            <p style={{ fontSize: '12px', color: '#92400e', marginBottom: '4px' }}>Pendentes</p>
-            <p style={{ fontSize: '24px', fontWeight: '700', color: '#92400e' }}>{estatisticas.pendentes}</p>
-          </div>
-
-          <div style={{
-            backgroundColor: '#f3f4f6',
-            padding: '16px',
-            borderRadius: '12px'
-          }}>
-            <p style={{ fontSize: '12px', color: '#6b7280', marginBottom: '4px' }}>Ignorados</p>
-            <p style={{ fontSize: '24px', fontWeight: '700', color: '#6b7280' }}>{estatisticas.ignorados}</p>
-          </div>
-
-          <div style={{
-            backgroundColor: '#fee2e2',
-            padding: '16px',
-            borderRadius: '12px'
-          }}>
-            <p style={{ fontSize: '12px', color: '#991b1b', marginBottom: '4px' }}>Divergentes</p>
-            <p style={{ fontSize: '24px', fontWeight: '700', color: '#991b1b' }}>{estatisticas.divergentes}</p>
-          </div>
-        </div>
-      )}
-
-      {/* Filtros da Lista */}
-      {extratos.length > 0 && (
-        <div style={{
-          backgroundColor: 'white',
-          borderRadius: '12px',
-          padding: '16px',
-          marginBottom: '16px',
-          boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
-          display: 'flex',
-          gap: '16px',
-          alignItems: 'center'
-        }}>
-          <div style={{ position: 'relative', flex: 1 }}>
-            <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#9ca3af' }} />
-            <input
-              type="text"
-              placeholder="Buscar por descrição..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '10px 12px 10px 40px',
-                border: '1px solid #e5e7eb',
-                borderRadius: '8px',
-                fontSize: '14px'
-              }}
-            />
-          </div>
-
-          <select
-            value={filtroStatus}
-            onChange={(e) => setFiltroStatus(e.target.value)}
-            style={{
-              padding: '10px 12px',
-              border: '1px solid #e5e7eb',
-              borderRadius: '8px',
-              fontSize: '14px',
-              cursor: 'pointer',
-              minWidth: '160px'
-            }}
-          >
-            <option value="">Todos os Status</option>
-            <option value="CONCILIADO">Conciliados</option>
-            <option value="PENDENTE">Pendentes</option>
-            <option value="IGNORADO">Ignorados</option>
-            <option value="DIVERGENTE">Divergentes</option>
-          </select>
-        </div>
-      )}
-
-      {/* Lista de Extratos/Conciliações */}
-      {extratos.length > 0 && (
-        <div style={{
-          backgroundColor: 'white',
-          borderRadius: '12px',
-          overflow: 'hidden',
-          boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
-        }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ backgroundColor: '#f9fafb', borderBottom: '1px solid #e5e7eb' }}>
-                <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#6b7280', textTransform: 'uppercase' }}>
-                  Data
-                </th>
-                <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#6b7280', textTransform: 'uppercase' }}>
-                  Descrição
-                </th>
-                <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: '#6b7280', textTransform: 'uppercase' }}>
-                  Tipo
-                </th>
-                <th style={{ padding: '12px 16px', textAlign: 'right', fontSize: '12px', fontWeight: '600', color: '#6b7280', textTransform: 'uppercase' }}>
-                  Valor
-                </th>
-                <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: '#6b7280', textTransform: 'uppercase' }}>
-                  Status
-                </th>
-                <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: '#6b7280', textTransform: 'uppercase' }}>
-                  Ações
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {extratosFiltrados.map((extrato) => {
-                const statusInfo = getStatusInfo(extrato)
-                const StatusIcon = statusInfo.icon
-                const isCredito = extrato.valor > 0
-                const status = extrato.conciliacao?.status || 'PENDENTE'
-
-                return (
-                  <tr key={extrato.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
-                    <td style={{ padding: '12px 16px', fontSize: '14px', color: '#374151' }}>
-                      {formatDateBR(extrato.data_lancamento)}
-                    </td>
-                    <td style={{ padding: '12px 16px', fontSize: '14px', color: '#374151', maxWidth: '300px' }}>
-                      {extrato.historico || '-'}
-                    </td>
-                    <td style={{ padding: '12px 16px', textAlign: 'center' }}>
-                      <span style={{
-                        display: 'inline-block',
-                        padding: '4px 8px',
-                        borderRadius: '6px',
-                        fontSize: '11px',
-                        fontWeight: '600',
-                        backgroundColor: isCredito ? '#dcfce7' : '#fee2e2',
-                        color: isCredito ? '#166534' : '#991b1b'
-                      }}>
-                        {isCredito ? 'Crédito' : 'Débito'}
-                      </span>
-                    </td>
-                    <td style={{
-                      padding: '12px 16px',
-                      textAlign: 'right',
-                      fontSize: '14px',
-                      fontWeight: '600',
-                      color: isCredito ? '#166534' : '#991b1b',
-                      whiteSpace: 'nowrap'
-                    }}>
-                      {formatCurrency(Math.abs(extrato.valor))}
-                    </td>
-                    <td style={{ padding: '12px 16px', textAlign: 'center' }}>
-                      <span style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                        padding: '4px 10px',
-                        borderRadius: '6px',
-                        fontSize: '11px',
-                        fontWeight: '600',
-                        backgroundColor: statusInfo.bg,
-                        color: statusInfo.color
-                      }}>
-                        <StatusIcon size={12} />
-                        {statusInfo.label}
-                      </span>
-                    </td>
-                    <td style={{ padding: '12px 16px', textAlign: 'center' }}>
-                      <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
-                        {status === 'PENDENTE' && (
-                          <>
-                            <button
-                              onClick={() => abrirModalVincular(extrato)}
-                              title="Vincular manualmente"
-                              style={{
-                                padding: '6px 10px',
-                                backgroundColor: '#1555D6',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '6px',
-                                fontSize: '11px',
-                                fontWeight: '600',
-                                cursor: 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '4px'
-                              }}
-                            >
-                              <Link2 size={12} />
-                              Vincular
-                            </button>
-                            <button
-                              onClick={() => ignorarTransacao(extrato)}
-                              title="Ignorar transação"
-                              style={{
-                                padding: '6px 10px',
-                                backgroundColor: '#f3f4f6',
-                                color: '#6b7280',
-                                border: '1px solid #e5e7eb',
-                                borderRadius: '6px',
-                                fontSize: '11px',
-                                fontWeight: '600',
-                                cursor: 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '4px'
-                              }}
-                            >
-                              <Ban size={12} />
-                              Ignorar
-                            </button>
-                          </>
-                        )}
-                        {(status === 'CONCILIADO' || status === 'IGNORADO') && (
-                          <button
-                            onClick={() => desfazerConciliacao(extrato)}
-                            title="Desfazer"
-                            style={{
-                              padding: '6px 10px',
-                              backgroundColor: '#fef3c7',
-                              color: '#92400e',
-                              border: '1px solid #fcd34d',
-                              borderRadius: '6px',
-                              fontSize: '11px',
-                              fontWeight: '600',
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '4px'
-                            }}
-                          >
-                            <RefreshCw size={12} />
-                            Desfazer
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-
-          {extratosFiltrados.length === 0 && (
-            <div style={{ padding: '40px', textAlign: 'center', color: '#6b7280' }}>
-              Nenhuma transação encontrada com os filtros aplicados
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Modal de Vinculação Manual */}
-      {showVincularModal && extratoSelecionado && (
-        <div
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            backgroundColor: '#1e293b',
+            borderRadius: '8px 8px 0 0',
+            padding: '10px 16px',
             display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            backdropFilter: 'blur(4px)'
-          }}
-          onClick={() => setShowVincularModal(false)}
-        >
-          <div
-            style={{
-              backgroundColor: 'white',
-              borderRadius: '12px',
-              padding: '24px',
-              width: '90%',
-              maxWidth: '800px',
-              maxHeight: '80vh',
-              overflow: 'hidden',
-              display: 'flex',
-              flexDirection: 'column'
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#1e293b' }}>
-                Vincular Transação
-              </h2>
+            justifyContent: 'space-between',
+            alignItems: 'center'
+          }}>
+            <div style={{ display: 'flex', gap: '8px' }}>
               <button
-                onClick={() => setShowVincularModal(false)}
-                style={{ background: 'none', border: 'none', cursor: 'pointer' }}
+                onClick={vincular}
+                disabled={extratosSelecionados.length === 0 || lancamentosSelecionados.length === 0}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '6px 12px',
+                  backgroundColor: '#059669',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  fontSize: '12px',
+                  fontWeight: '600',
+                  cursor: extratosSelecionados.length > 0 && lancamentosSelecionados.length > 0 ? 'pointer' : 'not-allowed',
+                  opacity: extratosSelecionados.length > 0 && lancamentosSelecionados.length > 0 ? 1 : 0.5
+                }}
               >
-                <X size={24} style={{ color: '#6b7280' }} />
+                <Link2 size={14} />
+                Vincular
+              </button>
+              <button
+                onClick={desvincularTodos}
+                disabled={conciliacoes.length === 0}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '6px 12px',
+                  backgroundColor: '#dc2626',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  fontSize: '12px',
+                  fontWeight: '600',
+                  cursor: conciliacoes.length > 0 ? 'pointer' : 'not-allowed',
+                  opacity: conciliacoes.length > 0 ? 1 : 0.5
+                }}
+              >
+                <Link2Off size={14} />
+                Desvincular Todos
+              </button>
+              <button
+                onClick={sugestaoAutomatica}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '6px 12px',
+                  backgroundColor: '#eab308',
+                  color: '#1e293b',
+                  border: 'none',
+                  borderRadius: '4px',
+                  fontSize: '12px',
+                  fontWeight: '600',
+                  cursor: 'pointer'
+                }}
+              >
+                <Lightbulb size={14} />
+                Sugestão
               </button>
             </div>
 
-            {/* Dados da transação do extrato */}
-            <div style={{
-              backgroundColor: '#f8fafc',
-              padding: '16px',
-              borderRadius: '8px',
-              marginBottom: '20px'
-            }}>
-              <p style={{ fontSize: '12px', color: '#6b7280', marginBottom: '4px' }}>Transação do Extrato Bancário</p>
-              <p style={{ fontSize: '14px', fontWeight: '600', color: '#1e293b', marginBottom: '4px' }}>
-                {extratoSelecionado.historico || 'Sem descrição'}
-              </p>
-              <div style={{ display: 'flex', gap: '24px' }}>
-                <p style={{ fontSize: '13px', color: '#6b7280' }}>
-                  Data: <strong>{formatDateBR(extratoSelecionado.data_lancamento)}</strong>
-                </p>
-                <p style={{ fontSize: '13px', color: extratoSelecionado.valor > 0 ? '#166534' : '#991b1b' }}>
-                  Valor: <strong>{formatCurrency(Math.abs(extratoSelecionado.valor))}</strong>
-                </p>
-              </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'white', fontSize: '12px' }}>
+                <input
+                  type="checkbox"
+                  checked={mostrarConciliados}
+                  onChange={(e) => setMostrarConciliados(e.target.checked)}
+                />
+                Visualizar Conciliados
+              </label>
             </div>
+          </div>
 
-            {/* Lista de lançamentos para vincular */}
-            <div style={{ flex: 1, overflow: 'auto' }}>
-              <p style={{ fontSize: '13px', color: '#6b7280', marginBottom: '12px' }}>
-                Selecione o lançamento do sistema para vincular:
-              </p>
-              
-              {lancamentosFiltradosModal.length === 0 ? (
-                <div style={{ padding: '40px', textAlign: 'center', color: '#6b7280' }}>
-                  Nenhum lançamento compatível encontrado
-                </div>
-              ) : (
-                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                  <thead>
-                    <tr style={{ backgroundColor: '#f9fafb' }}>
-                      <th style={{ padding: '10px', textAlign: 'left', fontSize: '11px', color: '#6b7280' }}>Data Venc.</th>
-                      <th style={{ padding: '10px', textAlign: 'left', fontSize: '11px', color: '#6b7280' }}>Contraparte</th>
-                      <th style={{ padding: '10px', textAlign: 'right', fontSize: '11px', color: '#6b7280' }}>Valor</th>
-                      <th style={{ padding: '10px', textAlign: 'center', fontSize: '11px', color: '#6b7280' }}>Status</th>
-                      <th style={{ padding: '10px', textAlign: 'center', fontSize: '11px', color: '#6b7280' }}>Ação</th>
+          {/* Grid de Duas Colunas */}
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr',
+            gap: '0',
+            backgroundColor: 'white',
+            borderRadius: '0 0 8px 8px',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+            overflow: 'hidden'
+          }}>
+            {/* Coluna Esquerda - Lançamentos do Arquivo (Extrato) */}
+            <div style={{ borderRight: '2px solid #e2e8f0' }}>
+              <div style={{
+                backgroundColor: '#f8fafc',
+                padding: '10px 12px',
+                borderBottom: '1px solid #e2e8f0',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}>
+                <h3 style={{ fontSize: '13px', fontWeight: '600', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <FileSpreadsheet size={16} />
+                  Lançamentos do Arquivo (Extrato)
+                </h3>
+                <span style={{ fontSize: '11px', color: '#64748b' }}>
+                  {estatisticas.pendentes} pendentes
+                </span>
+              </div>
+
+              {/* Filtro */}
+              <div style={{ padding: '8px 12px', borderBottom: '1px solid #e2e8f0', display: 'flex', gap: '8px' }}>
+                <input
+                  type="text"
+                  placeholder="Buscar..."
+                  value={searchTermExtrato}
+                  onChange={(e) => setSearchTermExtrato(e.target.value)}
+                  style={{
+                    flex: 1,
+                    padding: '6px 8px',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '4px',
+                    fontSize: '12px'
+                  }}
+                />
+              </div>
+
+              {/* Lista de Extratos */}
+              <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                  <thead style={{ backgroundColor: '#f8fafc', position: 'sticky', top: 0 }}>
+                    <tr>
+                      <th style={{ padding: '8px 6px', textAlign: 'center', borderBottom: '1px solid #e2e8f0', width: '30px' }}>
+                        <input
+                          type="checkbox"
+                          checked={extratosSelecionados.length > 0 && extratosSelecionados.length === extratosFiltrados.filter(e => !e.conciliacao || e.conciliacao.status === 'PENDENTE').length}
+                          onChange={selecionarTodosExtratos}
+                        />
+                      </th>
+                      <th style={{ padding: '8px 6px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Data</th>
+                      <th style={{ padding: '8px 6px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Documento</th>
+                      <th style={{ padding: '8px 6px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Histórico</th>
+                      <th style={{ padding: '8px 6px', textAlign: 'right', borderBottom: '1px solid #e2e8f0' }}>Valor</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {lancamentosFiltradosModal.map((lanc) => (
-                      <tr key={lanc.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
-                        <td style={{ padding: '10px', fontSize: '13px' }}>{formatDateBR(lanc.data_vencimento)}</td>
-                        <td style={{ padding: '10px', fontSize: '13px', maxWidth: '200px' }}>{lanc.contraparte_nome}</td>
-                        <td style={{ padding: '10px', fontSize: '13px', textAlign: 'right', fontWeight: '600' }}>
-                          {formatCurrency(lanc.valor_liquido)}
-                        </td>
-                        <td style={{ padding: '10px', textAlign: 'center' }}>
-                          <span style={{
-                            padding: '2px 8px',
-                            borderRadius: '4px',
-                            fontSize: '10px',
+                    {extratosFiltrados.map(extrato => {
+                      const status = extrato.conciliacao?.status || 'PENDENTE'
+                      const isSelected = extratosSelecionados.includes(extrato.id)
+                      const isConciliado = status === 'CONCILIADO'
+                      
+                      return (
+                        <tr
+                          key={extrato.id}
+                          style={{
+                            backgroundColor: isSelected ? '#dbeafe' : isConciliado ? '#f0fdf4' : 'white',
+                            cursor: isConciliado ? 'default' : 'pointer'
+                          }}
+                          onClick={() => !isConciliado && toggleExtratoSelecionado(extrato.id)}
+                        >
+                          <td style={{ padding: '6px', textAlign: 'center', borderBottom: '1px solid #f1f5f9' }}>
+                            {!isConciliado && (
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={(e) => {
+                                  e.stopPropagation()
+                                  toggleExtratoSelecionado(extrato.id)
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                            )}
+                            {isConciliado && <CheckCircle2 size={14} color="#16a34a" />}
+                          </td>
+                          <td style={{ padding: '6px', borderBottom: '1px solid #f1f5f9' }}>
+                            {formatDateBR(extrato.data_lancamento)}
+                          </td>
+                          <td style={{ padding: '6px', borderBottom: '1px solid #f1f5f9', maxWidth: '80px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {extrato.documento_ref || '-'}
+                          </td>
+                          <td style={{ padding: '6px', borderBottom: '1px solid #f1f5f9', maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {extrato.historico || '-'}
+                          </td>
+                          <td style={{
+                            padding: '6px',
+                            borderBottom: '1px solid #f1f5f9',
+                            textAlign: 'right',
                             fontWeight: '600',
-                            backgroundColor: lanc.status === 'PAGO_RECEBIDO' ? '#dcfce7' : '#fef3c7',
-                            color: lanc.status === 'PAGO_RECEBIDO' ? '#166534' : '#92400e'
+                            color: extrato.valor >= 0 ? '#16a34a' : '#dc2626'
                           }}>
-                            {lanc.status === 'PAGO_RECEBIDO' ? 'Liquidado' : 'Aberto'}
-                          </span>
-                        </td>
-                        <td style={{ padding: '10px', textAlign: 'center' }}>
-                          <button
-                            onClick={() => vincularManualmente(lanc)}
-                            style={{
-                              padding: '6px 12px',
-                              backgroundColor: '#10b981',
-                              color: 'white',
-                              border: 'none',
-                              borderRadius: '6px',
-                              fontSize: '12px',
-                              fontWeight: '600',
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '4px'
-                            }}
-                          >
-                            <Check size={14} />
-                            Vincular
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                            {formatCurrencySimple(extrato.valor)}
+                          </td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+              </div>
 
-      {/* Modal de Erro */}
-      {showErrorModal && (
-        <div
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.5)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            backdropFilter: 'blur(4px)'
-          }}
-          onClick={() => setShowErrorModal(false)}
-        >
-          <div
-            style={{
-              backgroundColor: 'white',
-              borderRadius: '12px',
-              overflow: 'hidden',
-              width: '90%',
-              maxWidth: '500px'
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ height: '4px', backgroundColor: '#f59e0b' }} />
-            <div style={{ padding: '24px' }}>
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '16px', marginBottom: '24px' }}>
-                <div style={{
-                  width: '48px',
-                  height: '48px',
-                  borderRadius: '50%',
-                  backgroundColor: '#fef3c7',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0
-                }}>
-                  <AlertCircle size={28} style={{ color: '#f59e0b' }} />
-                </div>
-                <p style={{ fontSize: '16px', lineHeight: '1.6', color: '#374151' }}>
-                  {errorMessage}
-                </p>
+              {/* Totalizador */}
+              <div style={{
+                padding: '10px 12px',
+                backgroundColor: '#f8fafc',
+                borderTop: '1px solid #e2e8f0',
+                fontSize: '12px',
+                fontWeight: '600'
+              }}>
+                Lançamentos Selecionados: {formatCurrency(totalExtratosSelecionados)}
               </div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                <button
-                  onClick={() => setShowErrorModal(false)}
+            </div>
+
+            {/* Coluna Direita - Lançamentos da Conta */}
+            <div>
+              <div style={{
+                backgroundColor: '#f8fafc',
+                padding: '10px 12px',
+                borderBottom: '1px solid #e2e8f0',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}>
+                <h3 style={{ fontSize: '13px', fontWeight: '600', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <CreditCard size={16} />
+                  Lançamentos da Conta
+                </h3>
+                <span style={{ fontSize: '11px', color: '#64748b' }}>
+                  {lancamentos.length} lanç. + {movimentos.length} transf.
+                </span>
+              </div>
+
+              {/* Filtro */}
+              <div style={{ padding: '8px 12px', borderBottom: '1px solid #e2e8f0', display: 'flex', gap: '8px' }}>
+                <input
+                  type="text"
+                  placeholder="Buscar..."
+                  value={searchTermConta}
+                  onChange={(e) => setSearchTermConta(e.target.value)}
                   style={{
-                    padding: '10px 24px',
-                    backgroundColor: '#f59e0b',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '8px',
-                    fontSize: '14px',
-                    fontWeight: '600',
-                    cursor: 'pointer'
+                    flex: 1,
+                    padding: '6px 8px',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '4px',
+                    fontSize: '12px'
                   }}
-                >
-                  OK
-                </button>
+                />
+              </div>
+
+              {/* Lista de Lançamentos e Movimentos */}
+              <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                  <thead style={{ backgroundColor: '#f8fafc', position: 'sticky', top: 0 }}>
+                    <tr>
+                      <th style={{ padding: '8px 6px', textAlign: 'center', borderBottom: '1px solid #e2e8f0', width: '30px' }}>
+                        <input
+                          type="checkbox"
+                          checked={lancamentosSelecionados.length > 0 && lancamentosSelecionados.length === lancamentosFiltrados.length}
+                          onChange={selecionarTodosLancamentos}
+                        />
+                      </th>
+                      <th style={{ padding: '8px 6px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Data</th>
+                      <th style={{ padding: '8px 6px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Documento</th>
+                      <th style={{ padding: '8px 6px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Histórico</th>
+                      <th style={{ padding: '8px 6px', textAlign: 'right', borderBottom: '1px solid #e2e8f0' }}>Valor</th>
+                      <th style={{ padding: '8px 6px', textAlign: 'center', borderBottom: '1px solid #e2e8f0' }}>Origem</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lancamentosFiltrados.map(item => {
+                      const isLancamento = 'contraparte_nome' in item
+                      const chave = `${item.origem}:${item.id}`
+                      const isSelected = lancamentosSelecionados.includes(chave)
+                      const data = isLancamento ? (item as Lancamento).data_liquidacao : (item as MovimentoBancario).data_movimento
+                      const valor = isLancamento ? (item as Lancamento).valor_liquido : (item as MovimentoBancario).valor
+                      const historico = isLancamento 
+                        ? (item as Lancamento).contraparte_nome 
+                        : (item as MovimentoBancario).historico || (item as MovimentoBancario).conta_destino_nome
+                      const documento = isLancamento ? (item as Lancamento).documento_numero : '-'
+                      
+                      return (
+                        <tr
+                          key={chave}
+                          style={{
+                            backgroundColor: isSelected ? '#dbeafe' : 'white',
+                            cursor: 'pointer'
+                          }}
+                          onClick={() => toggleLancamentoSelecionado(item.id, item.origem)}
+                        >
+                          <td style={{ padding: '6px', textAlign: 'center', borderBottom: '1px solid #f1f5f9' }}>
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={(e) => {
+                                e.stopPropagation()
+                                toggleLancamentoSelecionado(item.id, item.origem)
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          </td>
+                          <td style={{ padding: '6px', borderBottom: '1px solid #f1f5f9' }}>
+                            {formatDateBR(data)}
+                          </td>
+                          <td style={{ padding: '6px', borderBottom: '1px solid #f1f5f9' }}>
+                            {documento || '-'}
+                          </td>
+                          <td style={{ padding: '6px', borderBottom: '1px solid #f1f5f9', maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {historico || '-'}
+                          </td>
+                          <td style={{
+                            padding: '6px',
+                            borderBottom: '1px solid #f1f5f9',
+                            textAlign: 'right',
+                            fontWeight: '600',
+                            color: valor >= 0 ? '#16a34a' : '#dc2626'
+                          }}>
+                            {formatCurrencySimple(valor)}
+                          </td>
+                          <td style={{ padding: '6px', textAlign: 'center', borderBottom: '1px solid #f1f5f9' }}>
+                            <span 
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                if (isLancamento) {
+                                  setLancamentoParaEditar(item as Lancamento)
+                                  setShowEditarLancamentoModal(true)
+                                }
+                              }}
+                              style={{
+                                padding: '2px 6px',
+                                borderRadius: '4px',
+                                fontSize: '10px',
+                                fontWeight: '600',
+                                backgroundColor: isLancamento ? '#dbeafe' : '#fef3c7',
+                                color: isLancamento ? '#1e40af' : '#92400e',
+                                cursor: isLancamento ? 'pointer' : 'default'
+                              }}
+                            >
+                              {isLancamento ? 'Lanç.' : 'Transf.'}
+                            </span>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Totalizador */}
+              <div style={{
+                padding: '10px 12px',
+                backgroundColor: '#f8fafc',
+                borderTop: '1px solid #e2e8f0',
+                fontSize: '12px',
+                fontWeight: '600'
+              }}>
+                Lançamentos Selecionados: {formatCurrency(totalLancamentosSelecionados)}
               </div>
             </div>
           </div>
-        </div>
+
+          {/* Área de Diferença */}
+          <div style={{
+            backgroundColor: diferenca === 0 ? '#f0fdf4' : '#fef2f2',
+            padding: '10px 16px',
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            gap: '8px',
+            marginTop: '-1px'
+          }}>
+            <span style={{
+              fontSize: '13px',
+              fontWeight: '600',
+              color: diferenca === 0 ? '#166534' : '#991b1b'
+            }}>
+              Diferença: {formatCurrency(diferenca)}
+            </span>
+            {diferenca === 0 && extratosSelecionados.length > 0 && (
+              <CheckCircle2 size={16} color="#16a34a" />
+            )}
+          </div>
+
+          {/* Seção de Conciliações Realizadas */}
+          <div style={{
+            backgroundColor: 'white',
+            borderRadius: '8px',
+            marginTop: '16px',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+          }}>
+            <div style={{
+              padding: '12px 16px',
+              borderBottom: '1px solid #e2e8f0',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center'
+            }}>
+              <h3 style={{ fontSize: '14px', fontWeight: '600', color: '#1e293b' }}>
+                Conciliações Realizadas ({conciliacoes.length})
+              </h3>
+            </div>
+
+            {conciliacoes.length > 0 ? (
+              <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                  <thead style={{ backgroundColor: '#f8fafc' }}>
+                    <tr>
+                      <th style={{ padding: '8px 12px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Data Extrato</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Histórico Extrato</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'right', borderBottom: '1px solid #e2e8f0' }}>Valor</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'center', borderBottom: '1px solid #e2e8f0' }}>Tipo</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'center', borderBottom: '1px solid #e2e8f0', width: '80px' }}>Ação</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {conciliacoes.map(conc => {
+                      const extrato = extratos.find(e => e.id === conc.extrato_id)
+                      const tipo = conc.lancamento_id ? 'Lançamento' : conc.movimento_id ? 'Transferência' : '-'
+                      const lancamentoRelacionado = conc.lancamento_id ? lancamentos.find(l => l.id === conc.lancamento_id) : null
+                      
+                      return (
+                        <tr key={conc.id}>
+                          <td style={{ padding: '8px 12px', borderBottom: '1px solid #f1f5f9' }}>
+                            {formatDateBR(extrato?.data_lancamento || null)}
+                          </td>
+                          <td style={{ padding: '8px 12px', borderBottom: '1px solid #f1f5f9' }}>
+                            {extrato?.historico || '-'}
+                          </td>
+                          <td style={{
+                            padding: '8px 12px',
+                            borderBottom: '1px solid #f1f5f9',
+                            textAlign: 'right',
+                            fontWeight: '600',
+                            color: (extrato?.valor || 0) >= 0 ? '#16a34a' : '#dc2626'
+                          }}>
+                            {formatCurrency(extrato?.valor || 0)}
+                          </td>
+                          <td style={{ padding: '8px 12px', borderBottom: '1px solid #f1f5f9', textAlign: 'center' }}>
+                            <span 
+                              onClick={() => {
+                                if (lancamentoRelacionado) {
+                                  setLancamentoParaEditar(lancamentoRelacionado)
+                                  setShowEditarLancamentoModal(true)
+                                }
+                              }}
+                              style={{
+                                padding: '2px 8px',
+                                borderRadius: '4px',
+                                fontSize: '11px',
+                                backgroundColor: tipo === 'Lançamento' ? '#dbeafe' : '#fef3c7',
+                                color: tipo === 'Lançamento' ? '#1e40af' : '#92400e',
+                                cursor: lancamentoRelacionado ? 'pointer' : 'default'
+                              }}
+                            >
+                              {tipo}
+                            </span>
+                          </td>
+                          <td style={{ padding: '8px 12px', borderBottom: '1px solid #f1f5f9', textAlign: 'center' }}>
+                            <button
+                              onClick={() => desvincular(conc.id)}
+                              style={{
+                                padding: '4px 8px',
+                                backgroundColor: '#fee2e2',
+                                color: '#991b1b',
+                                border: 'none',
+                                borderRadius: '4px',
+                                fontSize: '11px',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              Desvincular
+                            </button>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div style={{ padding: '24px', textAlign: 'center', color: '#64748b', fontSize: '13px' }}>
+                Nenhuma conciliação realizada ainda
+              </div>
+            )}
+          </div>
+        </>
       )}
 
       {/* Toast */}
@@ -1481,31 +1609,282 @@ export default function ConciliacaoBancariaPage() {
           position: 'fixed',
           bottom: '24px',
           right: '24px',
-          padding: '16px 24px',
+          backgroundColor: toast.type === 'success' ? '#166534' : toast.type === 'error' ? '#991b1b' : '#92400e',
+          color: 'white',
+          padding: '12px 20px',
           borderRadius: '8px',
-          backgroundColor: toast.type === 'success' ? '#dcfce7' : toast.type === 'error' ? '#fee2e2' : '#fef3c7',
-          color: toast.type === 'success' ? '#166534' : toast.type === 'error' ? '#991b1b' : '#92400e',
           boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+          zIndex: 1000,
           display: 'flex',
           alignItems: 'center',
-          gap: '12px',
-          zIndex: 9999
+          gap: '8px',
+          fontSize: '14px'
         }}>
-          {toast.type === 'success' ? <CheckCircle2 size={20} /> : 
-           toast.type === 'error' ? <XCircle size={20} /> : <AlertCircle size={20} />}
-          <span style={{ fontWeight: '500' }}>{toast.message}</span>
+          {toast.type === 'success' && <CheckCircle2 size={18} />}
+          {toast.type === 'error' && <XCircle size={18} />}
+          {toast.type === 'warning' && <AlertCircle size={18} />}
+          {toast.message}
         </div>
       )}
 
-      {/* Estilos globais para animação */}
-      <style dangerouslySetInnerHTML={{
-        __html: `
-          @keyframes spin {
-            from { transform: rotate(0deg); }
-            to { transform: rotate(360deg); }
-          }
-        `
-      }} />
+      {/* Modal de Erro */}
+      {showErrorModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }}>
+          <div style={{
+            backgroundColor: 'white',
+            borderRadius: '12px',
+            padding: '24px',
+            maxWidth: '400px',
+            width: '90%'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+              <div style={{
+                width: '40px',
+                height: '40px',
+                borderRadius: '50%',
+                backgroundColor: '#fee2e2',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}>
+                <XCircle size={24} color="#dc2626" />
+              </div>
+              <h3 style={{ fontSize: '16px', fontWeight: '600', color: '#1e293b' }}>Erro</h3>
+            </div>
+            <p style={{ fontSize: '14px', color: '#64748b', marginBottom: '20px' }}>{errorMessage}</p>
+            <button
+              onClick={() => setShowErrorModal(false)}
+              style={{
+                width: '100%',
+                padding: '10px',
+                backgroundColor: '#1555D6',
+                color: 'white',
+                border: 'none',
+                borderRadius: '8px',
+                fontSize: '14px',
+                fontWeight: '600',
+                cursor: 'pointer'
+              }}
+            >
+              Fechar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Edição de Lançamento */}
+      {showEditarLancamentoModal && lancamentoParaEditar && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }}>
+          <div style={{
+            backgroundColor: 'white',
+            borderRadius: '12px',
+            padding: '24px',
+            maxWidth: '500px',
+            width: '90%',
+            maxHeight: '80vh',
+            overflowY: 'auto'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <h3 style={{ fontSize: '18px', fontWeight: '600', color: '#1e293b' }}>
+                Detalhes do Lançamento
+              </h3>
+              <button
+                onClick={() => {
+                  setShowEditarLancamentoModal(false)
+                  setLancamentoParaEditar(null)
+                }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: '4px'
+                }}
+              >
+                <X size={20} color="#64748b" />
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#64748b', marginBottom: '4px' }}>
+                    Tipo
+                  </label>
+                  <div style={{
+                    padding: '10px 12px',
+                    backgroundColor: '#f8fafc',
+                    borderRadius: '6px',
+                    fontSize: '14px',
+                    color: '#1e293b'
+                  }}>
+                    {lancamentoParaEditar.tipo}
+                  </div>
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#64748b', marginBottom: '4px' }}>
+                    Status
+                  </label>
+                  <div style={{
+                    padding: '10px 12px',
+                    backgroundColor: '#f8fafc',
+                    borderRadius: '6px',
+                    fontSize: '14px',
+                    color: '#1e293b'
+                  }}>
+                    {lancamentoParaEditar.status}
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#64748b', marginBottom: '4px' }}>
+                  Contraparte
+                </label>
+                <div style={{
+                  padding: '10px 12px',
+                  backgroundColor: '#f8fafc',
+                  borderRadius: '6px',
+                  fontSize: '14px',
+                  color: '#1e293b'
+                }}>
+                  {lancamentoParaEditar.contraparte_nome || '-'}
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#64748b', marginBottom: '4px' }}>
+                    Data Vencimento
+                  </label>
+                  <div style={{
+                    padding: '10px 12px',
+                    backgroundColor: '#f8fafc',
+                    borderRadius: '6px',
+                    fontSize: '14px',
+                    color: '#1e293b'
+                  }}>
+                    {formatDateBR(lancamentoParaEditar.data_vencimento)}
+                  </div>
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#64748b', marginBottom: '4px' }}>
+                    Data Liquidação
+                  </label>
+                  <div style={{
+                    padding: '10px 12px',
+                    backgroundColor: '#f8fafc',
+                    borderRadius: '6px',
+                    fontSize: '14px',
+                    color: '#1e293b'
+                  }}>
+                    {formatDateBR(lancamentoParaEditar.data_liquidacao)}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#64748b', marginBottom: '4px' }}>
+                    Documento
+                  </label>
+                  <div style={{
+                    padding: '10px 12px',
+                    backgroundColor: '#f8fafc',
+                    borderRadius: '6px',
+                    fontSize: '14px',
+                    color: '#1e293b'
+                  }}>
+                    {lancamentoParaEditar.documento_numero || '-'}
+                  </div>
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#64748b', marginBottom: '4px' }}>
+                    Valor Líquido
+                  </label>
+                  <div style={{
+                    padding: '10px 12px',
+                    backgroundColor: '#f8fafc',
+                    borderRadius: '6px',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    color: lancamentoParaEditar.valor_liquido >= 0 ? '#16a34a' : '#dc2626'
+                  }}>
+                    {formatCurrency(lancamentoParaEditar.valor_liquido)}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '12px', marginTop: '8px' }}>
+                <button
+                  onClick={() => {
+                    // Abrir página de lançamentos com o ID
+                    window.open(`/lancamentos?id=${lancamentoParaEditar.id}`, '_blank')
+                  }}
+                  style={{
+                    flex: 1,
+                    padding: '10px',
+                    backgroundColor: '#1555D6',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '8px',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  <Eye size={16} />
+                  Abrir Lançamento
+                </button>
+                <button
+                  onClick={() => {
+                    setShowEditarLancamentoModal(false)
+                    setLancamentoParaEditar(null)
+                  }}
+                  style={{
+                    flex: 1,
+                    padding: '10px',
+                    backgroundColor: '#f1f5f9',
+                    color: '#475569',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '8px',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Fechar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
