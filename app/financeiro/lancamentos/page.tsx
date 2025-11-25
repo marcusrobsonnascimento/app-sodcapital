@@ -199,6 +199,8 @@ export default function LancamentosPage() {
   const [selectedCategoriaFilter, setSelectedCategoriaFilter] = useState<string>('')
   const [dataVencimentoInicio, setDataVencimentoInicio] = useState('')
   const [dataVencimentoFim, setDataVencimentoFim] = useState('')
+  const [dataPrevisaoInicio, setDataPrevisaoInicio] = useState('')
+  const [dataPrevisaoFim, setDataPrevisaoFim] = useState('')
 
   // Filtros de coluna (inline na tabela)
   const [colFilterTipo, setColFilterTipo] = useState<string>('')
@@ -453,7 +455,9 @@ export default function LancamentosPage() {
     selectedContraparteFilter,
     selectedCategoriaFilter,
     dataVencimentoInicio,
-    dataVencimentoFim
+    dataVencimentoFim,
+    dataPrevisaoInicio,
+    dataPrevisaoFim
   ])
 
   const fetchEmpresas = async () => {
@@ -721,6 +725,12 @@ export default function LancamentosPage() {
       }
       if (dataVencimentoFim) {
         query = query.lte('data_vencimento', dataVencimentoFim)
+      }
+      if (dataPrevisaoInicio) {
+        query = query.gte('data_previsao_pagamento', dataPrevisaoInicio)
+      }
+      if (dataPrevisaoFim) {
+        query = query.lte('data_previsao_pagamento', dataPrevisaoFim)
       }
       if (searchTerm) {
         query = query.or(`documento_numero.ilike.%${searchTerm}%,observacoes.ilike.%${searchTerm}%`)
@@ -1552,6 +1562,74 @@ export default function LancamentosPage() {
               }}
             />
           </div>
+
+          {/* Filtro Data Previsão Início */}
+          <div>
+            <label style={{
+              display: 'block',
+              fontSize: '13px',
+              fontWeight: '500',
+              color: '#374151',
+              marginBottom: '6px'
+            }}>
+              Previsão Pgto (Início)
+            </label>
+            <input
+              type="date"
+              value={dataPrevisaoInicio}
+              onChange={(e) => setDataPrevisaoInicio(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '9px 10px',
+                border: '1px solid #e5e7eb',
+                borderRadius: '8px',
+                fontSize: '13px',
+                outline: 'none'
+              }}
+              onFocus={(e) => {
+                e.currentTarget.style.borderColor = '#1555D6'
+                e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.borderColor = '#e5e7eb'
+                e.currentTarget.style.boxShadow = 'none'
+              }}
+            />
+          </div>
+
+          {/* Filtro Data Previsão Fim */}
+          <div>
+            <label style={{
+              display: 'block',
+              fontSize: '13px',
+              fontWeight: '500',
+              color: '#374151',
+              marginBottom: '6px'
+            }}>
+              Previsão Pgto (Fim)
+            </label>
+            <input
+              type="date"
+              value={dataPrevisaoFim}
+              onChange={(e) => setDataPrevisaoFim(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '9px 10px',
+                border: '1px solid #e5e7eb',
+                borderRadius: '8px',
+                fontSize: '13px',
+                outline: 'none'
+              }}
+              onFocus={(e) => {
+                e.currentTarget.style.borderColor = '#1555D6'
+                e.currentTarget.style.boxShadow = '0 0 0 3px rgba(21, 85, 214, 0.1)'
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.borderColor = '#e5e7eb'
+                e.currentTarget.style.boxShadow = 'none'
+              }}
+            />
+          </div>
         </div>
 
         {/* Botões de ação */}
@@ -1572,6 +1650,8 @@ export default function LancamentosPage() {
               setSelectedCategoriaFilter('')
               setDataVencimentoInicio('')
               setDataVencimentoFim('')
+              setDataPrevisaoInicio('')
+              setDataPrevisaoFim('')
               setProjetosFilter([])
               setSubprojetosFilter([])
               // Limpar filtros de coluna
