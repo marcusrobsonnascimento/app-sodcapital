@@ -583,14 +583,32 @@ export default function LancamentosPage() {
 
   const fetchContrapartes = async () => {
     try {
-      const { data, error } = await supabase
-        .from('contrapartes')
-        .select('id, nome, apelido')
-        .eq('ativo', true)
-        .order('nome')
+      // Buscar todas as contrapartes sem limite
+      let allContrapartes: any[] = []
+      let start = 0
+      const limit = 1000
+      let hasMore = true
+
+      while (hasMore) {
+        const { data, error } = await supabase
+          .from('contrapartes')
+          .select('id, nome, apelido')
+          .eq('ativo', true)
+          .order('nome', { ascending: true })
+          .range(start, start + limit - 1)
+        
+        if (error) throw error
+        
+        if (data && data.length > 0) {
+          allContrapartes = [...allContrapartes, ...data]
+          start += limit
+          hasMore = data.length === limit
+        } else {
+          hasMore = false
+        }
+      }
       
-      if (error) throw error
-      setContrapartes(data || [])
+      setContrapartes(allContrapartes)
     } catch (error) {
       console.error('Erro ao carregar contrapartes:', error)
     }
@@ -666,7 +684,7 @@ export default function LancamentosPage() {
           empresa_pagadora:empresas!lancamentos_empresa_pagadora_id_fkey(nome),
           projeto:projetos!projeto_id(nome),
           subprojeto:projetos!subprojeto_id(nome),
-          contrapartes(nome),
+          contrapartes(nome, apelido),
           plano_contas_fluxo!inner(
             id,
             codigo_conta,
@@ -727,7 +745,9 @@ export default function LancamentosPage() {
         empresa_pagadora_nome: Array.isArray(item.empresa_pagadora) ? item.empresa_pagadora[0]?.nome : item.empresa_pagadora?.nome,
         projeto_nome: item.projeto?.nome,
         subprojeto_nome: item.subprojeto?.nome,
-        contraparte_nome: Array.isArray(item.contrapartes) ? item.contrapartes[0]?.nome : item.contrapartes?.nome,
+        contraparte_nome: Array.isArray(item.contrapartes) 
+          ? (item.contrapartes[0]?.apelido || item.contrapartes[0]?.nome)
+          : (item.contrapartes?.apelido || item.contrapartes?.nome),
         plano_conta: item.plano_contas_fluxo
       }))
 
@@ -1040,15 +1060,21 @@ export default function LancamentosPage() {
     }
   }
 
-  const filteredContrapartes = contrapartes.filter(c =>
-    contraparteSearchTerm === '' ||
-    c.nome.toLowerCase().includes(contraparteSearchTerm.toLowerCase()) ||
-    (c.apelido && c.apelido.toLowerCase().includes(contraparteSearchTerm.toLowerCase()))
-  )
+  // Filtrar e ordenar contrapartes
+  const filteredContrapartes = contrapartes
+    .filter(c =>
+      contraparteSearchTerm === '' ||
+      c.nome.toLowerCase().includes(contraparteSearchTerm.toLowerCase())
+    )
+    .sort((a, b) => {
+      const nomeA = a.nome.toLowerCase()
+      const nomeB = b.nome.toLowerCase()
+      return nomeA.localeCompare(nomeB)
+    })
 
   const handleSelectContraparte = (contraparte: Contraparte) => {
     setValue('contraparte_id', contraparte.id)
-    setContraparteNomeExibicao(contraparte.apelido || contraparte.nome)
+    setContraparteNomeExibicao(contraparte.nome)
     setContraparteSearchTerm('')
     setShowContraparteDropdown(false)
   }
@@ -1072,7 +1098,11 @@ export default function LancamentosPage() {
     if (colFilterProjeto && lancamento.projeto_id !== colFilterProjeto) return false
 
     // Filtro CONTRAPARTE
-    if (colFilterContraparte && lancamento.contraparte_id !== colFilterContraparte) return false
+    if (colFilterContraparte && colFilterContraparte.trim() !== '') {
+      const filterLower = colFilterContraparte.toLowerCase()
+      const contraparteLower = (lancamento.contraparte_nome || '').toLowerCase()
+      if (!contraparteLower.includes(filterLower)) return false
+    }
 
     // Filtro CATEGORIA
     if (colFilterCategoria && lancamento.plano_conta?.categoria !== colFilterCategoria) return false
@@ -1097,6 +1127,12 @@ export default function LancamentosPage() {
 
     return true
   })
+
+  // Extrair valores únicos de valor_bruto e valor_liquido para os datalists
+  const valoresBrutosUnicos = Array.from(new Set(lancamentos.map(l => l.valor_bruto)))
+    .sort((a, b) => a - b)
+  const valoresLiquidosUnicos = Array.from(new Set(lancamentos.map(l => l.valor_liquido)))
+    .sort((a, b) => a - b)
 
   return (
     <div style={{ padding: '24px', backgroundColor: '#f8fafc', minHeight: '100vh' }}>
@@ -1855,9 +1891,11 @@ export default function LancamentosPage() {
                 </td>
                 {/* Filtro CONTRAPARTE */}
                 <td style={{ padding: '4px 8px' }}>
-                  <select
+                  <input
+                    list="contrapartes-list"
                     value={colFilterContraparte}
                     onChange={(e) => setColFilterContraparte(e.target.value)}
+                    placeholder="Digite..."
                     style={{
                       width: '100%',
                       padding: '4px 6px',
@@ -1865,16 +1903,22 @@ export default function LancamentosPage() {
                       fontWeight: '400',
                       color: '#374151',
                       border: '1px solid #e5e7eb',
-                      borderRadius: '4px',
-                      backgroundColor: 'white',
-                      cursor: 'pointer'
+                      borderRadius: '4px'
                     }}
-                  >
+                  />
+                  <datalist id="contrapartes-list">
                     <option value="">Todas</option>
-                    {contrapartes.map(cp => (
-                      <option key={cp.id} value={cp.id}>{cp.apelido || cp.nome}</option>
-                    ))}
-                  </select>
+                    {contrapartes
+                      .sort((a, b) => {
+                        const nomeA = (a.apelido || a.nome).toLowerCase()
+                        const nomeB = (b.apelido || b.nome).toLowerCase()
+                        return nomeA.localeCompare(nomeB)
+                      })
+                      .map(cp => (
+                        <option key={cp.id} value={cp.apelido || cp.nome} />
+                      ))
+                    }
+                  </datalist>
                 </td>
                 {/* Filtro CATEGORIA */}
                 <td style={{ padding: '4px 8px' }}>
@@ -1903,6 +1947,7 @@ export default function LancamentosPage() {
                 <td style={{ padding: '4px 8px' }}>
                   <input
                     type="text"
+                    list="valores-brutos-list"
                     placeholder="0,00"
                     value={colFilterValorBruto}
                     onChange={(e) => setColFilterValorBruto(formatFilterCurrency(e.target.value))}
@@ -1917,11 +1962,17 @@ export default function LancamentosPage() {
                       textAlign: 'right'
                     }}
                   />
+                  <datalist id="valores-brutos-list">
+                    {valoresBrutosUnicos.map((valor, idx) => (
+                      <option key={idx} value={formatCurrencyBRL(valor).replace('R$', '').trim()} />
+                    ))}
+                  </datalist>
                 </td>
                 {/* Filtro VALOR LÍQUIDO */}
                 <td style={{ padding: '4px 8px' }}>
                   <input
                     type="text"
+                    list="valores-liquidos-list"
                     placeholder="0,00"
                     value={colFilterValorLiquido}
                     onChange={(e) => setColFilterValorLiquido(formatFilterCurrency(e.target.value))}
@@ -1936,6 +1987,11 @@ export default function LancamentosPage() {
                       textAlign: 'right'
                     }}
                   />
+                  <datalist id="valores-liquidos-list">
+                    {valoresLiquidosUnicos.map((valor, idx) => (
+                      <option key={idx} value={formatCurrencyBRL(valor).replace('R$', '').trim()} />
+                    ))}
+                  </datalist>
                 </td>
                 {/* Filtro VENCIMENTO */}
                 <td style={{ padding: '4px 8px' }}>
@@ -2745,7 +2801,7 @@ export default function LancamentosPage() {
                         backgroundColor: 'white',
                         border: '1px solid #e5e7eb',
                         borderRadius: '8px',
-                        maxHeight: '200px',
+                        maxHeight: '300px',
                         overflowY: 'auto',
                         zIndex: 1000,
                         boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
@@ -2765,13 +2821,8 @@ export default function LancamentosPage() {
                             onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'white'}
                           >
                             <div style={{ fontWeight: '500' }}>
-                              {contraparte.apelido || contraparte.nome}
+                              {contraparte.nome}
                             </div>
-                            {contraparte.apelido && (
-                              <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
-                                {contraparte.nome}
-                              </div>
-                            )}
                           </div>
                         ))}
                       </div>
