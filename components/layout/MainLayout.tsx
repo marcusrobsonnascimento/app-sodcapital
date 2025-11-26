@@ -63,6 +63,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
               alt="SodCapital"
               width={160}
               height={48}
+              style={{ width: 'auto', height: 'auto' }}
               priority
             />
           </div>

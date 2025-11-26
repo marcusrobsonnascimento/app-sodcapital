@@ -36,7 +36,7 @@ const menuItems: MenuItem[] = [
   {
     title: 'Dashboard',
     icon: LayoutDashboard,
-    href: '/'
+    href: '/dashboard'
   },
   {
     title: 'Cadastros',
@@ -231,108 +231,106 @@ export default function SideBar() {
   }
 
   return (
-    <>
-      <aside 
+    <aside 
+      style={{
+        width: '280px',
+        height: '100vh',
+        backgroundColor: '#ffffff',
+        borderRight: '1px solid #e5e7eb',
+        display: 'flex',
+        flexDirection: 'column',
+        flexShrink: 0
+      }}
+    >
+      {/* Logo/Header */}
+      <div 
         style={{
-          width: '280px',
-          height: '100vh',
-          backgroundColor: '#ffffff',
-          borderRight: '1px solid #e5e7eb',
-          display: 'flex',
-          flexDirection: 'column',
-          flexShrink: 0
+          padding: '1.5rem',
+          borderBottom: '1px solid #f3f4f6'
         }}
       >
-        {/* Logo/Header */}
-        <div 
-          style={{
-            padding: '1.5rem',
-            borderBottom: '1px solid #f3f4f6'
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '0.25rem' }}>
-            <Image
-              src="/sodcapital-logo.png"
-              alt="SodCapital"
-              width={150}
-              height={45}
-              priority
-            />
-          </div>
-          <p 
-            style={{ 
-              fontSize: '0.75rem',
-              color: '#6b7280',
-              fontWeight: '500',
-              textAlign: 'center'
-            }}
-          >
-            ERP Financeiro
-          </p>
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '0.25rem' }}>
+          <Image
+            src="/sodcapital-logo.png"
+            alt="SodCapital"
+            width={150}
+            height={45}
+            style={{ width: 'auto', height: 'auto' }}
+            priority
+          />
         </div>
-
-        {/* Menu Navigation */}
-        <nav 
-          id="sidebar-nav"
-          style={{
-            flex: '1',
-            overflowY: 'auto',
-            padding: '1rem',
-            scrollBehavior: 'smooth'
-          }}
-        >
-          {menuItems.map(item => renderMenuItem(item))}
-        </nav>
-
-        {/* Footer */}
-        <div 
-          style={{
-            padding: '1rem',
-            borderTop: '1px solid #f3f4f6',
+        <p 
+          style={{ 
+            fontSize: '0.75rem',
+            color: '#6b7280',
+            fontWeight: '500',
             textAlign: 'center'
           }}
         >
-          <p 
-            style={{ 
-              fontSize: '0.6875rem',
-              color: '#9ca3af',
-              fontWeight: '500'
-            }}
-          >
-            © 2025 SodCapital
-          </p>
-        </div>
-      </aside>
+          ERP Financeiro
+        </p>
+      </div>
 
-      <style>{`
-        @keyframes slideDown {
-          from {
-            opacity: 0;
-            transform: translateY(-5px);
+      {/* Menu Navigation */}
+      <nav 
+        id="sidebar-nav"
+        style={{
+          flex: '1',
+          overflowY: 'auto',
+          padding: '1rem',
+          scrollBehavior: 'smooth'
+        }}
+      >
+        <style>{`
+          @keyframes slideDown {
+            from {
+              opacity: 0;
+              transform: translateY(-5px);
+            }
+            to {
+              opacity: 1;
+              transform: translateY(0);
+            }
           }
-          to {
-            opacity: 1;
-            transform: translateY(0);
+
+          #sidebar-nav::-webkit-scrollbar {
+            width: 6px;
           }
-        }
 
-        #sidebar-nav::-webkit-scrollbar {
-          width: 6px;
-        }
+          #sidebar-nav::-webkit-scrollbar-track {
+            background: transparent;
+          }
 
-        #sidebar-nav::-webkit-scrollbar-track {
-          background: transparent;
-        }
+          #sidebar-nav::-webkit-scrollbar-thumb {
+            background: #e5e7eb;
+            border-radius: 3px;
+          }
 
-        #sidebar-nav::-webkit-scrollbar-thumb {
-          background: #e5e7eb;
-          border-radius: 3px;
-        }
+          #sidebar-nav::-webkit-scrollbar-thumb:hover {
+            background: #d1d5db;
+          }
+        `}</style>
+        {menuItems.map(item => renderMenuItem(item))}
+      </nav>
 
-        #sidebar-nav::-webkit-scrollbar-thumb:hover {
-          background: #d1d5db;
-        }
-      `}</style>
-    </>
+      {/* Footer */}
+      <div 
+        style={{
+          padding: '1rem',
+          borderTop: '1px solid #f3f4f6',
+          textAlign: 'center'
+        }}
+      >
+        <p 
+          style={{ 
+            fontSize: '0.6875rem',
+            color: '#9ca3af',
+            fontWeight: '500'
+          }}
+        >
+          © 2025 SodCapital
+        </p>
+      </div>
+    </aside>
   )
 }

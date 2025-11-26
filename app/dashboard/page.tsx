@@ -56,37 +56,76 @@ export default function DashboardPage() {
     try {
       setLoading(true)
 
-      const { data: emp } = await supabase.from('empresas').select('id, nome').eq('ativo', true).order('nome')
+      // Carregar empresas
+      const { data: emp } = await supabase
+        .from('empresas')
+        .select('id, nome')
+        .eq('ativo', true)
+        .order('nome')
       if (emp) setEmpresas(emp)
 
-      const { data: proj } = await supabase.from('projetos').select('id, nome, empresa_id').eq('ativo', true).order('nome')
+      // Carregar projetos
+      const { data: proj } = await supabase
+        .from('projetos')
+        .select('id, nome, empresa_id')
+        .eq('ativo', true)
+        .order('nome')
       if (proj) setProjetos(proj)
 
-      const { data: kp } = await supabase.from('vw_pl_painel').select('*').limit(1).single()
-      if (kp) setKpis(kp)
+      // Carregar KPIs (view pode não existir)
+      const { data: kp, error: kpError } = await supabase
+        .from('vw_pl_painel')
+        .select('*')
+        .limit(1)
+        .maybeSingle()
+      if (!kpError && kp) setKpis(kp)
 
-      const { data: flux } = await supabase.from('vw_fluxo_previsto').select('*').order('data_prevista', { ascending: true }).limit(60)
-      if (flux) setFluxoData(flux)
+      // Carregar Fluxo Previsto (view pode não existir ou ter estrutura diferente)
+      const { data: flux, error: fluxError } = await supabase
+        .from('vw_fluxo_previsto')
+        .select('*')
+        .limit(60)
+      if (!fluxError && flux) setFluxoData(flux)
 
-      const { data: dre } = await supabase.from('vw_dre_ytd').select('*').limit(10)
-      if (dre) setDreData(dre)
+      // Carregar DRE YTD (view pode não existir)
+      const { data: dre, error: dreError } = await supabase
+        .from('vw_dre_ytd')
+        .select('*')
+        .limit(10)
+      if (!dreError && dre) setDreData(dre)
 
-      const { data: empData } = await supabase
+      // Carregar dados de empresas com lançamentos
+      const { data: empData, error: empDataError } = await supabase
         .from('empresas')
-        .select(`id, nome, cnpj, segmento, lancamentos!inner(tipo, valor_bruto)`)
+        .select('id, nome, cnpj, segmento')
         .eq('ativo', true)
 
-      if (empData) {
-        const processed = empData.map(e => {
-          const rec = e.lancamentos.filter((l: any) => l.tipo === 'RECEITA').reduce((s: number, l: any) => s + parseFloat(l.valor_bruto || 0), 0)
-          const desp = e.lancamentos.filter((l: any) => l.tipo === 'DESPESA').reduce((s: number, l: any) => s + parseFloat(l.valor_bruto || 0), 0)
-          return { ...e, receitas_ytd: rec, despesas_ytd: desp, resultado: rec - desp }
-        })
-        setEmpresasData(processed)
+      if (!empDataError && empData) {
+        // Buscar lançamentos separadamente para evitar erro de join
+        const empresasComDados = await Promise.all(
+          empData.map(async (empresa) => {
+            const { data: lancamentos } = await supabase
+              .from('lancamentos')
+              .select('tipo, valor_bruto')
+              .eq('empresa_id', empresa.id)
+
+            // Usando 'Entrada' e 'Saida' conforme o enum do banco
+            const rec = (lancamentos || [])
+              .filter((l: any) => l.tipo === 'Entrada')
+              .reduce((s: number, l: any) => s + parseFloat(l.valor_bruto || 0), 0)
+            
+            const desp = (lancamentos || [])
+              .filter((l: any) => l.tipo === 'Saida')
+              .reduce((s: number, l: any) => s + parseFloat(l.valor_bruto || 0), 0)
+
+            return { ...empresa, receitas_ytd: rec, despesas_ytd: desp, resultado: rec - desp }
+          })
+        )
+        setEmpresasData(empresasComDados.filter(e => e.receitas_ytd > 0 || e.despesas_ytd > 0))
       }
 
     } catch (err) {
-      console.error('Erro:', err)
+      // Erro geral silencioso
     } finally {
       setLoading(false)
     }
@@ -108,10 +147,17 @@ export default function DashboardPage() {
     )
   }
 
-  const fluxoChart = fluxoData.map(i => ({
-    data: new Date(i.data_prevista).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
-    valor: parseFloat(i.valor) || 0
-  }))
+  // Identificar dinamicamente a coluna de data do fluxo
+  const fluxoChart = fluxoData.map(i => {
+    // Tentar diferentes nomes de coluna para data
+    const dataValue = i.data_prevista || i.data_vencimento || i.data || i.mes || ''
+    const valorValue = i.valor || i.valor_bruto || i.total || 0
+    
+    return {
+      data: dataValue ? new Date(dataValue).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : '',
+      valor: parseFloat(valorValue) || 0
+    }
+  }).filter(i => i.data)
 
   const dreChart = dreData.map((i, idx) => ({
     name: (i.categoria || i.subcategoria || 'Outros').substring(0, 20),
@@ -150,13 +196,15 @@ export default function DashboardPage() {
         <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-xl border border-white/20 p-6 mb-6">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
             <div className="group">
-              <label className="flex items-center gap-2 text-sm font-bold text-gray-700 mb-3">
+              <label htmlFor="select-periodo" className="flex items-center gap-2 text-sm font-bold text-gray-700 mb-3">
                 <div className="p-1.5 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg">
                   <Calendar className="h-4 w-4 text-white" />
                 </div>
                 Período
               </label>
               <select 
+                id="select-periodo"
+                name="periodo"
                 value={selectedMes} 
                 onChange={e => setSelectedMes(e.target.value)} 
                 className="w-full px-4 py-3 text-sm font-medium border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 transition-all bg-white hover:border-blue-300"
@@ -169,168 +217,101 @@ export default function DashboardPage() {
               </select>
             </div>
             <div className="group">
-              <label className="flex items-center gap-2 text-sm font-bold text-gray-700 mb-3">
+              <label htmlFor="select-empresa" className="flex items-center gap-2 text-sm font-bold text-gray-700 mb-3">
                 <div className="p-1.5 bg-gradient-to-br from-purple-500 to-pink-600 rounded-lg">
                   <Building2 className="h-4 w-4 text-white" />
                 </div>
                 Empresa
               </label>
               <select 
+                id="select-empresa"
+                name="empresa"
                 value={selectedEmpresa} 
                 onChange={e => setSelectedEmpresa(e.target.value)} 
-                className="w-full px-4 py-3 text-sm font-medium border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-purple-100 focus:border-purple-500 transition-all bg-white hover:border-purple-300"
+                className="w-full px-4 py-3 text-sm font-medium border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 transition-all bg-white hover:border-blue-300"
               >
                 <option value="todas">Todas as Empresas</option>
-                {empresas.map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
+                {empresas.map(e => (
+                  <option key={e.id} value={e.id}>{e.nome}</option>
+                ))}
               </select>
             </div>
             <div className="group">
-              <label className="flex items-center gap-2 text-sm font-bold text-gray-700 mb-3">
+              <label htmlFor="select-projeto" className="flex items-center gap-2 text-sm font-bold text-gray-700 mb-3">
                 <div className="p-1.5 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-lg">
                   <Briefcase className="h-4 w-4 text-white" />
                 </div>
                 Projeto
               </label>
               <select 
+                id="select-projeto"
+                name="projeto"
                 value={selectedProjeto} 
                 onChange={e => setSelectedProjeto(e.target.value)} 
-                className="w-full px-4 py-3 text-sm font-medium border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-emerald-100 focus:border-emerald-500 transition-all bg-white hover:border-emerald-300"
+                className="w-full px-4 py-3 text-sm font-medium border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 transition-all bg-white hover:border-blue-300"
               >
                 <option value="todos">Todos os Projetos</option>
-                {projetos.filter(p => selectedEmpresa === 'todas' || p.empresa_id === selectedEmpresa).map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
+                {projetos
+                  .filter(p => selectedEmpresa === 'todas' || p.empresa_id === selectedEmpresa)
+                  .map(p => (
+                    <option key={p.id} value={p.id}>{p.nome}</option>
+                  ))}
               </select>
             </div>
           </div>
         </div>
 
         {/* KPIs Premium */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
-          <div className="group relative bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl shadow-2xl hover:shadow-3xl transition-all duration-300 p-6 overflow-hidden transform hover:-translate-y-1">
-            <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-16 -mt-16"></div>
-            <div className="absolute bottom-0 left-0 w-24 h-24 bg-white/5 rounded-full -ml-12 -mb-12"></div>
-            <div className="relative z-10">
-              <div className="flex items-start justify-between mb-4">
-                <div className="bg-white/20 backdrop-blur-sm rounded-xl p-3 shadow-lg">
-                  <DollarSign className="h-7 w-7 text-white" />
-                </div>
-                {kpis?.var_pl_d1 && kpis.var_pl_d1 !== 0 && (
-                  <div className="bg-white/20 backdrop-blur-sm px-3 py-1.5 rounded-full flex items-center gap-1.5">
-                    {kpis.var_pl_d1 >= 0 ? <TrendingUp className="h-4 w-4 text-white" /> : <TrendingDown className="h-4 w-4 text-white" />}
-                    <span className="text-white font-bold text-sm">{Math.abs(kpis.var_pl_d1).toFixed(1)}%</span>
-                  </div>
-                )}
-              </div>
-              <h3 className="text-white/80 text-sm font-semibold mb-2">Patrimônio Líquido</h3>
-              <p className="text-white text-3xl font-black mb-1">{formatCurrency(parseFloat(kpis?.pl_aproximado || 0))}</p>
-              <p className="text-white/70 text-xs font-medium">vs. período anterior</p>
-            </div>
-          </div>
-
-          <div className="group relative bg-gradient-to-br from-emerald-500 to-teal-600 rounded-2xl shadow-2xl hover:shadow-3xl transition-all duration-300 p-6 overflow-hidden transform hover:-translate-y-1">
-            <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-16 -mt-16"></div>
-            <div className="absolute bottom-0 left-0 w-24 h-24 bg-white/5 rounded-full -ml-12 -mb-12"></div>
-            <div className="relative z-10">
-              <div className="flex items-start justify-between mb-4">
-                <div className="bg-white/20 backdrop-blur-sm rounded-xl p-3 shadow-lg">
-                  <Wallet className="h-7 w-7 text-white" />
-                </div>
-                {kpis?.var_caixa_d1 && kpis.var_caixa_d1 !== 0 && (
-                  <div className="bg-white/20 backdrop-blur-sm px-3 py-1.5 rounded-full flex items-center gap-1.5">
-                    {kpis.var_caixa_d1 >= 0 ? <TrendingUp className="h-4 w-4 text-white" /> : <TrendingDown className="h-4 w-4 text-white" />}
-                    <span className="text-white font-bold text-sm">{Math.abs(kpis.var_caixa_d1).toFixed(1)}%</span>
-                  </div>
-                )}
-              </div>
-              <h3 className="text-white/80 text-sm font-semibold mb-2">Caixa Consolidado</h3>
-              <p className="text-white text-3xl font-black mb-1">{formatCurrency(parseFloat(kpis?.caixa_total || 0))}</p>
-              <p className="text-white/70 text-xs font-medium">disponível agora</p>
-            </div>
-          </div>
-
-          <div className="group relative bg-gradient-to-br from-violet-500 to-purple-600 rounded-2xl shadow-2xl hover:shadow-3xl transition-all duration-300 p-6 overflow-hidden transform hover:-translate-y-1">
-            <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-16 -mt-16"></div>
-            <div className="absolute bottom-0 left-0 w-24 h-24 bg-white/5 rounded-full -ml-12 -mb-12"></div>
-            <div className="relative z-10">
-              <div className="flex items-start justify-between mb-4">
-                <div className="bg-white/20 backdrop-blur-sm rounded-xl p-3 shadow-lg">
-                  <ArrowUpCircle className="h-7 w-7 text-white" />
-                </div>
-                {kpis?.var_receitas_m1 && kpis.var_receitas_m1 !== 0 && (
-                  <div className="bg-white/20 backdrop-blur-sm px-3 py-1.5 rounded-full flex items-center gap-1.5">
-                    {kpis.var_receitas_m1 >= 0 ? <TrendingUp className="h-4 w-4 text-white" /> : <TrendingDown className="h-4 w-4 text-white" />}
-                    <span className="text-white font-bold text-sm">{Math.abs(kpis.var_receitas_m1).toFixed(1)}%</span>
-                  </div>
-                )}
-              </div>
-              <h3 className="text-white/80 text-sm font-semibold mb-2">Receitas YTD</h3>
-              <p className="text-white text-3xl font-black mb-1">{formatCurrency(parseFloat(kpis?.receitas_ytd || 0))}</p>
-              <p className="text-white/70 text-xs font-medium">acumulado do ano</p>
-            </div>
-          </div>
-
-          <div className="group relative bg-gradient-to-br from-orange-500 to-red-600 rounded-2xl shadow-2xl hover:shadow-3xl transition-all duration-300 p-6 overflow-hidden transform hover:-translate-y-1">
-            <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-16 -mt-16"></div>
-            <div className="absolute bottom-0 left-0 w-24 h-24 bg-white/5 rounded-full -ml-12 -mb-12"></div>
-            <div className="relative z-10">
-              <div className="flex items-start justify-between mb-4">
-                <div className="bg-white/20 backdrop-blur-sm rounded-xl p-3 shadow-lg">
-                  <ArrowDownCircle className="h-7 w-7 text-white" />
-                </div>
-                {kpis?.var_despesas_m1 && kpis.var_despesas_m1 !== 0 && (
-                  <div className="bg-white/20 backdrop-blur-sm px-3 py-1.5 rounded-full flex items-center gap-1.5">
-                    {kpis.var_despesas_m1 >= 0 ? <TrendingUp className="h-4 w-4 text-white" /> : <TrendingDown className="h-4 w-4 text-white" />}
-                    <span className="text-white font-bold text-sm">{Math.abs(kpis.var_despesas_m1).toFixed(1)}%</span>
-                  </div>
-                )}
-              </div>
-              <h3 className="text-white/80 text-sm font-semibold mb-2">Despesas YTD</h3>
-              <p className="text-white text-3xl font-black mb-1">{formatCurrency(Math.abs(parseFloat(kpis?.despesas_ytd || 0)))}</p>
-              <p className="text-white/70 text-xs font-medium">gastos do ano</p>
-            </div>
-          </div>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-5 mb-6">
+          <KpiCard
+            title="Patrimônio Líquido"
+            value={kpis?.patrimonio_liquido || 0}
+            icon={DollarSign}
+            gradient="from-blue-500 to-indigo-600"
+            subtitle="vs. período anterior"
+          />
+          <KpiCard
+            title="Receitas"
+            value={kpis?.receitas_ytd || 0}
+            icon={ArrowUpCircle}
+            gradient="from-emerald-500 to-teal-600"
+            subtitle="acumulado YTD"
+          />
+          <KpiCard
+            title="Despesas"
+            value={kpis?.despesas_ytd || 0}
+            icon={ArrowDownCircle}
+            gradient="from-rose-500 to-pink-600"
+            subtitle="acumulado YTD"
+          />
+          <KpiCard
+            title="Resultado"
+            value={(kpis?.receitas_ytd || 0) - (kpis?.despesas_ytd || 0)}
+            icon={TrendingUp}
+            gradient="from-purple-500 to-violet-600"
+            subtitle="lucro/prejuízo"
+          />
         </div>
 
-        {/* Dias de Caixa Premium */}
-        <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-xl border border-white/20 p-8 mb-6 relative overflow-hidden group hover:shadow-2xl transition-all duration-300">
-          <div className="absolute top-0 right-0 w-64 h-64 bg-gradient-to-br from-blue-100 to-indigo-100 rounded-full opacity-20 -mr-32 -mt-32 group-hover:scale-110 transition-transform duration-500"></div>
-          <div className="relative z-10 flex items-center justify-between">
-            <div className="flex items-center gap-5">
-              <div className="bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl p-5 shadow-2xl">
-                <Clock className="h-10 w-10 text-white" />
-              </div>
-              <div>
-                <h3 className="text-2xl font-black text-gray-900 mb-1">Dias de Caixa</h3>
-                <p className="text-sm text-gray-600 font-medium">Capacidade operacional com saldo atual</p>
-              </div>
-            </div>
-            <div className="text-right">
-              <p className="text-6xl font-black bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent mb-2">
-                {parseInt(kpis?.dias_caixa || 0)}
-              </p>
-              <p className="text-lg text-gray-600 font-bold">dias</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Gráficos Premium */}
+        {/* Gráficos */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
           <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-xl border border-white/20 p-6 hover:shadow-2xl transition-all duration-300">
             <div className="mb-5">
-              <h3 className="text-xl font-black text-gray-900 mb-1">Curva de Liquidez</h3>
-              <p className="text-sm text-gray-600 font-medium">Projeção de caixa dos próximos 60 dias</p>
+              <h3 className="text-xl font-black text-gray-900 mb-1">Fluxo Previsto</h3>
+              <p className="text-sm text-gray-600 font-medium">Projeção de entradas e saídas</p>
             </div>
             {fluxoChart.length > 0 ? (
               <ResponsiveContainer width="100%" height={300}>
                 <AreaChart data={fluxoChart}>
                   <defs>
                     <linearGradient id="colorValor" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.4}/>
-                      <stop offset="95%" stopColor="#6366F1" stopOpacity={0.1}/>
+                      <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor="#3B82F6" stopOpacity={0}/>
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                   <XAxis dataKey="data" fontSize={11} stroke="#6B7280" fontWeight={600} />
-                  <YAxis fontSize={11} stroke="#6B7280" fontWeight={600} tickFormatter={v => `R$ ${(v/1000).toFixed(0)}k`} />
+                  <YAxis fontSize={11} stroke="#6B7280" fontWeight={600} tickFormatter={v => `${(v/1000).toFixed(0)}k`} />
                   <Tooltip 
                     formatter={(v: any) => formatCurrency(v)} 
                     contentStyle={{ 
@@ -391,13 +372,12 @@ export default function DashboardPage() {
               { label: '180 dias', key: 'fluxo_180d', gradient: 'from-emerald-500 to-teal-500' }
             ].map(item => {
               const valor = parseFloat(kpis?.[item.key] || 0)
-              const isPositive = valor >= 0
               return (
                 <div key={item.key} className={`relative rounded-2xl p-6 bg-gradient-to-br ${item.gradient} overflow-hidden group hover:scale-105 transition-transform duration-300 shadow-xl cursor-pointer`}>
                   <div className="absolute top-0 right-0 w-24 h-24 bg-white/10 rounded-full -mr-12 -mt-12"></div>
                   <div className="relative z-10">
                     <p className="text-white/80 text-sm font-bold mb-3">{item.label}</p>
-                    <p className={`text-white text-2xl font-black`}>
+                    <p className="text-white text-2xl font-black">
                       {formatCurrency(valor)}
                     </p>
                   </div>
@@ -486,6 +466,27 @@ export default function DashboardPage() {
             </div>
           )}
         </div>
+      </div>
+    </div>
+  )
+}
+
+function KpiCard({ title, value, icon: Icon, gradient, subtitle }: any) {
+  return (
+    <div className={`relative rounded-2xl p-6 bg-gradient-to-br ${gradient} overflow-hidden group hover:scale-105 transition-transform duration-300 shadow-xl`}>
+      <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-16 -mt-16"></div>
+      <div className="absolute bottom-0 left-0 w-24 h-24 bg-white/5 rounded-full -ml-12 -mb-12"></div>
+      <div className="relative z-10">
+        <div className="flex items-center justify-between mb-4">
+          <div className="bg-white/20 rounded-xl p-3">
+            <Icon className="h-6 w-6 text-white" />
+          </div>
+        </div>
+        <p className="text-white/80 text-sm font-bold mb-1">{title}</p>
+        <p className="text-white text-2xl font-black mb-1">
+          {formatCurrency(value)}
+        </p>
+        <p className="text-white/60 text-xs font-medium">{subtitle}</p>
       </div>
     </div>
   )
