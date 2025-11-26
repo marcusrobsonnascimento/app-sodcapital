@@ -754,8 +754,18 @@ export default function ConciliacaoBancariaPage() {
 
           if (origem === 'LANCAMENTO') {
             insertData.lancamento_id = id
+            // Marcar o movimento correspondente ao lançamento como conciliado
+            await supabase
+              .from('movimentos_bancarios')
+              .update({ conciliado: true })
+              .eq('lancamento_id', id)
           } else {
             insertData.movimento_id = id
+            // Marcar movimento como conciliado
+            await supabase
+              .from('movimentos_bancarios')
+              .update({ conciliado: true })
+              .eq('id', id)
           }
 
           const { error } = await supabase
@@ -780,15 +790,74 @@ export default function ConciliacaoBancariaPage() {
 
   const desvincular = async (conciliacaoId: string) => {
     try {
-      const { error } = await supabase
+      // Buscar a conciliação para saber se tem movimento_id ou lancamento_id
+      const { data: conciliacao } = await supabase
         .from('conciliacoes')
-        .delete()
+        .select('movimento_id, lancamento_id, grupo_conciliacao')
         .eq('id', conciliacaoId)
+        .single()
 
-      if (error) throw error
+      // Se tiver grupo_conciliacao, buscar todos os movimento_ids e lancamento_ids do grupo
+      if (conciliacao?.grupo_conciliacao) {
+        const { data: conciliacoesGrupo } = await supabase
+          .from('conciliacoes')
+          .select('movimento_id, lancamento_id')
+          .eq('grupo_conciliacao', conciliacao.grupo_conciliacao)
+        
+        // Marcar todos os movimentos do grupo como não conciliados
+        if (conciliacoesGrupo) {
+          for (const conc of conciliacoesGrupo) {
+            if (conc.movimento_id) {
+              await supabase
+                .from('movimentos_bancarios')
+                .update({ conciliado: false })
+                .eq('id', conc.movimento_id)
+            }
+            if (conc.lancamento_id) {
+              // Marcar o movimento correspondente ao lançamento como não conciliado
+              await supabase
+                .from('movimentos_bancarios')
+                .update({ conciliado: false })
+                .eq('lancamento_id', conc.lancamento_id)
+            }
+          }
+        }
+
+        // Deletar todas as conciliações do grupo
+        const { error } = await supabase
+          .from('conciliacoes')
+          .delete()
+          .eq('grupo_conciliacao', conciliacao.grupo_conciliacao)
+
+        if (error) throw error
+      } else {
+        // Conciliação individual (sem grupo)
+        if (conciliacao?.movimento_id) {
+          await supabase
+            .from('movimentos_bancarios')
+            .update({ conciliado: false })
+            .eq('id', conciliacao.movimento_id)
+        }
+        if (conciliacao?.lancamento_id) {
+          // Marcar o movimento correspondente ao lançamento como não conciliado
+          await supabase
+            .from('movimentos_bancarios')
+            .update({ conciliado: false })
+            .eq('lancamento_id', conciliacao.lancamento_id)
+        }
+
+        const { error } = await supabase
+          .from('conciliacoes')
+          .delete()
+          .eq('id', conciliacaoId)
+
+        if (error) throw error
+      }
 
       showToast('Conciliação desfeita', 'success')
       await fetchExtratos(contaSelecionada)
+      await fetchLancamentos(contaSelecionada)
+      await fetchMovimentos(contaSelecionada)
       await fetchConciliacoes(contaSelecionada)
     } catch (error: any) {
       showError(`Erro ao desvincular: ${error.message}`)
@@ -799,6 +868,33 @@ export default function ConciliacaoBancariaPage() {
     if (conciliacoes.length === 0) return
 
     try {
+      // Buscar todos os movimento_ids e lancamento_ids das conciliações
+      const { data: conciliacoesComMovimento } = await supabase
+        .from('conciliacoes')
+        .select('movimento_id, lancamento_id')
+        .eq('banco_conta_id', contaSelecionada)
+        .eq('status', 'CONCILIADO')
+
+      // Marcar todos os movimentos como não conciliados
+      if (conciliacoesComMovimento) {
+        for (const conc of conciliacoesComMovimento) {
+          if (conc.movimento_id) {
+            await supabase
+              .from('movimentos_bancarios')
+              .update({ conciliado: false })
+              .eq('id', conc.movimento_id)
+          }
+          if (conc.lancamento_id) {
+            // Marcar o movimento correspondente ao lançamento como não conciliado
+            await supabase
+              .from('movimentos_bancarios')
+              .update({ conciliado: false })
+              .eq('lancamento_id', conc.lancamento_id)
+          }
+        }
+      }
+
+      // Deletar todas as conciliações
       const { error } = await supabase
         .from('conciliacoes')
         .delete()
@@ -809,6 +905,8 @@ export default function ConciliacaoBancariaPage() {
 
       showToast('Todas as conciliações foram desfeitas', 'success')
       await fetchExtratos(contaSelecionada)
+      await fetchLancamentos(contaSelecionada)
+      await fetchMovimentos(contaSelecionada)
       await fetchConciliacoes(contaSelecionada)
     } catch (error: any) {
       showError(`Erro ao desvincular: ${error.message}`)
@@ -842,7 +940,14 @@ export default function ConciliacaoBancariaPage() {
               status: 'CONCILIADO'
             })
 
-          if (!error) matches++
+          if (!error) {
+            // Marcar o movimento correspondente ao lançamento como conciliado
+            await supabase
+              .from('movimentos_bancarios')
+              .update({ conciliado: true })
+              .eq('lancamento_id', lancMatch.id)
+            matches++
+          }
           continue
         }
 
@@ -864,12 +969,21 @@ export default function ConciliacaoBancariaPage() {
               status: 'CONCILIADO'
             })
 
-          if (!error) matches++
+          if (!error) {
+            // Marcar movimento como conciliado
+            await supabase
+              .from('movimentos_bancarios')
+              .update({ conciliado: true })
+              .eq('id', movMatch.id)
+            matches++
+          }
         }
       }
 
       showToast(`Sugestão automática: ${matches} conciliação(ões) realizada(s)`, 'success')
       await fetchExtratos(contaSelecionada)
+      await fetchLancamentos(contaSelecionada)
+      await fetchMovimentos(contaSelecionada)
       await fetchConciliacoes(contaSelecionada)
     } catch (error: any) {
       showError(`Erro na sugestão: ${error.message}`)
