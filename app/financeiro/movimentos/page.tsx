@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
-import { Plus, Pencil, Trash2, Search, DollarSign, TrendingUp, TrendingDown, Calendar, AlertTriangle } from 'lucide-react'
+import { Plus, Pencil, Trash2, Search, DollarSign, TrendingUp, TrendingDown, Calendar, AlertTriangle, RefreshCw } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
@@ -53,12 +53,13 @@ interface Empresa {
   nome: string
 }
 
+// Schema simplificado - validações de negócio estão no backend (constraints)
 const movimentoSchema = z.object({
-  empresa_id: z.string().min(1, 'Empresa é obrigatória'),
-  banco_conta_id: z.string().min(1, 'Conta bancária é obrigatória'),
-  tipo_movimento: z.enum(['ENTRADA', 'SAIDA'], { required_error: 'Tipo de movimento é obrigatório' }),
-  data_movimento: z.string().min(1, 'Data do movimento é obrigatória'),
-  valor: z.string().min(1, 'Valor é obrigatório'),
+  empresa_id: z.string().default(''),
+  banco_conta_id: z.string().default(''),
+  tipo_movimento: z.enum(['ENTRADA', 'SAIDA']).default('ENTRADA'),
+  data_movimento: z.string().default(''),
+  valor: z.string().default(''),
   historico: z.string().optional(),
   documento: z.string().optional()
 })
@@ -70,7 +71,7 @@ export default function MovimentosPage() {
   const [empresas, setEmpresas] = useState<Empresa[]>([])
   const [bancosContas, setBancosContas] = useState<BancoConta[]>([])
   const [bancosContasModal, setBancosContasModal] = useState<BancoConta[]>([])
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const [showModal, setShowModal] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -167,7 +168,7 @@ export default function MovimentosPage() {
     const hoje = new Date().toISOString().split("T")[0]
     setDataInicial(hoje)
     setDataFinal(hoje)
-    loadMovimentos(hoje, hoje)
+    // Não carrega automaticamente - aguarda clique no botão Atualizar
   }, [])
 
   useEffect(() => {
@@ -373,6 +374,123 @@ export default function MovimentosPage() {
     loadMovimentos(dataInicial, dataFinal, currentPage + 1, true)
   }
 
+  // Função para buscar todos os movimentos (sem limite de 1000)
+  const handleAtualizar = async () => {
+    if (!dataInicial || !dataFinal) {
+      showToast('Selecione o período para buscar', 'warning')
+      return
+    }
+
+    setLoading(true)
+    setMovimentos([])
+    
+    try {
+      // Buscar saldo anterior
+      const { data: fechamentos, error: fechError } = await supabase
+        .from("fechamentos_bancarios")
+        .select("saldo_final, data_fechamento")
+        .eq("fechado", true)
+        .lt("data_fechamento", dataInicial)
+        .order("data_fechamento", { ascending: false })
+
+      if (!fechError && fechamentos) {
+        const totalSaldoAnterior = fechamentos.reduce((sum, f) => sum + Number(f.saldo_final), 0)
+        setSaldoAnterior(totalSaldoAnterior)
+        if (fechamentos.length > 0) {
+          setDataFechamentoAnterior(fechamentos[0].data_fechamento)
+        } else {
+          setDataFechamentoAnterior('')
+        }
+      } else {
+        setSaldoAnterior(0)
+        setDataFechamentoAnterior('')
+      }
+
+      // Buscar movimentos em lotes de 1000 para contornar limite do Supabase
+      let allMovimentos: MovimentoBancario[] = []
+      let page = 0
+      const PAGE_LIMIT = 1000
+      let hasMoreData = true
+
+      while (hasMoreData) {
+        const from = page * PAGE_LIMIT
+        const to = from + PAGE_LIMIT - 1
+
+        let query = supabase
+          .from("movimentos_bancarios")
+          .select(`
+            *,
+            bancos_contas!movimentos_bancarios_banco_conta_id_fkey (
+              numero_conta,
+              banco_nome,
+              tipo_conta,
+              empresas!bancos_contas_empresa_id_fkey (nome)
+            )
+          `)
+          .gte("data_movimento", dataInicial)
+          .lte("data_movimento", dataFinal)
+
+        // Aplicar filtros
+        if (empresaFiltro) {
+          query = query.eq('bancos_contas.empresa_id', empresaFiltro)
+        }
+        if (contaFiltro) {
+          query = query.eq('banco_conta_id', contaFiltro)
+        }
+        if (tipoFiltro) {
+          query = query.eq('tipo_movimento', tipoFiltro)
+        }
+
+        const { data, error } = await query
+          .range(from, to)
+          .order("data_movimento", { ascending: false })
+          .order("created_at", { ascending: false })
+
+        if (error) throw error
+
+        // Normalizar dados
+        const normalizedData = (data || []).map(movimento => ({
+          ...movimento,
+          bancos_contas: movimento.bancos_contas ? {
+            ...movimento.bancos_contas,
+            empresas: Array.isArray((movimento.bancos_contas as any).empresas)
+              ? (((movimento.bancos_contas as any).empresas.length > 0 
+                  ? (movimento.bancos_contas as any).empresas[0] 
+                  : null))
+              : (movimento.bancos_contas as any).empresas
+          } : null
+        })) as MovimentoBancario[]
+
+        allMovimentos = [...allMovimentos, ...normalizedData]
+
+        // Verificar se há mais dados
+        if (data && data.length < PAGE_LIMIT) {
+          hasMoreData = false
+        } else {
+          page++
+        }
+
+        // Limite de segurança: máximo 10.000 registros
+        if (allMovimentos.length >= 10000) {
+          showToast('Limite de 10.000 registros atingido. Refine o período.', 'warning')
+          hasMoreData = false
+        }
+      }
+
+      setMovimentos(allMovimentos)
+      setTotalCount(allMovimentos.length)
+      setHasMore(false)
+      setCurrentPage(0)
+
+      showToast(`${allMovimentos.length} movimento(s) carregado(s)`, 'success')
+    } catch (err) {
+      console.error('Erro ao carregar movimentos:', err)
+      showToast('Erro ao carregar movimentos bancários', 'error')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const onSubmit = async (data: MovimentoForm) => {
     try {
       // Verificar se a data está em período fechado
@@ -425,14 +543,39 @@ export default function MovimentosPage() {
         }
         showToast('Movimento criado com sucesso!', 'success')
       }
-      loadMovimentos(dataInicial, dataFinal)
+      handleAtualizar()
       closeModal()
-      loadMovimentos()
     } catch (err: any) {
       console.error('Erro ao salvar movimento:', err)
-      const errorMessage = err.message || 'Erro desconhecido ao salvar movimento'
+      const errorMessage = traduzirErroBanco(err.message || 'Erro desconhecido ao salvar movimento')
       showToast(errorMessage, 'error')
     }
+  }
+
+  // Função para traduzir mensagens de erro do banco para português
+  const traduzirErroBanco = (msg: string): string => {
+    if (msg.includes("null value in column") && msg.includes("banco_conta_id")) {
+      return "Selecione a Conta Bancária"
+    }
+    if (msg.includes("null value in column") && msg.includes("data_movimento")) {
+      return "Informe a Data do Movimento"
+    }
+    if (msg.includes("null value in column") && msg.includes("valor")) {
+      return "Informe o Valor do Movimento"
+    }
+    if (msg.includes("null value in column") && msg.includes("tipo_movimento")) {
+      return "Selecione o Tipo de Movimento"
+    }
+    if (msg.includes("valor") && msg.includes("check")) {
+      return "O valor deve ser maior que zero"
+    }
+    if (msg.includes("violates check constraint")) {
+      return "Dados inválidos. Verifique os campos obrigatórios."
+    }
+    if (msg.includes("violates foreign key constraint")) {
+      return "Referência inválida. Verifique se a conta bancária existe."
+    }
+    return msg
   }
 
 
@@ -494,11 +637,11 @@ export default function MovimentosPage() {
         .delete()
         .eq('id', id)
 
-      loadMovimentos(dataInicial, dataFinal)
+      if (error) throw error
 
+      handleAtualizar()
       showToast('Movimento excluído com sucesso!', 'success')
       setDeleteConfirm({ show: false, id: null })
-      loadMovimentos()
     } catch (err: any) {
       console.error('Erro ao excluir movimento:', err)
       showToast(err?.message || 'Erro ao excluir movimento bancário', 'error')
@@ -588,6 +731,14 @@ export default function MovimentosPage() {
 
   return (
     <div style={{ padding: '24px', maxWidth: '1400px', margin: '0 auto' }}>
+      {/* CSS para animação de spin */}
+      <style>{`
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
+
       {/* Header */}
       <div style={{
         display: 'flex',
@@ -776,9 +927,10 @@ export default function MovimentosPage() {
       }}>
         <div style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-          gap: '16px',
-          marginBottom: '16px'
+          gridTemplateColumns: '1fr 1fr 140px 150px 150px auto',
+          gap: '12px',
+          marginBottom: '16px',
+          alignItems: 'end'
         }}>
           <div>
             <label style={{
@@ -842,7 +994,7 @@ export default function MovimentosPage() {
                 .filter(bc => !empresaFiltro || bc.empresa_id === empresaFiltro)
                 .map(bc => (
                   <option key={bc.id} value={bc.id}>
-                    {bc.banco_nome || 'Banco'} - Ag: {bc.agencia} - Conta: {bc.numero_conta}
+                    {bc.banco_nome || 'Banco'} - Ag: {bc.agencia} - Conta: {bc.numero_conta} ({bc.tipo_conta || 'CC'})
                   </option>
                 ))
               }
@@ -872,11 +1024,11 @@ export default function MovimentosPage() {
                 cursor: 'pointer'
               }}
             >
-              <option value="">Todos os tipos</option>
+              <option value="">Todos</option>
               <option value="ENTRADA">Entrada</option>
               <option value="SAIDA">Saída</option>
-              <option value="TRANSFERENCIA_ENVIADA">Transf. Enviada</option>
-              <option value="TRANSFERENCIA_RECEBIDA">Transf. Recebida</option>
+              <option value="TRANSFERENCIA_ENVIADA">Transf. Env.</option>
+              <option value="TRANSFERENCIA_RECEBIDA">Transf. Rec.</option>
             </select>
           </div>
 
@@ -929,6 +1081,32 @@ export default function MovimentosPage() {
               }}
             />
           </div>
+
+          {/* Botão Atualizar */}
+          <button
+            onClick={handleAtualizar}
+            disabled={loading}
+            style={{
+              padding: '10px 16px',
+              backgroundColor: '#10b981',
+              color: 'white',
+              border: 'none',
+              borderRadius: '8px',
+              fontSize: '14px',
+              fontWeight: '600',
+              cursor: loading ? 'not-allowed' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '6px',
+              opacity: loading ? 0.7 : 1,
+              whiteSpace: 'nowrap',
+              height: '42px'
+            }}
+          >
+            <RefreshCw size={16} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
+            {loading ? 'Aguarde...' : 'Atualizar'}
+          </button>
         </div>
 
         <div style={{ position: 'relative' }}>

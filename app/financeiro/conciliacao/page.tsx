@@ -126,6 +126,22 @@ interface DadosOFX {
   transacoes: TransacaoOFX[]
 }
 
+// ==================== UTILITÁRIOS ====================
+
+// Função para gerar UUID compatível com todos os navegadores
+const generateUUID = (): string => {
+  // Tenta usar crypto.randomUUID() se disponível
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  // Fallback para navegadores mais antigos
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0
+    const v = c === 'x' ? r : (r & 0x3 | 0x8)
+    return v.toString(16)
+  })
+}
+
 // ==================== PARSER OFX ====================
 
 const parseOFX = (conteudo: string): DadosOFX | null => {
@@ -694,40 +710,68 @@ export default function ConciliacaoBancariaPage() {
       return
     }
 
-    if (extratosSelecionados.length !== lancamentosSelecionados.length) {
-      showToast('Selecione a mesma quantidade de itens em ambos os lados', 'warning')
+    // Calcular total dos extratos selecionados
+    const totalExtratos = extratosSelecionados.reduce((acc, id) => {
+      const extrato = extratos.find(e => e.id === id)
+      return acc + Math.abs(extrato?.valor || 0)
+    }, 0)
+
+    // Calcular total dos lançamentos/movimentos selecionados
+    const totalLancamentos = lancamentosSelecionados.reduce((acc, chave) => {
+      const [origem, id] = chave.split(':')
+      if (origem === 'LANCAMENTO') {
+        const lanc = lancamentos.find(l => l.id === id)
+        return acc + Math.abs(lanc?.valor_liquido || 0)
+      } else {
+        const mov = movimentos.find(m => m.id === id)
+        return acc + Math.abs(mov?.valor || 0)
+      }
+    }, 0)
+
+    // Verificar se os valores batem (tolerância de R$ 0,01)
+    const diferencaValor = Math.abs(totalExtratos - totalLancamentos)
+    if (diferencaValor > 0.01) {
+      showToast(`Os valores não conferem. Diferença: ${formatCurrency(diferencaValor)}`, 'warning')
       return
     }
 
     try {
-      for (let i = 0; i < extratosSelecionados.length; i++) {
-        const extratoId = extratosSelecionados[i]
-        const [origem, id] = lancamentosSelecionados[i].split(':')
+      // Gerar um ID de grupo para vincular múltiplos itens
+      const grupoId = generateUUID()
 
-        const insertData: any = {
-          org_id: contaInfo!.org_id,
-          banco_conta_id: contaSelecionada,
-          extrato_id: extratoId,
-          status: 'CONCILIADO'
+      // Inserir conciliação para cada extrato com cada lançamento
+      for (const extratoId of extratosSelecionados) {
+        for (const lancChave of lancamentosSelecionados) {
+          const [origem, id] = lancChave.split(':')
+          
+          const insertData: any = {
+            org_id: contaInfo!.org_id,
+            banco_conta_id: contaSelecionada,
+            extrato_id: extratoId,
+            status: 'CONCILIADO',
+            grupo_conciliacao: grupoId
+          }
+
+          if (origem === 'LANCAMENTO') {
+            insertData.lancamento_id = id
+          } else {
+            insertData.movimento_id = id
+          }
+
+          const { error } = await supabase
+            .from('conciliacoes')
+            .insert(insertData)
+
+          if (error) throw error
         }
-
-        if (origem === 'LANCAMENTO') {
-          insertData.lancamento_id = id
-        } else {
-          insertData.movimento_id = id
-        }
-
-        const { error } = await supabase
-          .from('conciliacoes')
-          .insert(insertData)
-
-        if (error) throw error
       }
 
-      showToast(`${extratosSelecionados.length} conciliação(ões) realizada(s)`, 'success')
+      showToast(`Conciliação realizada: ${extratosSelecionados.length} extrato(s) x ${lancamentosSelecionados.length} lançamento(s)`, 'success')
       setExtratosSelecionados([])
       setLancamentosSelecionados([])
       await fetchExtratos(contaSelecionada)
+      await fetchLancamentos(contaSelecionada)
+      await fetchMovimentos(contaSelecionada)
       await fetchConciliacoes(contaSelecionada)
     } catch (error: any) {
       showError(`Erro ao vincular: ${error.message}`)
@@ -1476,22 +1520,30 @@ export default function ConciliacaoBancariaPage() {
 
           {/* Área de Diferença */}
           <div style={{
-            backgroundColor: diferenca === 0 ? '#f0fdf4' : '#fef2f2',
-            padding: '10px 16px',
+            backgroundColor: Math.abs(diferenca) < 0.01 ? '#f0fdf4' : '#fef2f2',
+            padding: '12px 16px',
             display: 'flex',
             justifyContent: 'center',
             alignItems: 'center',
-            gap: '8px',
+            gap: '16px',
             marginTop: '-1px'
           }}>
+            <span style={{ fontSize: '12px', color: '#64748b' }}>
+              Extratos: {extratosSelecionados.length} item(s) = {formatCurrency(Math.abs(totalExtratosSelecionados))}
+            </span>
+            <span style={{ fontSize: '14px', color: '#94a3b8' }}>|</span>
+            <span style={{ fontSize: '12px', color: '#64748b' }}>
+              Lançamentos: {lancamentosSelecionados.length} item(s) = {formatCurrency(Math.abs(totalLancamentosSelecionados))}
+            </span>
+            <span style={{ fontSize: '14px', color: '#94a3b8' }}>|</span>
             <span style={{
               fontSize: '13px',
               fontWeight: '600',
-              color: diferenca === 0 ? '#166534' : '#991b1b'
+              color: Math.abs(diferenca) < 0.01 ? '#166534' : '#991b1b'
             }}>
-              Diferença: {formatCurrency(diferenca)}
+              Diferença: {formatCurrency(Math.abs(diferenca))}
             </span>
-            {diferenca === 0 && extratosSelecionados.length > 0 && (
+            {Math.abs(diferenca) < 0.01 && extratosSelecionados.length > 0 && lancamentosSelecionados.length > 0 && (
               <CheckCircle2 size={16} color="#16a34a" />
             )}
           </div>
