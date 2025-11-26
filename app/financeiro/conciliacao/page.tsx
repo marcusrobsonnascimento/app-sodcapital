@@ -867,6 +867,7 @@ export default function ConciliacaoBancariaPage() {
   const desvincularTodos = async () => {
     if (conciliacoes.length === 0) return
 
+    setProcessando(true)
     try {
       // Buscar todos os movimento_ids e lancamento_ids das conciliações
       const { data: conciliacoesComMovimento } = await supabase
@@ -910,12 +911,15 @@ export default function ConciliacaoBancariaPage() {
       await fetchConciliacoes(contaSelecionada)
     } catch (error: any) {
       showError(`Erro ao desvincular: ${error.message}`)
+    } finally {
+      setProcessando(false)
     }
   }
 
   const sugestaoAutomatica = async () => {
     if (!contaInfo) return
 
+    setProcessando(true)
     try {
       let matches = 0
       const extratosPendentes = extratos.filter(e => !e.conciliacao || e.conciliacao.status === 'PENDENTE')
@@ -987,6 +991,8 @@ export default function ConciliacaoBancariaPage() {
       await fetchConciliacoes(contaSelecionada)
     } catch (error: any) {
       showError(`Erro na sugestão: ${error.message}`)
+    } finally {
+      setProcessando(false)
     }
   }
 
@@ -1085,6 +1091,14 @@ export default function ConciliacaoBancariaPage() {
 
   return (
     <div style={{ padding: '16px', backgroundColor: '#f1f5f9', minHeight: '100vh' }}>
+      {/* CSS para animação de spin */}
+      <style>{`
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
+
       {/* Cabeçalho */}
       <div style={{
         backgroundColor: 'white',
@@ -1303,43 +1317,45 @@ export default function ConciliacaoBancariaPage() {
               </button>
               <button
                 onClick={desvincularTodos}
-                disabled={conciliacoes.length === 0}
+                disabled={conciliacoes.length === 0 || processando}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: '6px',
                   padding: '6px 12px',
-                  backgroundColor: '#dc2626',
+                  backgroundColor: processando ? '#9ca3af' : '#dc2626',
                   color: 'white',
                   border: 'none',
                   borderRadius: '4px',
                   fontSize: '12px',
                   fontWeight: '600',
-                  cursor: conciliacoes.length > 0 ? 'pointer' : 'not-allowed',
-                  opacity: conciliacoes.length > 0 ? 1 : 0.5
+                  cursor: conciliacoes.length > 0 && !processando ? 'pointer' : 'not-allowed',
+                  opacity: conciliacoes.length > 0 && !processando ? 1 : 0.5
                 }}
               >
-                <Link2Off size={14} />
-                Desvincular Todos
+                <Link2Off size={14} style={{ animation: processando ? 'spin 1s linear infinite' : 'none' }} />
+                {processando ? 'Processando...' : 'Desvincular Todos'}
               </button>
               <button
                 onClick={sugestaoAutomatica}
+                disabled={processando}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: '6px',
                   padding: '6px 12px',
-                  backgroundColor: '#eab308',
-                  color: '#1e293b',
+                  backgroundColor: processando ? '#9ca3af' : '#eab308',
+                  color: processando ? 'white' : '#1e293b',
                   border: 'none',
                   borderRadius: '4px',
                   fontSize: '12px',
                   fontWeight: '600',
-                  cursor: 'pointer'
+                  cursor: processando ? 'not-allowed' : 'pointer',
+                  opacity: processando ? 0.7 : 1
                 }}
               >
-                <Lightbulb size={14} />
-                Sugestão
+                <Lightbulb size={14} style={{ animation: processando ? 'spin 1s linear infinite' : 'none' }} />
+                {processando ? 'Processando...' : 'Sugestão'}
               </button>
             </div>
 

@@ -26,6 +26,7 @@ interface Movimento {
   valor: number
   historico: string
   documento: string
+  conciliado: boolean | null
   saldo_acumulado: number
   transferencia_id?: string
   conta_origem?: {
@@ -281,6 +282,7 @@ export default function ExtratoContaPage() {
           valor: Number(mov.valor),
           historico: mov.historico || '',
           documento: mov.documento || '',
+          conciliado: mov.conciliado,
           saldo_acumulado: saldoAcumulado,
           transferencia_id: mov.transferencia_id,
           conta_origem: transfData?.origem,
@@ -362,18 +364,19 @@ export default function ExtratoContaPage() {
     csv += `Agência:,${contaInfo?.agencia || ''}\n`
     csv += `Conta:,${contaInfo?.numero_conta || ''}\n`
     csv += `Período:,${formatDate(dataInicial)} a ${formatDate(dataFinal)}\n\n`
-    csv += 'Data,Tipo,Histórico,Documento,Débito,Crédito,Saldo\n'
+    csv += 'Data,Tipo,Histórico,Documento,Conciliado,Débito,Crédito,Saldo\n'
 
     // Adicionar saldo anterior
     if (saldoAnterior.data) {
-      csv += `${formatDate(saldoAnterior.data)},Saldo Anterior,,,,,${formatCurrency(saldoAnterior.valor)}\n`
+      csv += `${formatDate(saldoAnterior.data)},Saldo Anterior,,,,,,${formatCurrency(saldoAnterior.valor)}\n`
     }
 
     // Adicionar movimentos
     movimentos.forEach(mov => {
       const isDebito = mov.tipo_movimento === 'SAIDA' || mov.tipo_movimento === 'TRANSFERENCIA_ENVIADA'
       const historicoCompleto = getHistoricoCompleto(mov).replace(/,/g, ';').replace(/\n/g, ' ')
-      csv += `${formatDate(mov.data_movimento)},${getTipoMovimentoText(mov.tipo_movimento)},${historicoCompleto},${mov.documento || ''},`
+      const conciliadoText = mov.conciliado === true ? 'Sim' : 'Não'
+      csv += `${formatDate(mov.data_movimento)},${getTipoMovimentoText(mov.tipo_movimento)},${historicoCompleto},${mov.documento || ''},${conciliadoText},`
       csv += `${isDebito ? formatCurrency(mov.valor) : ''},${!isDebito ? formatCurrency(mov.valor) : ''},${formatCurrency(mov.saldo_acumulado)}\n`
     })
 
@@ -399,7 +402,7 @@ export default function ExtratoContaPage() {
     }
 
     // Criar janela de impressão
-    const printWindow = window.open('', '', 'width=800,height=600')
+    const printWindow = window.open('', '', 'width=1100,height=600')
     if (!printWindow) {
       setValidationModal({ 
         show: true, 
@@ -415,23 +418,30 @@ export default function ExtratoContaPage() {
         <meta charset="utf-8">
         <title>Extrato de Conta</title>
         <style>
+          @page { 
+            size: landscape; 
+            margin: 10mm;
+          }
           body { font-family: Arial, sans-serif; padding: 20px; }
           h1 { text-align: center; color: #1555D6; font-size: 18px; margin-bottom: 20px; }
           .info { margin-bottom: 20px; font-size: 12px; }
           .info p { margin: 4px 0; }
-          table { width: 100%; border-collapse: collapse; font-size: 11px; }
-          th { background-color: #1555D6; color: white; padding: 8px; text-align: left; font-weight: 600; }
-          td { padding: 8px; border-bottom: 1px solid #e5e7eb; }
-          th:nth-child(5), td:nth-child(5),
+          table { width: 100%; border-collapse: collapse; font-size: 10px; }
+          th { background-color: #1555D6; color: white; padding: 6px; text-align: left; font-weight: 600; }
+          td { padding: 6px; border-bottom: 1px solid #e5e7eb; }
           th:nth-child(6), td:nth-child(6),
-          th:nth-child(7), td:nth-child(7) { white-space: nowrap; }
+          th:nth-child(7), td:nth-child(7),
+          th:nth-child(8), td:nth-child(8) { white-space: nowrap; }
           .saldo-anterior { background-color: #f9fafb; font-weight: 600; }
           .right { text-align: right; }
+          .center { text-align: center; }
           .debito { color: #dc2626; }
           .credito { color: #059669; }
           .saldo { font-weight: 700; color: #1555D6; }
+          .conciliado-sim { color: #059669; font-weight: 600; }
+          .conciliado-nao { color: #9ca3af; }
           @media print {
-            body { padding: 10px; }
+            body { padding: 5px; }
           }
         </style>
       </head>
@@ -450,6 +460,7 @@ export default function ExtratoContaPage() {
               <th>Tipo</th>
               <th>Histórico</th>
               <th>Documento</th>
+              <th class="center">Conciliado</th>
               <th class="right">Débito</th>
               <th class="right">Crédito</th>
               <th class="right">Saldo</th>
@@ -463,7 +474,7 @@ export default function ExtratoContaPage() {
       html += `
         <tr class="saldo-anterior">
           <td>${formatDate(saldoAnterior.data)}</td>
-          <td colspan="4">Saldo Anterior</td>
+          <td colspan="5">Saldo Anterior</td>
           <td class="right">-</td>
           <td class="right saldo">${formatCurrency(saldoAnterior.valor)}</td>
         </tr>
@@ -474,12 +485,15 @@ export default function ExtratoContaPage() {
     movimentos.forEach(mov => {
       const isDebito = mov.tipo_movimento === 'SAIDA' || mov.tipo_movimento === 'TRANSFERENCIA_ENVIADA'
       const historicoCompleto = getHistoricoCompleto(mov)
+      const conciliadoText = mov.conciliado === true ? 'Sim' : 'Não'
+      const conciliadoClass = mov.conciliado === true ? 'conciliado-sim' : 'conciliado-nao'
       html += `
         <tr>
           <td>${formatDate(mov.data_movimento)}</td>
           <td>${getTipoMovimentoText(mov.tipo_movimento)}</td>
           <td>${historicoCompleto}</td>
           <td>${mov.documento || '-'}</td>
+          <td class="center ${conciliadoClass}">${conciliadoText}</td>
           <td class="right debito">${isDebito ? formatCurrency(mov.valor) : '-'}</td>
           <td class="right credito">${!isDebito ? formatCurrency(mov.valor) : '-'}</td>
           <td class="right saldo">${formatCurrency(mov.saldo_acumulado)}</td>
@@ -886,6 +900,17 @@ export default function ExtratoContaPage() {
                   </th>
                   <th style={{
                     padding: '16px',
+                    textAlign: 'center',
+                    fontSize: '12px',
+                    fontWeight: '600',
+                    color: '#6b7280',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em'
+                  }}>
+                    Conciliado
+                  </th>
+                  <th style={{
+                    padding: '16px',
                     textAlign: 'right',
                     fontSize: '12px',
                     fontWeight: '600',
@@ -932,7 +957,7 @@ export default function ExtratoContaPage() {
                     <td style={{ padding: '16px', fontSize: '14px', color: '#374151', fontWeight: '600' }}>
                       {formatDate(saldoAnterior.data)}
                     </td>
-                    <td colSpan={4} style={{ padding: '16px', fontSize: '14px', color: '#374151', fontWeight: '600' }}>
+                    <td colSpan={5} style={{ padding: '16px', fontSize: '14px', color: '#374151', fontWeight: '600' }}>
                       Saldo Anterior
                     </td>
                     <td style={{ padding: '16px', textAlign: 'right', fontSize: '14px', fontWeight: '700', color: '#6366f1', whiteSpace: 'nowrap' }}>
@@ -963,6 +988,15 @@ export default function ExtratoContaPage() {
                       </td>
                       <td style={{ padding: '16px', fontSize: '14px', color: '#6b7280' }}>
                         {movimento.documento || '-'}
+                      </td>
+                      <td style={{
+                        padding: '16px',
+                        textAlign: 'center',
+                        fontSize: '14px',
+                        fontWeight: '600',
+                        color: movimento.conciliado === true ? '#059669' : '#9ca3af'
+                      }}>
+                        {movimento.conciliado === true ? 'Sim' : 'Não'}
                       </td>
                       <td style={{
                         padding: '16px',
