@@ -46,6 +46,9 @@ interface Mutuo {
   para_empresa_id: string | null;
   contraparte_pf_id: string | null;
   principal: number;
+  tarifa_bancaria: number;
+  tarifa_registro: number;
+  outras_despesas: number;
   indice: IndiceType;
   spread_anual: number;
   carencia_meses: number;
@@ -80,47 +83,41 @@ interface Parcela {
 // ZOD SCHEMAS
 // ============================================================================
 
-const mutuoSchema = z
-  .object({
-    de_empresa_id: z.string().min(1, "Empresa devedora é obrigatória"),
-    para_empresa_id: z.string().optional(),
-    contraparte_pf_id: z.string().optional(),
-    principal: z.number().min(0.01, "Principal deve ser maior que zero"),
-    indice: z.enum(["CDI", "IPCA", "SELIC", "DI", "IGP-M", "OUTRO"]),
-    spread_anual: z.number().min(0, "Spread não pode ser negativo"),
-    carencia_meses: z.number().int().min(0, "Carência não pode ser negativa"),
-    qtd_parcelas: z.number().int().min(1, "Quantidade mínima é 1 parcela").optional(),
-    periodicidade: z.string().default("MENSAL"),
-    data_inicio: z.string().min(1, "Data de início é obrigatória"),
-    data_fim: z.string().optional(),
-    multa_percentual: z.number().min(0).default(0),
-    mora_percentual: z.number().min(0).default(0),
-    iof_percentual: z.number().min(0).default(0.38),
-    iof_mensal_percentual: z.number().min(0).default(0.0082),
-    tipo_amortizacao: z.enum(["PRICE", "SAC"]).default("PRICE"),
-    contrato_numero: z.string().optional(),
-    observacoes: z.string().optional(),
-  })
-  .refine(
-    (data) => {
-      return data.para_empresa_id || data.contraparte_pf_id;
-    },
-    {
-      message: "Selecione a empresa credora OU a contraparte pessoa física",
-      path: ["para_empresa_id"],
-    },
-  );
+// Schema simplificado - validações de negócio estão no backend (constraints e triggers)
+const mutuoSchema = z.object({
+  de_empresa_id: z.string().optional(),
+  para_empresa_id: z.string().optional(),
+  contraparte_pf_id: z.string().optional(),
+  principal: z.number().default(0),
+  tarifa_bancaria: z.number().default(0),
+  tarifa_registro: z.number().default(0),
+  outras_despesas: z.number().default(0),
+  indice: z.enum(["CDI", "IPCA", "SELIC", "DI", "IGP-M", "OUTRO"]),
+  spread_anual: z.number().default(0),
+  carencia_meses: z.number().int().default(0),
+  qtd_parcelas: z.number().int().optional(),
+  periodicidade: z.string().default("MENSAL"),
+  data_inicio: z.string().default(""),
+  data_fim: z.string().optional(),
+  multa_percentual: z.number().default(0),
+  mora_percentual: z.number().default(0),
+  iof_percentual: z.number().default(0.38),
+  iof_mensal_percentual: z.number().default(0.0082),
+  tipo_amortizacao: z.enum(["PRICE", "SAC"]).default("PRICE"),
+  contrato_numero: z.string().optional(),
+  observacoes: z.string().optional(),
+});
 
 const gerarParcelasSchema = z.object({
-  qtd_parcelas: z.number().int().min(1, "Quantidade mínima é 1 parcela"),
-  carencia_meses: z.number().int().min(0, "Carência não pode ser negativa"),
+  qtd_parcelas: z.number().int().default(12),
+  carencia_meses: z.number().int().default(0),
   tipo_amortizacao: z.enum(["PRICE", "SAC"]),
-  iof_percentual: z.number().min(0).default(0),
+  iof_percentual: z.number().default(0),
   substituir_futuras: z.boolean().default(false),
 });
 
 const liquidarParcelaSchema = z.object({
-  data_pagamento: z.string().min(1, "Data de pagamento é obrigatória"),
+  data_pagamento: z.string().default(""),
 });
 
 type MutuoForm = z.infer<typeof mutuoSchema>;
@@ -369,7 +366,9 @@ async function createMutuoAction(data: MutuoForm) {
     if (error) throw error;
     return { success: true, data: mutuo };
   } catch (error: any) {
-    return { success: false, error: error.message };
+    // Traduzir mensagens de erro do banco para português
+    const errorMessage = traduzirErroBanco(error.message);
+    return { success: false, error: errorMessage };
   }
 }
 
@@ -380,8 +379,47 @@ async function updateMutuoAction(id: string, data: MutuoForm) {
     if (error) throw error;
     return { success: true };
   } catch (error: any) {
-    return { success: false, error: error.message };
+    const errorMessage = traduzirErroBanco(error.message);
+    return { success: false, error: errorMessage };
   }
+}
+
+// Função para traduzir mensagens de erro do banco
+function traduzirErroBanco(msg: string): string {
+  if (msg.includes("mutuos_principal_check")) {
+    return "O valor do Principal deve ser maior que zero";
+  }
+  if (msg.includes("mutuos_spread_check")) {
+    return "O Spread não pode ser negativo";
+  }
+  if (msg.includes("mutuos_carencia_check")) {
+    return "A Carência não pode ser negativa";
+  }
+  if (msg.includes("mutuos_tarifa_bancaria_check")) {
+    return "A Tarifa Bancária não pode ser negativa";
+  }
+  if (msg.includes("mutuos_tarifa_registro_check")) {
+    return "A Tarifa de Registro não pode ser negativa";
+  }
+  if (msg.includes("mutuos_outras_despesas_check")) {
+    return "Outras Despesas não pode ser negativo";
+  }
+  if (msg.includes("mutuos_multa_check")) {
+    return "A Multa não pode ser negativa";
+  }
+  if (msg.includes("mutuos_mora_check")) {
+    return "A Mora não pode ser negativa";
+  }
+  if (msg.includes("validar_credora_mutuo") || msg.includes("empresa credora ou contraparte")) {
+    return "Informe a Empresa Credora OU a Contraparte Pessoa Física";
+  }
+  if (msg.includes("null value in column") && msg.includes("data_inicio")) {
+    return "A Data de Início é obrigatória";
+  }
+  if (msg.includes("null value in column") && msg.includes("de_empresa_id")) {
+    return "A Empresa Devedora é obrigatória";
+  }
+  return msg;
 }
 
 async function deleteMutuoAction(id: string) {
@@ -521,6 +559,9 @@ export default function MutuosPage() {
   const [filtroIndice, setFiltroIndice] = useState("");
 
   const [principalFormatado, setPrincipalFormatado] = useState("");
+  const [tarifaBancariaFormatada, setTarifaBancariaFormatada] = useState("");
+  const [tarifaRegistroFormatada, setTarifaRegistroFormatada] = useState("");
+  const [outrasDespesasFormatada, setOutrasDespesasFormatada] = useState("");
   const [spreadFormatado, setSpreadFormatado] = useState("");
   const [multaFormatada, setMultaFormatada] = useState("");
   const [moraFormatada, setMoraFormatada] = useState("");
@@ -532,6 +573,7 @@ export default function MutuosPage() {
   const [simulacaoParcelas, setSimulacaoParcelas] = useState<Parcela[]>([]);
   const [simulacaoResumo, setSimulacaoResumo] = useState({
     totalPrincipal: 0,
+    totalTarifas: 0,
     totalJuros: 0,
     totalIOF: 0,
     totalGeral: 0,
@@ -552,6 +594,9 @@ export default function MutuosPage() {
     resolver: zodResolver(mutuoSchema),
     defaultValues: {
       principal: 0,
+      tarifa_bancaria: 0,
+      tarifa_registro: 0,
+      outras_despesas: 0,
       spread_anual: 0,
       carencia_meses: 0,
       periodicidade: "MENSAL",
@@ -587,19 +632,29 @@ export default function MutuosPage() {
     const formData = mutuoForm.getValues();
     
     if (!formData.principal || formData.principal <= 0) {
-      showToast("Informe o valor do Principal", "error");
+      showToast("Informe o valor do Principal", "warning");
+      return;
+    }
+    if (!formData.spread_anual || formData.spread_anual <= 0) {
+      showToast("Informe o Spread a.a. (%)", "warning");
       return;
     }
     if (!formData.qtd_parcelas || formData.qtd_parcelas < 1) {
-      showToast("Informe a quantidade de parcelas", "error");
+      showToast("Informe a quantidade de parcelas", "warning");
       return;
     }
     if (!formData.data_inicio) {
-      showToast("Informe a data de início", "error");
+      showToast("Informe a data de início", "warning");
       return;
     }
 
+    // Calcular valor total financiado (principal + tarifas + despesas)
     const principal = formData.principal;
+    const tarifaBancaria = formData.tarifa_bancaria || 0;
+    const tarifaRegistro = formData.tarifa_registro || 0;
+    const outrasDespesas = formData.outras_despesas || 0;
+    const valorTotalFinanciado = principal + tarifaBancaria + tarifaRegistro + outrasDespesas;
+    
     const spreadAnual = formData.spread_anual || 0;
     const qtdParcelas = formData.qtd_parcelas;
     const carenciaMeses = formData.carencia_meses || 0;
@@ -608,19 +663,19 @@ export default function MutuosPage() {
     const tipoAmortizacao = formData.tipo_amortizacao || "PRICE";
     const dataInicio = formData.data_inicio;
 
-    // Calcular IOF total (IOF fixo + IOF mensal * prazo)
+    // Calcular IOF total (IOF fixo + IOF mensal * prazo) - sobre o valor total financiado
     const iofTotal = iofPercentual + (iofMensalPercentual * qtdParcelas);
-    const valorIOFTotal = principal * (iofTotal / 100);
+    const valorIOFTotal = valorTotalFinanciado * (iofTotal / 100);
     
     // IOF por parcela (distribuído igualmente)
     const iofPorParcela = valorIOFTotal / qtdParcelas;
 
-    // Calcular parcelas
+    // Calcular parcelas usando o valor total financiado
     let parcelasCalculadas: Parcela[];
     
     if (tipoAmortizacao === "PRICE") {
       parcelasCalculadas = calcularParcelasPRICE(
-        principal,
+        valorTotalFinanciado,
         spreadAnual,
         qtdParcelas,
         carenciaMeses,
@@ -629,7 +684,7 @@ export default function MutuosPage() {
       );
     } else {
       parcelasCalculadas = calcularParcelasSAC(
-        principal,
+        valorTotalFinanciado,
         spreadAnual,
         qtdParcelas,
         carenciaMeses,
@@ -648,6 +703,7 @@ export default function MutuosPage() {
     const totalPrincipal = parcelasCalculadas.reduce((acc, p) => acc + p.valor_principal, 0);
     const totalJuros = parcelasCalculadas.reduce((acc, p) => acc + p.valor_juros, 0);
     const totalIOF = parcelasCalculadas.reduce((acc, p) => acc + p.valor_iof, 0);
+    const totalTarifas = tarifaBancaria + tarifaRegistro + outrasDespesas;
     const totalGeral = totalPrincipal + totalJuros + totalIOF;
     
     // Valor médio da parcela (para PRICE será sempre igual, para SAC varia)
@@ -657,7 +713,8 @@ export default function MutuosPage() {
 
     setSimulacaoParcelas(parcelasCalculadas);
     setSimulacaoResumo({
-      totalPrincipal,
+      totalPrincipal: principal,
+      totalTarifas,
       totalJuros,
       totalIOF,
       totalGeral,
@@ -992,6 +1049,9 @@ export default function MutuosPage() {
   const openMutuoModal = () => {
     setEditingMutuoId(null);
     setPrincipalFormatado("");
+    setTarifaBancariaFormatada("");
+    setTarifaRegistroFormatada("");
+    setOutrasDespesasFormatada("");
     setSpreadFormatado("");
     setMultaFormatada("");
     setMoraFormatada("");
@@ -1004,6 +1064,9 @@ export default function MutuosPage() {
       para_empresa_id: "",
       contraparte_pf_id: "",
       principal: 0,
+      tarifa_bancaria: 0,
+      tarifa_registro: 0,
+      outras_despesas: 0,
       spread_anual: 0,
       carencia_meses: 0,
       qtd_parcelas: undefined,
@@ -1033,6 +1096,9 @@ export default function MutuosPage() {
     setEditingMutuoId(mutuo.id);
     
     setPrincipalFormatado(formatBRL(mutuo.principal));
+    setTarifaBancariaFormatada(formatBRL(mutuo.tarifa_bancaria || 0));
+    setTarifaRegistroFormatada(formatBRL(mutuo.tarifa_registro || 0));
+    setOutrasDespesasFormatada(formatBRL(mutuo.outras_despesas || 0));
     setSpreadFormatado(formatBRL(mutuo.spread_anual));
     setMultaFormatada(formatBRL(mutuo.multa_percentual));
     setMoraFormatada(formatBRL(mutuo.mora_percentual));
@@ -1042,6 +1108,9 @@ export default function MutuosPage() {
       para_empresa_id: mutuo.para_empresa_id || "",
       contraparte_pf_id: mutuo.contraparte_pf_id || "",
       principal: mutuo.principal,
+      tarifa_bancaria: mutuo.tarifa_bancaria || 0,
+      tarifa_registro: mutuo.tarifa_registro || 0,
+      outras_despesas: mutuo.outras_despesas || 0,
       spread_anual: mutuo.spread_anual,
       carencia_meses: mutuo.carencia_meses,
       qtd_parcelas: undefined,
@@ -2065,6 +2134,139 @@ export default function MutuosPage() {
                   </div>
                 </div>
 
+                {/* Tarifas e Despesas */}
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr 1fr",
+                    gap: "12px",
+                  }}
+                >
+                  <div>
+                    <label
+                      style={{
+                        display: "block",
+                        fontSize: "14px",
+                        fontWeight: "500",
+                        color: "#374151",
+                        marginBottom: "6px",
+                      }}
+                    >
+                      Tarifa Bancária (R$)
+                    </label>
+                    <input
+                      type="text"
+                      value={tarifaBancariaFormatada}
+                      onChange={(e) => {
+                        const formatted = formatCurrencyBRLInput(e.target.value);
+                        setTarifaBancariaFormatada(formatted);
+                        mutuoForm.setValue("tarifa_bancaria", parseBRL(formatted));
+                      }}
+                      style={{
+                        width: "100%",
+                        padding: "12px",
+                        border: "1px solid #e5e7eb",
+                        borderRadius: "8px",
+                        fontSize: "14px",
+                        outline: "none",
+                        textAlign: "right",
+                      }}
+                      placeholder="0,00"
+                    />
+                  </div>
+
+                  <div>
+                    <label
+                      style={{
+                        display: "block",
+                        fontSize: "14px",
+                        fontWeight: "500",
+                        color: "#374151",
+                        marginBottom: "6px",
+                      }}
+                    >
+                      Tarifa de Registro (R$)
+                    </label>
+                    <input
+                      type="text"
+                      value={tarifaRegistroFormatada}
+                      onChange={(e) => {
+                        const formatted = formatCurrencyBRLInput(e.target.value);
+                        setTarifaRegistroFormatada(formatted);
+                        mutuoForm.setValue("tarifa_registro", parseBRL(formatted));
+                      }}
+                      style={{
+                        width: "100%",
+                        padding: "12px",
+                        border: "1px solid #e5e7eb",
+                        borderRadius: "8px",
+                        fontSize: "14px",
+                        outline: "none",
+                        textAlign: "right",
+                      }}
+                      placeholder="0,00"
+                    />
+                  </div>
+
+                  <div>
+                    <label
+                      style={{
+                        display: "block",
+                        fontSize: "14px",
+                        fontWeight: "500",
+                        color: "#374151",
+                        marginBottom: "6px",
+                      }}
+                    >
+                      Outras Despesas (R$)
+                    </label>
+                    <input
+                      type="text"
+                      value={outrasDespesasFormatada}
+                      onChange={(e) => {
+                        const formatted = formatCurrencyBRLInput(e.target.value);
+                        setOutrasDespesasFormatada(formatted);
+                        mutuoForm.setValue("outras_despesas", parseBRL(formatted));
+                      }}
+                      style={{
+                        width: "100%",
+                        padding: "12px",
+                        border: "1px solid #e5e7eb",
+                        borderRadius: "8px",
+                        fontSize: "14px",
+                        outline: "none",
+                        textAlign: "right",
+                      }}
+                      placeholder="0,00"
+                    />
+                  </div>
+                </div>
+
+                {/* Valor Total Financiado (calculado) */}
+                <div
+                  style={{
+                    padding: "12px 16px",
+                    backgroundColor: "#f0fdf4",
+                    borderRadius: "8px",
+                    border: "1px solid #86efac",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                  }}
+                >
+                  <span style={{ fontSize: "14px", fontWeight: "500", color: "#166534" }}>
+                    Valor Total Financiado:
+                  </span>
+                  <span style={{ fontSize: "16px", fontWeight: "700", color: "#166534" }}>
+                    {formatBRL(
+                      (mutuoForm.watch("principal") || 0) +
+                      (mutuoForm.watch("tarifa_bancaria") || 0) +
+                      (mutuoForm.watch("tarifa_registro") || 0) +
+                      (mutuoForm.watch("outras_despesas") || 0)
+                    )}
+                  </span>
+                </div>
+
                 {/* Carência, Quantidade de Parcelas e Periodicidade */}
                 <div
                   style={{
@@ -2459,83 +2661,98 @@ export default function MutuosPage() {
                     <div
                       style={{
                         display: "grid",
-                        gridTemplateColumns: "repeat(5, 1fr)",
-                        gap: "12px",
+                        gridTemplateColumns: "repeat(6, 1fr)",
+                        gap: "10px",
                         marginBottom: "16px",
                       }}
                     >
                       <div
                         style={{
                           backgroundColor: "white",
-                          padding: "12px",
+                          padding: "10px",
                           borderRadius: "8px",
                           textAlign: "center",
                         }}
                       >
-                        <p style={{ fontSize: "11px", color: "#6b7280", marginBottom: "4px" }}>
+                        <p style={{ fontSize: "10px", color: "#6b7280", marginBottom: "4px" }}>
                           Principal
                         </p>
-                        <p style={{ fontSize: "16px", fontWeight: "700", color: "#1f2937" }}>
+                        <p style={{ fontSize: "14px", fontWeight: "700", color: "#1f2937" }}>
                           {formatBRL(simulacaoResumo.totalPrincipal)}
                         </p>
                       </div>
                       <div
                         style={{
                           backgroundColor: "white",
-                          padding: "12px",
+                          padding: "10px",
                           borderRadius: "8px",
                           textAlign: "center",
                         }}
                       >
-                        <p style={{ fontSize: "11px", color: "#6b7280", marginBottom: "4px" }}>
-                          Total Juros
+                        <p style={{ fontSize: "10px", color: "#6b7280", marginBottom: "4px" }}>
+                          Tarifas
                         </p>
-                        <p style={{ fontSize: "16px", fontWeight: "700", color: "#f59e0b" }}>
+                        <p style={{ fontSize: "14px", fontWeight: "700", color: "#8b5cf6" }}>
+                          {formatBRL(simulacaoResumo.totalTarifas)}
+                        </p>
+                      </div>
+                      <div
+                        style={{
+                          backgroundColor: "white",
+                          padding: "10px",
+                          borderRadius: "8px",
+                          textAlign: "center",
+                        }}
+                      >
+                        <p style={{ fontSize: "10px", color: "#6b7280", marginBottom: "4px" }}>
+                          Juros
+                        </p>
+                        <p style={{ fontSize: "14px", fontWeight: "700", color: "#f59e0b" }}>
                           {formatBRL(simulacaoResumo.totalJuros)}
                         </p>
                       </div>
                       <div
                         style={{
                           backgroundColor: "white",
-                          padding: "12px",
+                          padding: "10px",
                           borderRadius: "8px",
                           textAlign: "center",
                         }}
                       >
-                        <p style={{ fontSize: "11px", color: "#6b7280", marginBottom: "4px" }}>
-                          IOF Total
+                        <p style={{ fontSize: "10px", color: "#6b7280", marginBottom: "4px" }}>
+                          IOF
                         </p>
-                        <p style={{ fontSize: "16px", fontWeight: "700", color: "#ef4444" }}>
+                        <p style={{ fontSize: "14px", fontWeight: "700", color: "#ef4444" }}>
                           {formatBRL(simulacaoResumo.totalIOF)}
                         </p>
                       </div>
                       <div
                         style={{
                           backgroundColor: "white",
-                          padding: "12px",
+                          padding: "10px",
                           borderRadius: "8px",
                           textAlign: "center",
                         }}
                       >
-                        <p style={{ fontSize: "11px", color: "#6b7280", marginBottom: "4px" }}>
+                        <p style={{ fontSize: "10px", color: "#6b7280", marginBottom: "4px" }}>
                           Total Geral
                         </p>
-                        <p style={{ fontSize: "16px", fontWeight: "700", color: "#166534" }}>
+                        <p style={{ fontSize: "14px", fontWeight: "700", color: "#166534" }}>
                           {formatBRL(simulacaoResumo.totalGeral)}
                         </p>
                       </div>
                       <div
                         style={{
                           backgroundColor: "white",
-                          padding: "12px",
+                          padding: "10px",
                           borderRadius: "8px",
                           textAlign: "center",
                         }}
                       >
-                        <p style={{ fontSize: "11px", color: "#6b7280", marginBottom: "4px" }}>
+                        <p style={{ fontSize: "10px", color: "#6b7280", marginBottom: "4px" }}>
                           Valor Parcela
                         </p>
-                        <p style={{ fontSize: "16px", fontWeight: "700", color: "#1555D6" }}>
+                        <p style={{ fontSize: "14px", fontWeight: "700", color: "#1555D6" }}>
                           {formatBRL(simulacaoResumo.valorParcela)}
                         </p>
                       </div>

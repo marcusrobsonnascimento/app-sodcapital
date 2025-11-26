@@ -1748,12 +1748,13 @@ export default function ConciliacaoBancariaPage() {
                   </label>
                   <div style={{
                     padding: '10px 12px',
-                    backgroundColor: '#f8fafc',
+                    backgroundColor: lancamentoParaEditar.tipo === 'Entrada' ? '#dcfce7' : '#fee2e2',
                     borderRadius: '6px',
                     fontSize: '14px',
-                    color: '#1e293b'
+                    fontWeight: '600',
+                    color: lancamentoParaEditar.tipo === 'Entrada' ? '#166534' : '#991b1b'
                   }}>
-                    {lancamentoParaEditar.status}
+                    {lancamentoParaEditar.tipo === 'Entrada' ? 'RECEBIDO' : 'PAGO'}
                   </div>
                 </div>
               </div>
