@@ -32,7 +32,8 @@ export default function LoginPage() {
         router.push('/dashboard')
       }
     } catch (err: any) {
-      setError(err.message || 'Erro ao fazer login')
+      // Mensagem genérica para não expor se o email existe ou não
+      setError('Email ou senha inválidos')
     } finally {
       setLoading(false)
     }
@@ -60,6 +61,7 @@ export default function LoginPage() {
             alt="SodCapital"
             width={160}
             height={48}
+            style={{ width: 'auto', height: 'auto' }}
             priority
           />
         </div>
@@ -81,13 +83,19 @@ export default function LoginPage() {
           </div>
         )}
 
-        <form onSubmit={handleLogin}>
+        <form onSubmit={handleLogin} autoComplete="on">
           <div style={{ marginBottom: '20px' }}>
-            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>
+            <label 
+              htmlFor="email"
+              style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}
+            >
               Email
             </label>
             <input
+              id="email"
+              name="email"
               type="email"
+              autoComplete="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
@@ -96,18 +104,25 @@ export default function LoginPage() {
                 padding: '10px',
                 border: '1px solid #D1D5DB',
                 borderRadius: '6px',
-                fontSize: '14px'
+                fontSize: '14px',
+                boxSizing: 'border-box'
               }}
             />
           </div>
 
           <div style={{ marginBottom: '24px' }}>
-            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>
+            <label 
+              htmlFor="password"
+              style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}
+            >
               Senha
             </label>
             <div style={{ position: 'relative' }}>
               <input
+                id="password"
+                name="password"
                 type={showPassword ? 'text' : 'password'}
+                autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
@@ -116,13 +131,15 @@ export default function LoginPage() {
                   padding: '10px 40px 10px 10px',
                   border: '1px solid #D1D5DB',
                   borderRadius: '6px',
-                  fontSize: '14px'
+                  fontSize: '14px',
+                  boxSizing: 'border-box'
                 }}
               />
               <button
                 type="button"
                 onClick={() => setShowPassword((prev) => !prev)}
                 aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
+                tabIndex={-1}
                 style={{
                   position: 'absolute',
                   top: '50%',
@@ -154,7 +171,14 @@ export default function LoginPage() {
               fontSize: '16px',
               fontWeight: '500',
               border: 'none',
-              cursor: loading ? 'not-allowed' : 'pointer'
+              cursor: loading ? 'not-allowed' : 'pointer',
+              transition: 'background-color 0.2s'
+            }}
+            onMouseOver={(e) => {
+              if (!loading) e.currentTarget.style.backgroundColor = '#2563EB'
+            }}
+            onMouseOut={(e) => {
+              if (!loading) e.currentTarget.style.backgroundColor = '#3B82F6'
             }}
           >
             {loading ? 'Entrando...' : 'Entrar'}

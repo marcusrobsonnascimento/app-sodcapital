@@ -439,7 +439,6 @@ export default function ConciliacaoBancariaPage() {
           return
         }
         
-        console.log('Todos movimentos:', dataAll)
         
         // Filtrar manualmente
         const transferencias = (dataAll || []).filter((item: any) => 
@@ -465,7 +464,6 @@ export default function ConciliacaoBancariaPage() {
         return
       }
       
-      console.log('Movimentos encontrados:', data?.length || 0)
       
       const formatted: MovimentoBancario[] = (data || []).map((item: any) => ({
         id: item.id,

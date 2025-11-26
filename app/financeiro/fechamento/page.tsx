@@ -76,19 +76,13 @@ export default function FechamentoDiarioPage() {
 
   const carregarDados = async () => {
     try {
-      // Buscar nome do usuário
+      // Buscar dados do usuário autenticado
       const { data: { user } } = await supabase.auth.getUser()
       if (user) {
         setUserId(user.id)
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('full_name')
-          .eq('id', user.id)
-          .single()
-        
-        if (profile) {
-          setUserName(profile.full_name)
-        }
+        // Usar email ou metadata para nome do usuário (sem tabela profiles)
+        const nome = user.user_metadata?.full_name || user.email?.split('@')[0] || 'Usuário'
+        setUserName(nome)
       }
 
       // Buscar empresas para o filtro
@@ -172,27 +166,8 @@ export default function FechamentoDiarioPage() {
         return nomeA.localeCompare(nomeB)
       })
 
-      // Buscar nomes dos usuários
-      const usuariosIds = Array.from(new Set(dadosOrdenados.map(f => f.usuario_fechamento).filter(Boolean)))
-      
-      if (usuariosIds.length > 0) {
-        const { data: usuarios } = await supabase
-          .from('profiles')
-          .select('id, full_name')
-          .in('id', usuariosIds)
-
-        const usuariosMap = new Map(usuarios?.map(u => [u.id, u.full_name]) || [])
-
-        // Adicionar nome do usuário aos dados
-        const dadosComUsuario = dadosOrdenados.map(f => ({
-          ...f,
-          usuario_nome: usuariosMap.get(f.usuario_fechamento) || '-'
-        }))
-
-        setFechamentos(dadosComUsuario)
-      } else {
-        setFechamentos(dadosOrdenados.map(f => ({ ...f, usuario_nome: '-' })))
-      }
+      // Adicionar placeholder para nome do usuário (sem tabela profiles)
+      setFechamentos(dadosOrdenados.map(f => ({ ...f, usuario_nome: '-' })))
     } catch (error) {
       console.error('Erro ao buscar fechamentos:', error)
       setFechamentos([])

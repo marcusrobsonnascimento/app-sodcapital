@@ -176,7 +176,7 @@ export default function BancosContasPage() {
 
   const loadEmpresas = async () => {
     try {
-      console.log('Carregando empresas...')
+      
       const { data, error } = await supabase
         .from('empresas')
         .select('id, nome')
@@ -189,7 +189,7 @@ export default function BancosContasPage() {
         throw error
       }
 
-      console.log('Empresas carregadas:', data)
+      
       setEmpresas(data || [])
       
       if (!data || data.length === 0) {
@@ -203,7 +203,7 @@ export default function BancosContasPage() {
 
   const loadBancos = async () => {
     try {
-      console.log('Carregando bancos...')
+      
       const { data, error } = await supabase
         .from('bancos')
         .select('id, codigo, nome')
@@ -216,7 +216,7 @@ export default function BancosContasPage() {
         throw error
       }
 
-      console.log('Bancos carregados:', data)
+      
       setBancos(data || [])
       
       if (!data || data.length === 0) {
