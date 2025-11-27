@@ -106,12 +106,13 @@ interface Conciliacao {
   id: string
   org_id: string
   banco_conta_id: string
-  extrato_id: string
+  extrato_id: string | null
   lancamento_id: string | null
   movimento_id: string | null
   status: string
   observacoes: string | null
   created_at: string
+  grupo_conciliacao: string | null
   extrato?: ExtratoBancario
   lancamento?: Lancamento
   movimento?: MovimentoBancario
@@ -239,6 +240,7 @@ export default function ConciliacaoBancariaPage() {
   const [lancamentos, setLancamentos] = useState<Lancamento[]>([])
   const [movimentos, setMovimentos] = useState<MovimentoBancario[]>([])
   const [conciliacoes, setConciliacoes] = useState<Conciliacao[]>([])
+  const [todasConciliacoes, setTodasConciliacoes] = useState<Conciliacao[]>([])  // Para contagem de grupos
   
   // Estados de seleção
   const [empresaSelecionada, setEmpresaSelecionada] = useState('')
@@ -512,7 +514,13 @@ export default function ConciliacaoBancariaPage() {
         .order('created_at', { ascending: false })
       
       if (error) throw error
-      setConciliacoes(data || [])
+      
+      const todas = data || []
+      setTodasConciliacoes(todas)
+      
+      // Filtrar apenas conciliações com extrato_id para exibição
+      const comExtrato = todas.filter(c => c.extrato_id !== null)
+      setConciliacoes(comExtrato)
     } catch (error) {
       console.error('Erro ao carregar conciliações:', error)
     }
@@ -736,36 +744,80 @@ export default function ConciliacaoBancariaPage() {
     }
 
     try {
-      // Gerar um ID de grupo para vincular múltiplos itens
-      const grupoId = generateUUID()
+      // Se é vinculação 1:1 simples (caso mais comum)
+      if (extratosSelecionados.length === 1 && lancamentosSelecionados.length === 1) {
+        const extratoId = extratosSelecionados[0]
+        const [origem, id] = lancamentosSelecionados[0].split(':')
+        
+        const insertData: any = {
+          org_id: contaInfo!.org_id,
+          banco_conta_id: contaSelecionada,
+          extrato_id: extratoId,
+          status: 'CONCILIADO'
+        }
 
-      // Inserir conciliação para cada extrato com cada lançamento
-      for (const extratoId of extratosSelecionados) {
-        for (const lancChave of lancamentosSelecionados) {
-          const [origem, id] = lancChave.split(':')
+        if (origem === 'LANCAMENTO') {
+          insertData.lancamento_id = id
+          await supabase
+            .from('movimentos_bancarios')
+            .update({ conciliado: true })
+            .eq('lancamento_id', id)
+        } else {
+          insertData.movimento_id = id
+          await supabase
+            .from('movimentos_bancarios')
+            .update({ conciliado: true })
+            .eq('id', id)
+        }
+
+        const { error } = await supabase
+          .from('conciliacoes')
+          .insert(insertData)
+
+        if (error) throw error
+      } else {
+        // Vinculação N:M - usar grupo_conciliacao
+        // Cada extrato deve ter um registro único
+        // Cada lançamento também deve ter um registro
+        const grupoId = generateUUID()
+        
+        // Criar pares de extrato-lançamento
+        // Se temos mais lançamentos que extratos, os lançamentos extras vão sem extrato_id
+        // Se temos mais extratos que lançamentos, os extratos extras vão sem lancamento_id
+        
+        const maxLen = Math.max(extratosSelecionados.length, lancamentosSelecionados.length)
+        
+        for (let i = 0; i < maxLen; i++) {
+          const extratoId = extratosSelecionados[i] || null
+          const lancChave = lancamentosSelecionados[i] || null
           
           const insertData: any = {
             org_id: contaInfo!.org_id,
             banco_conta_id: contaSelecionada,
-            extrato_id: extratoId,
             status: 'CONCILIADO',
             grupo_conciliacao: grupoId
           }
 
-          if (origem === 'LANCAMENTO') {
-            insertData.lancamento_id = id
-            // Marcar o movimento correspondente ao lançamento como conciliado
-            await supabase
-              .from('movimentos_bancarios')
-              .update({ conciliado: true })
-              .eq('lancamento_id', id)
-          } else {
-            insertData.movimento_id = id
-            // Marcar movimento como conciliado
-            await supabase
-              .from('movimentos_bancarios')
-              .update({ conciliado: true })
-              .eq('id', id)
+          if (extratoId) {
+            insertData.extrato_id = extratoId
+          }
+
+          if (lancChave) {
+            const [origem, id] = lancChave.split(':')
+            
+            if (origem === 'LANCAMENTO') {
+              insertData.lancamento_id = id
+              await supabase
+                .from('movimentos_bancarios')
+                .update({ conciliado: true })
+                .eq('lancamento_id', id)
+            } else {
+              insertData.movimento_id = id
+              await supabase
+                .from('movimentos_bancarios')
+                .update({ conciliado: true })
+                .eq('id', id)
+            }
           }
 
           const { error } = await supabase
@@ -1568,6 +1620,11 @@ export default function ConciliacaoBancariaPage() {
                         : (item as MovimentoBancario).historico || (item as MovimentoBancario).conta_destino_nome
                       const documento = isLancamento ? (item as Lancamento).documento_numero : '-'
                       
+                      // Determinar se é entrada ou saída
+                      const isEntrada = isLancamento 
+                        ? (item as Lancamento).tipo === 'Entrada'
+                        : (item as MovimentoBancario).tipo_movimento === 'TRANSFERENCIA_RECEBIDA'
+                      
                       return (
                         <tr
                           key={chave}
@@ -1602,7 +1659,7 @@ export default function ConciliacaoBancariaPage() {
                             borderBottom: '1px solid #f1f5f9',
                             textAlign: 'right',
                             fontWeight: '600',
-                            color: valor >= 0 ? '#16a34a' : '#dc2626'
+                            color: isEntrada ? '#16a34a' : '#dc2626'
                           }}>
                             {formatCurrencySimple(valor)}
                           </td>
@@ -1712,7 +1769,20 @@ export default function ConciliacaoBancariaPage() {
                   <tbody>
                     {conciliacoes.map(conc => {
                       const extrato = extratos.find(e => e.id === conc.extrato_id)
+                      
+                      // Contar quantos lançamentos/movimentos estão no mesmo grupo
+                      const itensNoGrupo = conc.grupo_conciliacao 
+                        ? todasConciliacoes.filter(c => 
+                            c.grupo_conciliacao === conc.grupo_conciliacao && 
+                            (c.lancamento_id || c.movimento_id)
+                          ).length
+                        : 1
+                      
                       const tipo = conc.lancamento_id ? 'Lançamento' : conc.movimento_id ? 'Transferência' : '-'
+                      const tipoLabel = itensNoGrupo > 1 
+                        ? `${itensNoGrupo} Lanç.` 
+                        : tipo
+                      
                       const lancamentoRelacionado = conc.lancamento_id ? lancamentos.find(l => l.id === conc.lancamento_id) : null
                       
                       return (
@@ -1744,12 +1814,12 @@ export default function ConciliacaoBancariaPage() {
                                 padding: '2px 8px',
                                 borderRadius: '4px',
                                 fontSize: '11px',
-                                backgroundColor: tipo === 'Lançamento' ? '#dbeafe' : '#fef3c7',
-                                color: tipo === 'Lançamento' ? '#1e40af' : '#92400e',
+                                backgroundColor: itensNoGrupo > 1 ? '#fef3c7' : (tipo === 'Lançamento' ? '#dbeafe' : '#fef3c7'),
+                                color: itensNoGrupo > 1 ? '#92400e' : (tipo === 'Lançamento' ? '#1e40af' : '#92400e'),
                                 cursor: lancamentoRelacionado ? 'pointer' : 'default'
                               }}
                             >
-                              {tipo}
+                              {tipoLabel}
                             </span>
                           </td>
                           <td style={{ padding: '8px 12px', borderBottom: '1px solid #f1f5f9', textAlign: 'center' }}>
