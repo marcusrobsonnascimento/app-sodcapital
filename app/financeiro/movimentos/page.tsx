@@ -185,13 +185,15 @@ export default function MovimentosPage() {
   useEffect(() => {
     if (empresaModalValue) {
       loadBancosContasModal(empresaModalValue)
-      // Limpar seleção de conta ao mudar empresa
-      setValue('banco_conta_id', '')
+      // Limpar seleção de conta ao mudar empresa SOMENTE se NÃO estiver editando
+      if (!editingId) {
+        setValue('banco_conta_id', '')
+      }
     } else {
       setBancosContasModal([])
       setValue('banco_conta_id', '')
     }
-  }, [empresaModalValue, setValue])
+  }, [empresaModalValue, setValue, editingId])
 
   const loadEmpresas = async () => {
     try {
@@ -292,22 +294,24 @@ export default function MovimentosPage() {
 
       // Buscar saldo anterior somente na primeira página e quando houver data inicial
       if (page === 0 && dataIni) {
-        const { data: fechamentos, error: fechError } = await supabase
+        let fechamentoQuery = supabase
           .from("fechamentos_bancarios")
-          .select("saldo_final, data_fechamento")
+          .select("saldo_final, data_fechamento, banco_conta_id")
           .eq("fechado", true)
           .lt("data_fechamento", dataIni)
-          .order("data_fechamento", { ascending: false })
+        
+        // Se tiver conta selecionada, filtrar por ela
+        if (contaFiltro) {
+          fechamentoQuery = fechamentoQuery.eq("banco_conta_id", contaFiltro)
+        }
 
-        if (!fechError && fechamentos) {
-          const totalSaldoAnterior = fechamentos.reduce((sum, f) => sum + Number(f.saldo_final), 0)
-          setSaldoAnterior(totalSaldoAnterior)
-          // Pegar a data do fechamento mais recente
-          if (fechamentos.length > 0) {
-            setDataFechamentoAnterior(fechamentos[0].data_fechamento)
-          } else {
-            setDataFechamentoAnterior('')
-          }
+        const { data: fechamentos, error: fechError } = await fechamentoQuery
+          .order("data_fechamento", { ascending: false })
+          .limit(1)
+
+        if (!fechError && fechamentos && fechamentos.length > 0) {
+          setSaldoAnterior(Number(fechamentos[0].saldo_final))
+          setDataFechamentoAnterior(fechamentos[0].data_fechamento)
         } else {
           setSaldoAnterior(0)
           setDataFechamentoAnterior('')
@@ -385,22 +389,26 @@ export default function MovimentosPage() {
     setMovimentos([])
     
     try {
-      // Buscar saldo anterior
-      const { data: fechamentos, error: fechError } = await supabase
+      // Buscar saldo anterior - filtrando por conta se selecionada
+      let fechamentoQuery = supabase
         .from("fechamentos_bancarios")
-        .select("saldo_final, data_fechamento")
+        .select("saldo_final, data_fechamento, banco_conta_id")
         .eq("fechado", true)
         .lt("data_fechamento", dataInicial)
-        .order("data_fechamento", { ascending: false })
+      
+      // Se tiver conta selecionada, filtrar por ela
+      if (contaFiltro) {
+        fechamentoQuery = fechamentoQuery.eq("banco_conta_id", contaFiltro)
+      }
 
-      if (!fechError && fechamentos) {
-        const totalSaldoAnterior = fechamentos.reduce((sum, f) => sum + Number(f.saldo_final), 0)
-        setSaldoAnterior(totalSaldoAnterior)
-        if (fechamentos.length > 0) {
-          setDataFechamentoAnterior(fechamentos[0].data_fechamento)
-        } else {
-          setDataFechamentoAnterior('')
-        }
+      const { data: fechamentos, error: fechError } = await fechamentoQuery
+        .order("data_fechamento", { ascending: false })
+        .limit(1)
+
+      if (!fechError && fechamentos && fechamentos.length > 0) {
+        // Pegar o saldo final do fechamento mais recente
+        setSaldoAnterior(Number(fechamentos[0].saldo_final))
+        setDataFechamentoAnterior(fechamentos[0].data_fechamento)
       } else {
         setSaldoAnterior(0)
         setDataFechamentoAnterior('')
@@ -580,13 +588,22 @@ export default function MovimentosPage() {
 
 
 
-  const handleEdit = (movimento: MovimentoBancario) => {
+  const handleEdit = async (movimento: MovimentoBancario) => {
     setEditingId(movimento.id)
     
     // Obter empresa_id da conta bancária
     const conta = bancosContas.find(bc => bc.id === movimento.banco_conta_id)
+    const empresaId = conta?.empresa_id || ''
     
-    setValue('empresa_id', conta?.empresa_id || '')
+    // Setar empresa primeiro
+    setValue('empresa_id', empresaId)
+    
+    // Carregar contas da empresa antes de setar banco_conta_id
+    if (empresaId) {
+      await loadBancosContasModal(empresaId)
+    }
+    
+    // Agora setar banco_conta_id após as contas terem sido carregadas
     setValue('banco_conta_id', movimento.banco_conta_id)
     setValue('tipo_movimento', movimento.tipo_movimento as 'ENTRADA' | 'SAIDA')
     setValue('data_movimento', movimento.data_movimento)
@@ -1325,10 +1342,10 @@ export default function MovimentosPage() {
                             fontSize: '14px',
                             color: '#374151',
                             display: 'block',
-                            maxWidth: '300px',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap'
+                            maxWidth: '400px',
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
+                            lineHeight: '1.4'
                           }}>
                             {movimento.historico || '-'}
                           </span>
