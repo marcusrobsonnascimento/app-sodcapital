@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 import { formatDate } from '@/lib/utils'
-import { Plus, Pencil, Trash2, Search, CheckCircle, AlertTriangle, XCircle, X, RefreshCw, ChevronDown } from 'lucide-react'
+import { Plus, Pencil, Trash2, Search, CheckCircle, AlertTriangle, XCircle, X, RefreshCw, ChevronDown, CreditCard } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
@@ -30,6 +30,12 @@ interface Projeto {
   empresa_id: string
   nome: string
   projeto_pai_id: string | null
+}
+
+interface Banco {
+  id: string
+  codigo: string
+  nome: string
 }
 
 interface BancoConta {
@@ -90,6 +96,18 @@ interface Lancamento {
   created_at: string
   pagamento_terceiro: boolean
   empresa_pagadora_id: string | null
+  // Novos campos de forma de pagamento
+  forma_pagamento: string | null
+  pix_tipo_chave: string | null
+  pix_chave: string | null
+  beneficiario_nome: string | null
+  beneficiario_banco: string | null
+  beneficiario_agencia: string | null
+  beneficiario_conta: string | null
+  beneficiario_conta_dv: string | null
+  boleto_linha_digitavel: string | null
+  boleto_codigo_barras: string | null
+  // Campos virtuais
   empresa_nome?: string
   projeto_nome?: string
   subprojeto_nome?: string
@@ -155,6 +173,189 @@ interface LancamentoForm {
   documento_tipo?: string
   documento_numero?: string
   observacoes?: string
+  // Novos campos de forma de pagamento
+  forma_pagamento?: string
+  pix_tipo_chave?: string
+  pix_chave?: string
+  beneficiario_nome?: string
+  beneficiario_banco?: string
+  beneficiario_agencia?: string
+  beneficiario_conta?: string
+  beneficiario_conta_dv?: string
+  boleto_linha_digitavel?: string
+  boleto_codigo_barras?: string
+}
+
+const FORMAS_PAGAMENTO = [
+  { value: 'BOLETO', label: 'Boleto' },
+  { value: 'PIX', label: 'PIX' },
+  { value: 'DEPOSITO_CONTA', label: 'Depósito em Conta' },
+  { value: 'DINHEIRO', label: 'Dinheiro' },
+  { value: 'OUTRO', label: 'Outro' }
+]
+
+const TIPOS_CHAVE_PIX = [
+  { value: 'CPF', label: 'CPF' },
+  { value: 'CNPJ', label: 'CNPJ' },
+  { value: 'EMAIL', label: 'E-mail' },
+  { value: 'TELEFONE', label: 'Telefone' },
+  { value: 'ALEATORIA', label: 'Chave Aleatória' }
+]
+
+// Funções de validação e formatação de chave PIX
+const validarCPF = (cpf: string): boolean => {
+  const cleaned = cpf.replace(/\D/g, '')
+  if (cleaned.length !== 11) return false
+  if (/^(\d)\1+$/.test(cleaned)) return false
+  
+  let sum = 0
+  for (let i = 0; i < 9; i++) sum += parseInt(cleaned[i]) * (10 - i)
+  let digit = (sum * 10) % 11
+  if (digit === 10) digit = 0
+  if (digit !== parseInt(cleaned[9])) return false
+  
+  sum = 0
+  for (let i = 0; i < 10; i++) sum += parseInt(cleaned[i]) * (11 - i)
+  digit = (sum * 10) % 11
+  if (digit === 10) digit = 0
+  return digit === parseInt(cleaned[10])
+}
+
+const validarCNPJ = (cnpj: string): boolean => {
+  const cleaned = cnpj.replace(/\D/g, '')
+  if (cleaned.length !== 14) return false
+  if (/^(\d)\1+$/.test(cleaned)) return false
+  
+  const weights1 = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
+  const weights2 = [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
+  
+  let sum = 0
+  for (let i = 0; i < 12; i++) sum += parseInt(cleaned[i]) * weights1[i]
+  let digit = sum % 11 < 2 ? 0 : 11 - (sum % 11)
+  if (digit !== parseInt(cleaned[12])) return false
+  
+  sum = 0
+  for (let i = 0; i < 13; i++) sum += parseInt(cleaned[i]) * weights2[i]
+  digit = sum % 11 < 2 ? 0 : 11 - (sum % 11)
+  return digit === parseInt(cleaned[13])
+}
+
+const validarEmail = (email: string): boolean => {
+  const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+  return regex.test(email)
+}
+
+const validarTelefone = (telefone: string): boolean => {
+  const cleaned = telefone.replace(/\D/g, '')
+  // Formato: +55 + DDD (2) + Número (8 ou 9 dígitos)
+  return cleaned.length >= 10 && cleaned.length <= 13
+}
+
+const validarChaveAleatoria = (chave: string): boolean => {
+  // UUID formato: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (32 chars + 4 hífens)
+  const regex = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i
+  return regex.test(chave)
+}
+
+const detectarTipoChavePix = (chave: string): string | null => {
+  if (!chave) return null
+  
+  const cleaned = chave.replace(/\D/g, '')
+  
+  // CPF: 11 dígitos numéricos
+  if (/^\d{11}$/.test(cleaned) || /^\d{3}\.\d{3}\.\d{3}-\d{2}$/.test(chave)) {
+    return 'CPF'
+  }
+  
+  // CNPJ: 14 dígitos numéricos
+  if (/^\d{14}$/.test(cleaned) || /^\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}$/.test(chave)) {
+    return 'CNPJ'
+  }
+  
+  // Telefone: começa com +55 ou tem 10-11 dígitos
+  if (/^\+55/.test(chave) || (cleaned.length >= 10 && cleaned.length <= 11 && /^\d+$/.test(cleaned))) {
+    return 'TELEFONE'
+  }
+  
+  // E-mail
+  if (validarEmail(chave)) {
+    return 'EMAIL'
+  }
+  
+  // Chave aleatória (UUID)
+  if (validarChaveAleatoria(chave)) {
+    return 'ALEATORIA'
+  }
+  
+  return null
+}
+
+const formatarChavePix = (chave: string, tipo: string): string => {
+  const cleaned = chave.replace(/\D/g, '')
+  
+  switch (tipo) {
+    case 'CPF':
+      if (cleaned.length <= 11) {
+        return cleaned.replace(/(\d{3})(\d{3})(\d{3})(\d{0,2})/, (_, p1, p2, p3, p4) => {
+          let result = p1
+          if (p2) result += '.' + p2
+          if (p3) result += '.' + p3
+          if (p4) result += '-' + p4
+          return result
+        })
+      }
+      return chave
+    case 'CNPJ':
+      if (cleaned.length <= 14) {
+        return cleaned.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{0,2})/, (_, p1, p2, p3, p4, p5) => {
+          let result = p1
+          if (p2) result += '.' + p2
+          if (p3) result += '.' + p3
+          if (p4) result += '/' + p4
+          if (p5) result += '-' + p5
+          return result
+        })
+      }
+      return chave
+    case 'TELEFONE':
+      if (cleaned.length <= 11) {
+        if (cleaned.length <= 2) return cleaned
+        if (cleaned.length <= 7) return `(${cleaned.slice(0, 2)}) ${cleaned.slice(2)}`
+        return `(${cleaned.slice(0, 2)}) ${cleaned.slice(2, 7)}-${cleaned.slice(7)}`
+      }
+      return chave
+    default:
+      return chave
+  }
+}
+
+const validarChavePix = (chave: string, tipo: string): { valido: boolean; mensagem: string } => {
+  if (!chave) return { valido: false, mensagem: 'Informe a chave PIX' }
+  
+  switch (tipo) {
+    case 'CPF':
+      return validarCPF(chave) 
+        ? { valido: true, mensagem: 'CPF válido' }
+        : { valido: false, mensagem: 'CPF inválido' }
+    case 'CNPJ':
+      return validarCNPJ(chave)
+        ? { valido: true, mensagem: 'CNPJ válido' }
+        : { valido: false, mensagem: 'CNPJ inválido' }
+    case 'EMAIL':
+      return validarEmail(chave)
+        ? { valido: true, mensagem: 'E-mail válido' }
+        : { valido: false, mensagem: 'E-mail inválido' }
+    case 'TELEFONE':
+      return validarTelefone(chave)
+        ? { valido: true, mensagem: 'Telefone válido' }
+        : { valido: false, mensagem: 'Telefone inválido (use formato com DDD)' }
+    case 'ALEATORIA':
+      return validarChaveAleatoria(chave)
+        ? { valido: true, mensagem: 'Chave aleatória válida' }
+        : { valido: false, mensagem: 'Chave aleatória inválida (formato UUID)' }
+    default:
+      return { valido: false, mensagem: 'Selecione o tipo de chave' }
+  }
 }
 
 const IMPOSTOS = [
@@ -229,6 +430,20 @@ export default function LancamentosPage() {
   const [valorBruto, setValorBruto] = useState<number>(0)
   const [valorBrutoFormatado, setValorBrutoFormatado] = useState<string>('')
   const [valorLiquido, setValorLiquido] = useState<number>(0)
+
+  // Estados para forma de pagamento
+  const [formaPagamento, setFormaPagamento] = useState<string>('')
+  const [pixTipoChave, setPixTipoChave] = useState<string>('')
+  const [pixChave, setPixChave] = useState<string>('')
+  const [pixChaveValidacao, setPixChaveValidacao] = useState<{ valido: boolean; mensagem: string } | null>(null)
+  const [beneficiarioNome, setBeneficiarioNome] = useState<string>('')
+  const [beneficiarioBanco, setBeneficiarioBanco] = useState<string>('')
+  const [beneficiarioAgencia, setBeneficiarioAgencia] = useState<string>('')
+  const [beneficiarioConta, setBeneficiarioConta] = useState<string>('')
+  const [beneficiarioContaDv, setBeneficiarioContaDv] = useState<string>('')
+  const [boletoLinhaDigitavel, setBoletoLinhaDigitavel] = useState<string>('')
+  const [boletoCodigoBarras, setBoletoCodigoBarras] = useState<string>('')
+  const [bancos, setBancos] = useState<Banco[]>([])
 
   const [toasts, setToasts] = useState<Toast[]>([])
   const [toastIdCounter, setToastIdCounter] = useState(0)
@@ -392,6 +607,7 @@ export default function LancamentosPage() {
     fetchEmpresas()
     fetchContrapartes()
     fetchTiposFluxo()
+    fetchBancos()
   }, [])
 
   useEffect(() => {
@@ -472,6 +688,21 @@ export default function LancamentosPage() {
       setEmpresas(data || [])
     } catch (error) {
       console.error('Erro ao carregar empresas:', error)
+    }
+  }
+
+  const fetchBancos = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('bancos')
+        .select('id, codigo, nome')
+        .eq('ativo', true)
+        .order('nome')
+      
+      if (error) throw error
+      setBancos(data || [])
+    } catch (error) {
+      console.error('Erro ao carregar bancos:', error)
     }
   }
 
@@ -846,6 +1077,25 @@ export default function LancamentosPage() {
       setValorBrutoFormatado(formatCurrencyInput(lancamento.valor_bruto.toFixed(2)))
       setValue('valor_bruto', lancamento.valor_bruto)
 
+      // Carregar campos de forma de pagamento
+      setFormaPagamento(lancamento.forma_pagamento || '')
+      setPixTipoChave(lancamento.pix_tipo_chave || '')
+      setPixChave(lancamento.pix_chave || '')
+      setBeneficiarioNome(lancamento.beneficiario_nome || '')
+      setBeneficiarioBanco(lancamento.beneficiario_banco || '')
+      setBeneficiarioAgencia(lancamento.beneficiario_agencia || '')
+      setBeneficiarioConta(lancamento.beneficiario_conta || '')
+      setBeneficiarioContaDv(lancamento.beneficiario_conta_dv || '')
+      setBoletoLinhaDigitavel(lancamento.boleto_linha_digitavel || '')
+      setBoletoCodigoBarras(lancamento.boleto_codigo_barras || '')
+      
+      // Validar chave PIX se existir
+      if (lancamento.pix_tipo_chave && lancamento.pix_chave) {
+        setPixChaveValidacao(validarChavePix(lancamento.pix_chave, lancamento.pix_tipo_chave))
+      } else {
+        setPixChaveValidacao(null)
+      }
+
       // Carregar tipo_fluxo
       if (lancamento.plano_conta) {
         setValue('tipo_fluxo', lancamento.plano_conta.tipo_fluxo)
@@ -893,6 +1143,18 @@ export default function LancamentosPage() {
       setValorBrutoFormatado('')
       setValorLiquido(0)
       setContraparteNomeExibicao('')
+      // Limpar campos de forma de pagamento
+      setFormaPagamento('')
+      setPixTipoChave('')
+      setPixChave('')
+      setPixChaveValidacao(null)
+      setBeneficiarioNome('')
+      setBeneficiarioBanco('')
+      setBeneficiarioAgencia('')
+      setBeneficiarioConta('')
+      setBeneficiarioContaDv('')
+      setBoletoLinhaDigitavel('')
+      setBoletoCodigoBarras('')
     }
     setShowModal(true)
   }
@@ -908,6 +1170,18 @@ export default function LancamentosPage() {
     setValorBrutoFormatado('')
     setValorLiquido(0)
     setContraparteNomeExibicao('')
+    // Limpar campos de forma de pagamento
+    setFormaPagamento('')
+    setPixTipoChave('')
+    setPixChave('')
+    setPixChaveValidacao(null)
+    setBeneficiarioNome('')
+    setBeneficiarioBanco('')
+    setBeneficiarioAgencia('')
+    setBeneficiarioConta('')
+    setBeneficiarioContaDv('')
+    setBoletoLinhaDigitavel('')
+    setBoletoCodigoBarras('')
   }
 
   const onSubmit = async (formData: LancamentoForm) => {
@@ -949,7 +1223,18 @@ export default function LancamentosPage() {
         data_previsao_pagamento: formData.data_previsao_pagamento || null,
         documento_tipo: formData.documento_tipo || null,
         documento_numero: formData.documento_numero || null,
-        observacoes: formData.observacoes || null
+        observacoes: formData.observacoes || null,
+        // Novos campos de forma de pagamento
+        forma_pagamento: formaPagamento || null,
+        pix_tipo_chave: formaPagamento === 'PIX' ? pixTipoChave || null : null,
+        pix_chave: formaPagamento === 'PIX' ? pixChave || null : null,
+        beneficiario_nome: ['PIX', 'DEPOSITO_CONTA'].includes(formaPagamento) ? beneficiarioNome || null : null,
+        beneficiario_banco: ['PIX', 'DEPOSITO_CONTA'].includes(formaPagamento) ? beneficiarioBanco || null : null,
+        beneficiario_agencia: ['PIX', 'DEPOSITO_CONTA'].includes(formaPagamento) ? beneficiarioAgencia || null : null,
+        beneficiario_conta: ['PIX', 'DEPOSITO_CONTA'].includes(formaPagamento) ? beneficiarioConta || null : null,
+        beneficiario_conta_dv: ['PIX', 'DEPOSITO_CONTA'].includes(formaPagamento) ? beneficiarioContaDv || null : null,
+        boleto_linha_digitavel: formaPagamento === 'BOLETO' ? boletoLinhaDigitavel || null : null,
+        boleto_codigo_barras: formaPagamento === 'BOLETO' ? boletoCodigoBarras || null : null
       }
 
       if (editingId) {
@@ -3403,6 +3688,532 @@ export default function LancamentosPage() {
                     {formatCurrencyBRL(valorLiquido)}
                   </span>
                 </div>
+              </div>
+
+              {/* Forma de Pagamento/Recebimento */}
+              <div style={{
+                padding: '16px',
+                backgroundColor: '#fafafa',
+                borderRadius: '8px',
+                border: '1px solid #e5e7eb',
+                marginTop: '16px'
+              }}>
+                <h4 style={{
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  color: '#374151',
+                  marginBottom: '16px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}>
+                  <CreditCard size={18} />
+                  Forma de Pagamento/Recebimento
+                </h4>
+
+                {/* Select Forma de Pagamento */}
+                <div style={{ marginBottom: '16px' }}>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '13px',
+                    fontWeight: '500',
+                    color: '#374151',
+                    marginBottom: '6px'
+                  }}>
+                    Forma de Pagamento
+                  </label>
+                  <select
+                    value={formaPagamento}
+                    onChange={(e) => {
+                      setFormaPagamento(e.target.value)
+                      // Limpar campos ao mudar forma de pagamento
+                      setPixTipoChave('')
+                      setPixChave('')
+                      setPixChaveValidacao(null)
+                      setBeneficiarioNome('')
+                      setBeneficiarioBanco('')
+                      setBeneficiarioAgencia('')
+                      setBeneficiarioConta('')
+                      setBeneficiarioContaDv('')
+                      setBoletoLinhaDigitavel('')
+                      setBoletoCodigoBarras('')
+                    }}
+                    disabled={isLancamentoPago}
+                    style={{
+                      width: '100%',
+                      padding: '9px 10px',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '8px',
+                      fontSize: '13px',
+                      outline: 'none',
+                      backgroundColor: isLancamentoPago ? '#f9fafb' : 'white',
+                      cursor: isLancamentoPago ? 'not-allowed' : 'pointer',
+                      color: isLancamentoPago ? '#9ca3af' : '#1f2937'
+                    }}
+                  >
+                    <option value="">Selecione...</option>
+                    {FORMAS_PAGAMENTO.map(fp => (
+                      <option key={fp.value} value={fp.value}>{fp.label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Campos para BOLETO */}
+                {formaPagamento === 'BOLETO' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    <div>
+                      <label style={{
+                        display: 'block',
+                        fontSize: '13px',
+                        fontWeight: '500',
+                        color: '#374151',
+                        marginBottom: '6px'
+                      }}>
+                        Linha Digitável
+                      </label>
+                      <input
+                        type="text"
+                        value={boletoLinhaDigitavel}
+                        onChange={(e) => setBoletoLinhaDigitavel(e.target.value)}
+                        disabled={isLancamentoPago}
+                        placeholder="00000.00000 00000.000000 00000.000000 0 00000000000000"
+                        style={{
+                          width: '100%',
+                          padding: '9px 10px',
+                          border: '1px solid #e5e7eb',
+                          borderRadius: '8px',
+                          fontSize: '13px',
+                          outline: 'none',
+                          fontFamily: 'monospace',
+                          backgroundColor: isLancamentoPago ? '#f9fafb' : 'white',
+                          cursor: isLancamentoPago ? 'not-allowed' : 'text',
+                          color: isLancamentoPago ? '#9ca3af' : '#1f2937'
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{
+                        display: 'block',
+                        fontSize: '13px',
+                        fontWeight: '500',
+                        color: '#374151',
+                        marginBottom: '6px'
+                      }}>
+                        Código de Barras
+                      </label>
+                      <input
+                        type="text"
+                        value={boletoCodigoBarras}
+                        onChange={(e) => setBoletoCodigoBarras(e.target.value)}
+                        disabled={isLancamentoPago}
+                        placeholder="00000000000000000000000000000000000000000000"
+                        style={{
+                          width: '100%',
+                          padding: '9px 10px',
+                          border: '1px solid #e5e7eb',
+                          borderRadius: '8px',
+                          fontSize: '13px',
+                          outline: 'none',
+                          fontFamily: 'monospace',
+                          backgroundColor: isLancamentoPago ? '#f9fafb' : 'white',
+                          cursor: isLancamentoPago ? 'not-allowed' : 'text',
+                          color: isLancamentoPago ? '#9ca3af' : '#1f2937'
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Campos para PIX */}
+                {formaPagamento === 'PIX' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '12px' }}>
+                      <div>
+                        <label style={{
+                          display: 'block',
+                          fontSize: '13px',
+                          fontWeight: '500',
+                          color: '#374151',
+                          marginBottom: '6px'
+                        }}>
+                          Tipo de Chave
+                        </label>
+                        <select
+                          value={pixTipoChave}
+                          onChange={(e) => {
+                            setPixTipoChave(e.target.value)
+                            setPixChave('')
+                            setPixChaveValidacao(null)
+                          }}
+                          disabled={isLancamentoPago}
+                          style={{
+                            width: '100%',
+                            padding: '9px 10px',
+                            border: '1px solid #e5e7eb',
+                            borderRadius: '8px',
+                            fontSize: '13px',
+                            outline: 'none',
+                            backgroundColor: isLancamentoPago ? '#f9fafb' : 'white',
+                            cursor: isLancamentoPago ? 'not-allowed' : 'pointer',
+                            color: isLancamentoPago ? '#9ca3af' : '#1f2937'
+                          }}
+                        >
+                          <option value="">Selecione...</option>
+                          {TIPOS_CHAVE_PIX.map(tipo => (
+                            <option key={tipo.value} value={tipo.value}>{tipo.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label style={{
+                          display: 'block',
+                          fontSize: '13px',
+                          fontWeight: '500',
+                          color: '#374151',
+                          marginBottom: '6px'
+                        }}>
+                          Chave PIX
+                        </label>
+                        <div style={{ position: 'relative' }}>
+                          <input
+                            type="text"
+                            value={pixChave}
+                            onChange={(e) => {
+                              let valor = e.target.value
+                              
+                              // Auto-detectar tipo se não selecionado
+                              if (!pixTipoChave) {
+                                const tipoDetectado = detectarTipoChavePix(valor)
+                                if (tipoDetectado) {
+                                  setPixTipoChave(tipoDetectado)
+                                }
+                              }
+                              
+                              // Formatar conforme o tipo
+                              if (pixTipoChave && ['CPF', 'CNPJ', 'TELEFONE'].includes(pixTipoChave)) {
+                                valor = formatarChavePix(valor, pixTipoChave)
+                              }
+                              
+                              setPixChave(valor)
+                              
+                              // Validar
+                              if (pixTipoChave && valor) {
+                                setPixChaveValidacao(validarChavePix(valor, pixTipoChave))
+                              } else {
+                                setPixChaveValidacao(null)
+                              }
+                            }}
+                            disabled={isLancamentoPago}
+                            placeholder={
+                              pixTipoChave === 'CPF' ? '000.000.000-00' :
+                              pixTipoChave === 'CNPJ' ? '00.000.000/0000-00' :
+                              pixTipoChave === 'EMAIL' ? 'exemplo@email.com' :
+                              pixTipoChave === 'TELEFONE' ? '(00) 00000-0000' :
+                              pixTipoChave === 'ALEATORIA' ? 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx' :
+                              'Digite a chave PIX'
+                            }
+                            style={{
+                              width: '100%',
+                              padding: '9px 10px',
+                              paddingRight: pixChaveValidacao ? '36px' : '10px',
+                              border: `1px solid ${pixChaveValidacao ? (pixChaveValidacao.valido ? '#10b981' : '#ef4444') : '#e5e7eb'}`,
+                              borderRadius: '8px',
+                              fontSize: '13px',
+                              outline: 'none',
+                              backgroundColor: isLancamentoPago ? '#f9fafb' : 'white',
+                              cursor: isLancamentoPago ? 'not-allowed' : 'text',
+                              color: isLancamentoPago ? '#9ca3af' : '#1f2937'
+                            }}
+                          />
+                          {pixChaveValidacao && (
+                            <span style={{
+                              position: 'absolute',
+                              right: '10px',
+                              top: '50%',
+                              transform: 'translateY(-50%)',
+                              fontSize: '16px'
+                            }}>
+                              {pixChaveValidacao.valido ? '✓' : '✗'}
+                            </span>
+                          )}
+                        </div>
+                        {pixChaveValidacao && (
+                          <span style={{
+                            fontSize: '11px',
+                            color: pixChaveValidacao.valido ? '#10b981' : '#ef4444',
+                            marginTop: '4px',
+                            display: 'block'
+                          }}>
+                            {pixChaveValidacao.mensagem}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Dados bancários do beneficiário (opcional para PIX) */}
+                    <div style={{
+                      marginTop: '8px',
+                      padding: '12px',
+                      backgroundColor: '#f9fafb',
+                      borderRadius: '6px',
+                      border: '1px dashed #d1d5db'
+                    }}>
+                      <span style={{ fontSize: '12px', color: '#6b7280', marginBottom: '12px', display: 'block' }}>
+                        Dados bancários do beneficiário (opcional)
+                      </span>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '12px' }}>
+                        <input
+                          type="text"
+                          value={beneficiarioNome}
+                          onChange={(e) => setBeneficiarioNome(e.target.value)}
+                          disabled={isLancamentoPago}
+                          placeholder="Nome do titular"
+                          style={{
+                            width: '100%',
+                            padding: '9px 10px',
+                            border: '1px solid #e5e7eb',
+                            borderRadius: '8px',
+                            fontSize: '13px',
+                            outline: 'none',
+                            backgroundColor: isLancamentoPago ? '#f9fafb' : 'white'
+                          }}
+                        />
+                        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 2fr 80px', gap: '8px' }}>
+                          <select
+                            value={beneficiarioBanco}
+                            onChange={(e) => setBeneficiarioBanco(e.target.value)}
+                            disabled={isLancamentoPago}
+                            style={{
+                              width: '100%',
+                              padding: '9px 10px',
+                              border: '1px solid #e5e7eb',
+                              borderRadius: '8px',
+                              fontSize: '13px',
+                              outline: 'none',
+                              backgroundColor: isLancamentoPago ? '#f9fafb' : 'white',
+                              cursor: isLancamentoPago ? 'not-allowed' : 'pointer'
+                            }}
+                          >
+                            <option value="">Selecione o banco</option>
+                            {bancos.map(banco => (
+                              <option key={banco.id} value={banco.nome}>
+                                {banco.codigo} - {banco.nome}
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            type="text"
+                            value={beneficiarioAgencia}
+                            onChange={(e) => setBeneficiarioAgencia(e.target.value)}
+                            disabled={isLancamentoPago}
+                            placeholder="Agência"
+                            style={{
+                              width: '100%',
+                              padding: '9px 10px',
+                              border: '1px solid #e5e7eb',
+                              borderRadius: '8px',
+                              fontSize: '13px',
+                              outline: 'none',
+                              backgroundColor: isLancamentoPago ? '#f9fafb' : 'white'
+                            }}
+                          />
+                          <input
+                            type="text"
+                            value={beneficiarioConta}
+                            onChange={(e) => setBeneficiarioConta(e.target.value)}
+                            disabled={isLancamentoPago}
+                            placeholder="Conta"
+                            style={{
+                              width: '100%',
+                              padding: '9px 10px',
+                              border: '1px solid #e5e7eb',
+                              borderRadius: '8px',
+                              fontSize: '13px',
+                              outline: 'none',
+                              backgroundColor: isLancamentoPago ? '#f9fafb' : 'white'
+                            }}
+                          />
+                          <input
+                            type="text"
+                            value={beneficiarioContaDv}
+                            onChange={(e) => setBeneficiarioContaDv(e.target.value)}
+                            disabled={isLancamentoPago}
+                            placeholder="DV"
+                            maxLength={2}
+                            style={{
+                              width: '100%',
+                              padding: '9px 10px',
+                              border: '1px solid #e5e7eb',
+                              borderRadius: '8px',
+                              fontSize: '13px',
+                              outline: 'none',
+                              backgroundColor: isLancamentoPago ? '#f9fafb' : 'white'
+                            }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Campos para DEPÓSITO EM CONTA */}
+                {formaPagamento === 'DEPOSITO_CONTA' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    <div>
+                      <label style={{
+                        display: 'block',
+                        fontSize: '13px',
+                        fontWeight: '500',
+                        color: '#374151',
+                        marginBottom: '6px'
+                      }}>
+                        Nome do Titular *
+                      </label>
+                      <input
+                        type="text"
+                        value={beneficiarioNome}
+                        onChange={(e) => setBeneficiarioNome(e.target.value)}
+                        disabled={isLancamentoPago}
+                        placeholder="Nome completo do titular da conta"
+                        style={{
+                          width: '100%',
+                          padding: '9px 10px',
+                          border: '1px solid #e5e7eb',
+                          borderRadius: '8px',
+                          fontSize: '13px',
+                          outline: 'none',
+                          backgroundColor: isLancamentoPago ? '#f9fafb' : 'white',
+                          cursor: isLancamentoPago ? 'not-allowed' : 'text',
+                          color: isLancamentoPago ? '#9ca3af' : '#1f2937'
+                        }}
+                      />
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 2fr 80px', gap: '12px' }}>
+                      <div>
+                        <label style={{
+                          display: 'block',
+                          fontSize: '13px',
+                          fontWeight: '500',
+                          color: '#374151',
+                          marginBottom: '6px'
+                        }}>
+                          Banco *
+                        </label>
+                        <select
+                          value={beneficiarioBanco}
+                          onChange={(e) => setBeneficiarioBanco(e.target.value)}
+                          disabled={isLancamentoPago}
+                          style={{
+                            width: '100%',
+                            padding: '9px 10px',
+                            border: '1px solid #e5e7eb',
+                            borderRadius: '8px',
+                            fontSize: '13px',
+                            outline: 'none',
+                            backgroundColor: isLancamentoPago ? '#f9fafb' : 'white',
+                            cursor: isLancamentoPago ? 'not-allowed' : 'pointer',
+                            color: isLancamentoPago ? '#9ca3af' : '#1f2937'
+                          }}
+                        >
+                          <option value="">Selecione o banco</option>
+                          {bancos.map(banco => (
+                            <option key={banco.id} value={banco.nome}>
+                              {banco.codigo} - {banco.nome}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label style={{
+                          display: 'block',
+                          fontSize: '13px',
+                          fontWeight: '500',
+                          color: '#374151',
+                          marginBottom: '6px'
+                        }}>
+                          Agência *
+                        </label>
+                        <input
+                          type="text"
+                          value={beneficiarioAgencia}
+                          onChange={(e) => setBeneficiarioAgencia(e.target.value)}
+                          disabled={isLancamentoPago}
+                          placeholder="0000"
+                          style={{
+                            width: '100%',
+                            padding: '9px 10px',
+                            border: '1px solid #e5e7eb',
+                            borderRadius: '8px',
+                            fontSize: '13px',
+                            outline: 'none',
+                            backgroundColor: isLancamentoPago ? '#f9fafb' : 'white',
+                            cursor: isLancamentoPago ? 'not-allowed' : 'text',
+                            color: isLancamentoPago ? '#9ca3af' : '#1f2937'
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{
+                          display: 'block',
+                          fontSize: '13px',
+                          fontWeight: '500',
+                          color: '#374151',
+                          marginBottom: '6px'
+                        }}>
+                          Conta *
+                        </label>
+                        <input
+                          type="text"
+                          value={beneficiarioConta}
+                          onChange={(e) => setBeneficiarioConta(e.target.value)}
+                          disabled={isLancamentoPago}
+                          placeholder="00000000"
+                          style={{
+                            width: '100%',
+                            padding: '9px 10px',
+                            border: '1px solid #e5e7eb',
+                            borderRadius: '8px',
+                            fontSize: '13px',
+                            outline: 'none',
+                            backgroundColor: isLancamentoPago ? '#f9fafb' : 'white',
+                            cursor: isLancamentoPago ? 'not-allowed' : 'text',
+                            color: isLancamentoPago ? '#9ca3af' : '#1f2937'
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{
+                          display: 'block',
+                          fontSize: '13px',
+                          fontWeight: '500',
+                          color: '#374151',
+                          marginBottom: '6px'
+                        }}>
+                          DV
+                        </label>
+                        <input
+                          type="text"
+                          value={beneficiarioContaDv}
+                          onChange={(e) => setBeneficiarioContaDv(e.target.value)}
+                          disabled={isLancamentoPago}
+                          placeholder="0"
+                          maxLength={2}
+                          style={{
+                            width: '100%',
+                            padding: '9px 10px',
+                            border: '1px solid #e5e7eb',
+                            borderRadius: '8px',
+                            fontSize: '13px',
+                            outline: 'none',
+                            backgroundColor: isLancamentoPago ? '#f9fafb' : 'white',
+                            cursor: isLancamentoPago ? 'not-allowed' : 'text',
+                            color: isLancamentoPago ? '#9ca3af' : '#1f2937'
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Observações */}
