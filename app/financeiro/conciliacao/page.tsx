@@ -1105,9 +1105,7 @@ export default function ConciliacaoBancariaPage() {
         const movMatch = movimentos.find(m => {
           const valorMatch = Math.abs(Math.abs(m.valor) - Math.abs(extrato.valor)) < 0.01
           const dataMatch = m.data_movimento === extrato.data_lancamento
-          // Garantir que o movimento pertence à conta selecionada
-          const contaMatch = m.banco_conta_id === contaSelecionada
-          return valorMatch && dataMatch && contaMatch
+          return valorMatch && dataMatch
         })
 
         if (movMatch) {
@@ -1122,26 +1120,11 @@ export default function ConciliacaoBancariaPage() {
             })
 
           if (!error) {
-            // Marcar movimento como conciliado - diretamente pelo ID
-            const { error: updateError, data: updateData } = await supabase
+            // Marcar movimento como conciliado
+            await supabase
               .from('movimentos_bancarios')
               .update({ conciliado: true })
               .eq('id', movMatch.id)
-              .select('id')
-            
-            // Se falhar por ID ou não atualizou nenhum, tentar por data/valor/conta
-            if (updateError || !updateData || updateData.length === 0) {
-              console.log('Update por ID falhou ou não encontrou registro, tentando por data/valor. ID:', movMatch.id)
-              const valorBusca = Math.abs(extrato.valor)
-              await supabase
-                .from('movimentos_bancarios')
-                .update({ conciliado: true })
-                .eq('banco_conta_id', contaSelecionada)
-                .eq('data_movimento', extrato.data_lancamento)
-                .gte('valor', valorBusca - 0.01)
-                .lte('valor', valorBusca + 0.01)
-            }
-            
             matches++
           }
         }

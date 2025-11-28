@@ -4,8 +4,10 @@ import { useEffect, useState } from 'react'
 import Image from 'next/image'
 import { useRouter, usePathname } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
-import SideBar from './SideBar'
-import TopBar from './TopBar'
+import { PanelProvider } from '@/contexts/PanelContext'
+import SideBar from '@/components/layout/SideBar'
+import TopBar from '@/components/layout/TopBar'
+import PanelContainer from '@/components/layout/PanelContainer'
 
 export default function MainLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
@@ -99,80 +101,74 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
     return <>{children}</>
   }
 
-  // Páginas privadas (com layout completo e melhorado)
+  // Páginas privadas (com layout completo e sistema de painéis)
   return (
-    <div 
-      style={{
-        display: 'flex',
-        height: '100vh',
-        overflow: 'hidden',
-        backgroundColor: '#f9fafb'
-      }}
-    >
-      <SideBar />
-      
+    <PanelProvider>
       <div 
         style={{
-          flex: '1',
           display: 'flex',
-          flexDirection: 'column',
+          height: '100vh',
           overflow: 'hidden',
           backgroundColor: '#f9fafb'
         }}
       >
-        <TopBar />
+        <SideBar />
         
-        <main 
+        <div 
           style={{
             flex: '1',
-            overflowY: 'auto',
-            backgroundColor: '#f9fafb',
-            padding: '2rem',
-            transition: 'all 0.3s ease'
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+            backgroundColor: '#f9fafb'
           }}
         >
-          <div 
+          <TopBar />
+          
+          <main 
             style={{
-              maxWidth: '1600px',
-              margin: '0 auto',
-              animation: 'fadeIn 0.3s ease-in-out'
+              flex: '1',
+              overflow: 'hidden',
+              backgroundColor: '#f9fafb',
+              transition: 'all 0.3s ease'
             }}
           >
-            {children}
-          </div>
-        </main>
+            <PanelContainer />
+          </main>
+        </div>
+
+        <style>{`
+          @keyframes fadeIn {
+            from {
+              opacity: 0;
+              transform: translateY(10px);
+            }
+            to {
+              opacity: 1;
+              transform: translateY(0);
+            }
+          }
+
+          /* Scrollbar customizada para painéis */
+          main ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+          }
+
+          main ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+          }
+
+          main ::-webkit-scrollbar-thumb {
+            background: #d1d5db;
+            border-radius: 4px;
+          }
+
+          main ::-webkit-scrollbar-thumb:hover {
+            background: #9ca3af;
+          }
+        `}</style>
       </div>
-
-      <style>{`
-        @keyframes fadeIn {
-          from {
-            opacity: 0;
-            transform: translateY(10px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
-
-        /* Scrollbar customizada */
-        main::-webkit-scrollbar {
-          width: 8px;
-        }
-
-        main::-webkit-scrollbar-track {
-          background: #f1f1f1;
-        }
-
-        main::-webkit-scrollbar-thumb {
-          background: #d1d5db;
-          border-radius: 4px;
-        }
-
-        main::-webkit-scrollbar-thumb:hover {
-          background: #9ca3af;
-        }
-      `}</style>
-    </div>
+    </PanelProvider>
   )
 }

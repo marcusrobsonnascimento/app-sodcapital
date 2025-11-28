@@ -2,8 +2,9 @@
 
 import { useState } from 'react'
 import Image from 'next/image'
-import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { usePanels } from '@/contexts/PanelContext'
+import { getPageInfo } from '@/lib/pageRegistry'
 import {
   LayoutDashboard,
   Building2,
@@ -109,7 +110,8 @@ const menuItems: MenuItem[] = [
 
 export default function SideBar() {
   const pathname = usePathname()
-  const [expandedItems, setExpandedItems] = useState<string[]>(['Cadastros'])
+  const { panels, openPanel } = usePanels()
+  const [expandedItems, setExpandedItems] = useState<string[]>(['Cadastros', 'Financeiro'])
   const [hoveredItem, setHoveredItem] = useState<string | null>(null)
 
   const toggleExpand = (title: string) => {
@@ -120,10 +122,31 @@ export default function SideBar() {
     )
   }
 
+  // Handler para clique em item do menu
+  const handleMenuClick = (href: string, title: string, e: React.MouseEvent) => {
+    e.preventDefault()
+    
+    // Verificar se a página está registrada
+    const pageInfo = getPageInfo(href)
+    if (!pageInfo) {
+      console.warn(`Página não registrada: ${href}`)
+      return
+    }
+
+    // Ctrl+Click ou Clique com botão do meio = novo painel
+    const forceNew = e.ctrlKey || e.metaKey || e.button === 1
+    openPanel(href, title, forceNew)
+  }
+
+  // Verificar se uma rota está ativa em algum painel
+  const isRouteActive = (href: string): boolean => {
+    return panels.some(p => p.route === href)
+  }
+
   const renderMenuItem = (item: MenuItem, level: number = 0) => {
     const Icon = item.icon
     const isExpanded = expandedItems.includes(item.title)
-    const isActive = item.href === pathname
+    const isActive = item.href ? isRouteActive(item.href) : false
     const hasChildren = item.children && item.children.length > 0
     const isHovered = hoveredItem === item.title
 
@@ -192,9 +215,17 @@ export default function SideBar() {
     }
 
     return (
-      <Link
+      <a
         key={item.href}
         href={item.href!}
+        onClick={(e) => handleMenuClick(item.href!, item.title, e)}
+        onMouseDown={(e) => {
+          // Capturar clique do botão do meio
+          if (e.button === 1) {
+            e.preventDefault()
+            handleMenuClick(item.href!, item.title, e)
+          }
+        }}
         onMouseEnter={() => setHoveredItem(item.title)}
         onMouseLeave={() => setHoveredItem(null)}
         style={{
@@ -206,8 +237,10 @@ export default function SideBar() {
           backgroundColor: isActive ? '#1555D6' : isHovered ? '#f3f4f6' : 'transparent',
           textDecoration: 'none',
           transition: 'all 0.2s ease',
-          marginBottom: '0.25rem'
+          marginBottom: '0.25rem',
+          position: 'relative'
         }}
+        title={`Clique para abrir • Ctrl+Clique para novo painel`}
       >
         <Icon 
           size={level > 0 ? 18 : 20}
@@ -221,12 +254,24 @@ export default function SideBar() {
             fontSize: level > 0 ? '0.8125rem' : '0.875rem',
             fontWeight: '500',
             color: isActive ? '#ffffff' : '#374151',
-            transition: 'color 0.2s ease'
+            transition: 'color 0.2s ease',
+            flex: 1
           }}
         >
           {item.title}
         </span>
-      </Link>
+        
+        {/* Indicador de página aberta em outro painel */}
+        {isActive && !panels.find(p => p.route === item.href)?.isActive && (
+          <div style={{
+            width: '6px',
+            height: '6px',
+            borderRadius: '50%',
+            backgroundColor: '#ffffff',
+            opacity: 0.7
+          }} />
+        )}
+      </a>
     )
   }
 
@@ -269,6 +314,21 @@ export default function SideBar() {
         >
           ERP Financeiro
         </p>
+      </div>
+
+      {/* Dica de uso */}
+      <div style={{
+        padding: '8px 16px',
+        backgroundColor: '#f0f9ff',
+        borderBottom: '1px solid #e0f2fe',
+        fontSize: '11px',
+        color: '#0369a1',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px'
+      }}>
+        <span style={{ fontSize: '14px' }}>💡</span>
+        <span><strong>Ctrl+Clique</strong> abre em novo painel</span>
       </div>
 
       {/* Menu Navigation */}
