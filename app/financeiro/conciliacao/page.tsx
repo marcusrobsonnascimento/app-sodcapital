@@ -265,6 +265,10 @@ export default function ConciliacaoBancariaPage() {
   const [periodoFim, setPeriodoFim] = useState('')
   const [mostrarConciliados, setMostrarConciliados] = useState(false)
   
+  // Estados de ordenação
+  const [ordenacaoExtrato, setOrdenacaoExtrato] = useState<{ campo: 'data' | 'valor'; direcao: 'asc' | 'desc' }>({ campo: 'data', direcao: 'desc' })
+  const [ordenacaoLancamento, setOrdenacaoLancamento] = useState<{ campo: 'data' | 'valor'; direcao: 'asc' | 'desc' }>({ campo: 'data', direcao: 'desc' })
+  
   // Estados de seleção para conciliação
   const [extratosSelecionados, setExtratosSelecionados] = useState<string[]>([])
   const [lancamentosSelecionados, setLancamentosSelecionados] = useState<string[]>([])
@@ -391,10 +395,12 @@ export default function ConciliacaoBancariaPage() {
           data_liquidacao,
           status,
           documento_numero,
+          conciliado,
           contrapartes(nome, apelido)
         `)
         .eq('banco_conta_id', contaId)
         .eq('status', 'PAGO_RECEBIDO')
+        .eq('conciliado', false)  // Filtrar apenas não conciliados
         .order('data_liquidacao', { ascending: false })
       
       if (error) throw error
@@ -439,6 +445,7 @@ export default function ConciliacaoBancariaPage() {
           lancamento_id
         `)
         .eq('banco_conta_id', contaId)
+        .eq('conciliado', false)  // Filtrar apenas não conciliados
         .in('tipo_movimento', ['TRANSFERENCIA_ENVIADA', 'TRANSFERENCIA_RECEBIDA'])
         .order('data_movimento', { ascending: false })
       
@@ -457,11 +464,11 @@ export default function ConciliacaoBancariaPage() {
           return
         }
         
-        
-        // Filtrar manualmente
+        // Filtrar manualmente (apenas não conciliados e transferências)
         const transferencias = (dataAll || []).filter((item: any) => 
-          item.tipo_movimento === 'TRANSFERENCIA_ENVIADA' || 
-          item.tipo_movimento === 'TRANSFERENCIA_RECEBIDA'
+          (item.tipo_movimento === 'TRANSFERENCIA_ENVIADA' || 
+           item.tipo_movimento === 'TRANSFERENCIA_RECEBIDA') &&
+          item.conciliado === false
         )
         
         const formatted: MovimentoBancario[] = transferencias.map((item: any) => ({
@@ -749,6 +756,9 @@ export default function ConciliacaoBancariaPage() {
         const extratoId = extratosSelecionados[0]
         const [origem, id] = lancamentosSelecionados[0].split(':')
         
+        // Buscar dados do extrato para obter data
+        const extrato = extratos.find(e => e.id === extratoId)
+        
         const insertData: any = {
           org_id: contaInfo!.org_id,
           banco_conta_id: contaSelecionada,
@@ -758,10 +768,32 @@ export default function ConciliacaoBancariaPage() {
 
         if (origem === 'LANCAMENTO') {
           insertData.lancamento_id = id
+          
+          // Marcar lançamento como conciliado
           await supabase
+            .from('lancamentos')
+            .update({ conciliado: true })
+            .eq('id', id)
+          
+          // Marcar movimento correspondente como conciliado
+          // Primeira tentativa: por lancamento_id
+          const { data: movPorLancamento } = await supabase
             .from('movimentos_bancarios')
             .update({ conciliado: true })
             .eq('lancamento_id', id)
+            .select('id')
+          
+          // Se não encontrou por lancamento_id, buscar por data/valor usando data do EXTRATO
+          if ((!movPorLancamento || movPorLancamento.length === 0) && extrato) {
+            const valorBusca = Math.abs(extrato.valor)
+            await supabase
+              .from('movimentos_bancarios')
+              .update({ conciliado: true })
+              .eq('banco_conta_id', contaSelecionada)
+              .eq('data_movimento', extrato.data_lancamento)
+              .gte('valor', valorBusca - 0.01)
+              .lte('valor', valorBusca + 0.01)
+          }
         } else {
           insertData.movimento_id = id
           await supabase
@@ -805,12 +837,37 @@ export default function ConciliacaoBancariaPage() {
           if (lancChave) {
             const [origem, id] = lancChave.split(':')
             
+            // Buscar dados do extrato para obter data (se disponível)
+            const extrato = extratoId ? extratos.find(e => e.id === extratoId) : null
+            
             if (origem === 'LANCAMENTO') {
               insertData.lancamento_id = id
+              
+              // Marcar lançamento como conciliado
               await supabase
+                .from('lancamentos')
+                .update({ conciliado: true })
+                .eq('id', id)
+              
+              // Marcar movimento correspondente como conciliado
+              // Primeira tentativa: por lancamento_id
+              const { data: movPorLancamento } = await supabase
                 .from('movimentos_bancarios')
                 .update({ conciliado: true })
                 .eq('lancamento_id', id)
+                .select('id')
+              
+              // Se não encontrou por lancamento_id, buscar por data/valor usando data do EXTRATO
+              if ((!movPorLancamento || movPorLancamento.length === 0) && extrato) {
+                const valorBusca = Math.abs(extrato.valor)
+                await supabase
+                  .from('movimentos_bancarios')
+                  .update({ conciliado: true })
+                  .eq('banco_conta_id', contaSelecionada)
+                  .eq('data_movimento', extrato.data_lancamento)
+                  .gte('valor', valorBusca - 0.01)
+                  .lte('valor', valorBusca + 0.01)
+              }
             } else {
               insertData.movimento_id = id
               await supabase
@@ -856,7 +913,7 @@ export default function ConciliacaoBancariaPage() {
           .select('movimento_id, lancamento_id')
           .eq('grupo_conciliacao', conciliacao.grupo_conciliacao)
         
-        // Marcar todos os movimentos do grupo como não conciliados
+        // Marcar todos os movimentos e lançamentos do grupo como não conciliados
         if (conciliacoesGrupo) {
           for (const conc of conciliacoesGrupo) {
             if (conc.movimento_id) {
@@ -866,6 +923,11 @@ export default function ConciliacaoBancariaPage() {
                 .eq('id', conc.movimento_id)
             }
             if (conc.lancamento_id) {
+              // Marcar o lançamento como não conciliado
+              await supabase
+                .from('lancamentos')
+                .update({ conciliado: false })
+                .eq('id', conc.lancamento_id)
               // Marcar o movimento correspondente ao lançamento como não conciliado
               await supabase
                 .from('movimentos_bancarios')
@@ -891,6 +953,11 @@ export default function ConciliacaoBancariaPage() {
             .eq('id', conciliacao.movimento_id)
         }
         if (conciliacao?.lancamento_id) {
+          // Marcar o lançamento como não conciliado
+          await supabase
+            .from('lancamentos')
+            .update({ conciliado: false })
+            .eq('id', conciliacao.lancamento_id)
           // Marcar o movimento correspondente ao lançamento como não conciliado
           await supabase
             .from('movimentos_bancarios')
@@ -928,7 +995,7 @@ export default function ConciliacaoBancariaPage() {
         .eq('banco_conta_id', contaSelecionada)
         .eq('status', 'CONCILIADO')
 
-      // Marcar todos os movimentos como não conciliados
+      // Marcar todos os movimentos e lançamentos como não conciliados
       if (conciliacoesComMovimento) {
         for (const conc of conciliacoesComMovimento) {
           if (conc.movimento_id) {
@@ -938,6 +1005,11 @@ export default function ConciliacaoBancariaPage() {
               .eq('id', conc.movimento_id)
           }
           if (conc.lancamento_id) {
+            // Marcar o lançamento como não conciliado
+            await supabase
+              .from('lancamentos')
+              .update({ conciliado: false })
+              .eq('id', conc.lancamento_id)
             // Marcar o movimento correspondente ao lançamento como não conciliado
             await supabase
               .from('movimentos_bancarios')
@@ -997,11 +1069,33 @@ export default function ConciliacaoBancariaPage() {
             })
 
           if (!error) {
-            // Marcar o movimento correspondente ao lançamento como conciliado
+            // Marcar o lançamento como conciliado
             await supabase
+              .from('lancamentos')
+              .update({ conciliado: true })
+              .eq('id', lancMatch.id)
+            
+            // Marcar o movimento correspondente ao lançamento como conciliado
+            // Primeira tentativa: por lancamento_id
+            const { data: movPorLancamento } = await supabase
               .from('movimentos_bancarios')
               .update({ conciliado: true })
               .eq('lancamento_id', lancMatch.id)
+              .select('id')
+            
+            // Se não encontrou por lancamento_id, buscar por data/valor usando data do EXTRATO
+            if (!movPorLancamento || movPorLancamento.length === 0) {
+              // Buscar movimento que corresponda à mesma data do extrato e valor (dentro de tolerância)
+              const valorBusca = Math.abs(extrato.valor)
+              await supabase
+                .from('movimentos_bancarios')
+                .update({ conciliado: true })
+                .eq('banco_conta_id', contaSelecionada)
+                .eq('data_movimento', extrato.data_lancamento)
+                .gte('valor', valorBusca - 0.01)
+                .lte('valor', valorBusca + 0.01)
+            }
+            
             matches++
           }
           continue
@@ -1011,7 +1105,9 @@ export default function ConciliacaoBancariaPage() {
         const movMatch = movimentos.find(m => {
           const valorMatch = Math.abs(Math.abs(m.valor) - Math.abs(extrato.valor)) < 0.01
           const dataMatch = m.data_movimento === extrato.data_lancamento
-          return valorMatch && dataMatch
+          // Garantir que o movimento pertence à conta selecionada
+          const contaMatch = m.banco_conta_id === contaSelecionada
+          return valorMatch && dataMatch && contaMatch
         })
 
         if (movMatch) {
@@ -1026,11 +1122,26 @@ export default function ConciliacaoBancariaPage() {
             })
 
           if (!error) {
-            // Marcar movimento como conciliado
-            await supabase
+            // Marcar movimento como conciliado - diretamente pelo ID
+            const { error: updateError, data: updateData } = await supabase
               .from('movimentos_bancarios')
               .update({ conciliado: true })
               .eq('id', movMatch.id)
+              .select('id')
+            
+            // Se falhar por ID ou não atualizou nenhum, tentar por data/valor/conta
+            if (updateError || !updateData || updateData.length === 0) {
+              console.log('Update por ID falhou ou não encontrou registro, tentando por data/valor. ID:', movMatch.id)
+              const valorBusca = Math.abs(extrato.valor)
+              await supabase
+                .from('movimentos_bancarios')
+                .update({ conciliado: true })
+                .eq('banco_conta_id', contaSelecionada)
+                .eq('data_movimento', extrato.data_lancamento)
+                .gte('valor', valorBusca - 0.01)
+                .lte('valor', valorBusca + 0.01)
+            }
+            
             matches++
           }
         }
@@ -1089,17 +1200,24 @@ export default function ConciliacaoBancariaPage() {
              e.documento_ref?.toLowerCase().includes(termo)
     }
     return true
+  }).sort((a, b) => {
+    const { campo, direcao } = ordenacaoExtrato
+    let comparacao = 0
+    
+    if (campo === 'data') {
+      comparacao = (a.data_lancamento || '').localeCompare(b.data_lancamento || '')
+    } else if (campo === 'valor') {
+      comparacao = Math.abs(a.valor) - Math.abs(b.valor)
+    }
+    
+    return direcao === 'asc' ? comparacao : -comparacao
   })
 
   // Combinar lançamentos e movimentos
   const lancamentosEMovimentos: LancamentoOuMovimento[] = [
     ...lancamentos,
     ...movimentos
-  ].sort((a, b) => {
-    const dataA = 'data_liquidacao' in a ? a.data_liquidacao : a.data_movimento
-    const dataB = 'data_liquidacao' in b ? b.data_liquidacao : b.data_movimento
-    return (dataB || '').localeCompare(dataA || '')
-  })
+  ]
 
   const lancamentosFiltrados = lancamentosEMovimentos.filter(item => {
     if (searchTermConta) {
@@ -1112,6 +1230,21 @@ export default function ConciliacaoBancariaPage() {
       }
     }
     return true
+  }).sort((a, b) => {
+    const { campo, direcao } = ordenacaoLancamento
+    let comparacao = 0
+    
+    if (campo === 'data') {
+      const dataA = 'data_liquidacao' in a ? a.data_liquidacao : a.data_movimento
+      const dataB = 'data_liquidacao' in b ? b.data_liquidacao : b.data_movimento
+      comparacao = (dataA || '').localeCompare(dataB || '')
+    } else if (campo === 'valor') {
+      const valorA = 'valor_liquido' in a ? a.valor_liquido : a.valor
+      const valorB = 'valor_liquido' in b ? b.valor_liquido : b.valor
+      comparacao = Math.abs(valorA) - Math.abs(valorB)
+    }
+    
+    return direcao === 'asc' ? comparacao : -comparacao
   })
 
   const estatisticas = {
@@ -1481,10 +1614,38 @@ export default function ConciliacaoBancariaPage() {
                           onChange={selecionarTodosExtratos}
                         />
                       </th>
-                      <th style={{ padding: '8px 6px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Data</th>
+                      <th 
+                        onClick={() => setOrdenacaoExtrato(prev => ({
+                          campo: 'data',
+                          direcao: prev.campo === 'data' && prev.direcao === 'desc' ? 'asc' : 'desc'
+                        }))}
+                        style={{ 
+                          padding: '8px 6px', 
+                          textAlign: 'left', 
+                          borderBottom: '1px solid #e2e8f0',
+                          cursor: 'pointer',
+                          userSelect: 'none'
+                        }}
+                      >
+                        Data {ordenacaoExtrato.campo === 'data' && (ordenacaoExtrato.direcao === 'asc' ? '▲' : '▼')}
+                      </th>
                       <th style={{ padding: '8px 6px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Documento</th>
                       <th style={{ padding: '8px 6px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Histórico</th>
-                      <th style={{ padding: '8px 6px', textAlign: 'right', borderBottom: '1px solid #e2e8f0' }}>Valor</th>
+                      <th 
+                        onClick={() => setOrdenacaoExtrato(prev => ({
+                          campo: 'valor',
+                          direcao: prev.campo === 'valor' && prev.direcao === 'desc' ? 'asc' : 'desc'
+                        }))}
+                        style={{ 
+                          padding: '8px 6px', 
+                          textAlign: 'right', 
+                          borderBottom: '1px solid #e2e8f0',
+                          cursor: 'pointer',
+                          userSelect: 'none'
+                        }}
+                      >
+                        Valor {ordenacaoExtrato.campo === 'valor' && (ordenacaoExtrato.direcao === 'asc' ? '▲' : '▼')}
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1601,10 +1762,38 @@ export default function ConciliacaoBancariaPage() {
                           onChange={selecionarTodosLancamentos}
                         />
                       </th>
-                      <th style={{ padding: '8px 6px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Data</th>
+                      <th 
+                        onClick={() => setOrdenacaoLancamento(prev => ({
+                          campo: 'data',
+                          direcao: prev.campo === 'data' && prev.direcao === 'desc' ? 'asc' : 'desc'
+                        }))}
+                        style={{ 
+                          padding: '8px 6px', 
+                          textAlign: 'left', 
+                          borderBottom: '1px solid #e2e8f0',
+                          cursor: 'pointer',
+                          userSelect: 'none'
+                        }}
+                      >
+                        Data {ordenacaoLancamento.campo === 'data' && (ordenacaoLancamento.direcao === 'asc' ? '▲' : '▼')}
+                      </th>
                       <th style={{ padding: '8px 6px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Documento</th>
                       <th style={{ padding: '8px 6px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Histórico</th>
-                      <th style={{ padding: '8px 6px', textAlign: 'right', borderBottom: '1px solid #e2e8f0' }}>Valor</th>
+                      <th 
+                        onClick={() => setOrdenacaoLancamento(prev => ({
+                          campo: 'valor',
+                          direcao: prev.campo === 'valor' && prev.direcao === 'desc' ? 'asc' : 'desc'
+                        }))}
+                        style={{ 
+                          padding: '8px 6px', 
+                          textAlign: 'right', 
+                          borderBottom: '1px solid #e2e8f0',
+                          cursor: 'pointer',
+                          userSelect: 'none'
+                        }}
+                      >
+                        Valor {ordenacaoLancamento.campo === 'valor' && (ordenacaoLancamento.direcao === 'asc' ? '▲' : '▼')}
+                      </th>
                       <th style={{ padding: '8px 6px', textAlign: 'center', borderBottom: '1px solid #e2e8f0' }}>Origem</th>
                     </tr>
                   </thead>
