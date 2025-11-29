@@ -25,7 +25,10 @@ import {
   Lightbulb,
   FileSpreadsheet,
   Building2,
-  CreditCard
+  CreditCard,
+  Archive,
+  ArchiveRestore,
+  Calendar
 } from 'lucide-react'
 
 // ==================== TYPES ====================
@@ -113,9 +116,18 @@ interface Conciliacao {
   observacoes: string | null
   created_at: string
   grupo_conciliacao: string | null
+  processado: boolean
+  data_processamento: string | null
   extrato?: ExtratoBancario
   lancamento?: Lancamento
   movimento?: MovimentoBancario
+}
+
+// Interface para agrupamento de processamentos
+interface ProcessamentoAgrupado {
+  data_processamento: string
+  quantidade: number
+  conciliacoes: Conciliacao[]
 }
 
 interface DadosOFX {
@@ -268,14 +280,28 @@ export default function ConciliacaoBancariaPage() {
   // Estados de ordenação
   const [ordenacaoExtrato, setOrdenacaoExtrato] = useState<{ campo: 'data' | 'valor'; direcao: 'asc' | 'desc' }>({ campo: 'data', direcao: 'desc' })
   const [ordenacaoLancamento, setOrdenacaoLancamento] = useState<{ campo: 'data' | 'valor'; direcao: 'asc' | 'desc' }>({ campo: 'data', direcao: 'desc' })
+  const [ordenacaoConciliacao, setOrdenacaoConciliacao] = useState<{ campo: 'data' | 'valor'; direcao: 'asc' | 'desc' }>({ campo: 'data', direcao: 'desc' })
   
   // Estados de seleção para conciliação
   const [extratosSelecionados, setExtratosSelecionados] = useState<string[]>([])
   const [lancamentosSelecionados, setLancamentosSelecionados] = useState<string[]>([])
   
+  // Estados de seleção para processar conciliações
+  const [conciliacoesSelecionadasParaProcessar, setConciliacoesSelecionadasParaProcessar] = useState<string[]>([])
+  
   // Modal de edição de lançamento
   const [showEditarLancamentoModal, setShowEditarLancamentoModal] = useState(false)
   const [lancamentoParaEditar, setLancamentoParaEditar] = useState<Lancamento | null>(null)
+  
+  // Modal de desprocessar
+  const [showDesprocessarModal, setShowDesprocessarModal] = useState(false)
+  const [processamentosAgrupados, setProcessamentosAgrupados] = useState<ProcessamentoAgrupado[]>([])
+  const [conciliacoesProcessadas, setConciliacoesProcessadas] = useState<Conciliacao[]>([])
+  const [conciliacoesSelecionadasParaDesprocessar, setConciliacoesSelecionadasParaDesprocessar] = useState<string[]>([])
+  const [filtroDataInicio, setFiltroDataInicio] = useState('')
+  const [filtroDataFim, setFiltroDataFim] = useState('')
+  const [loadingProcessamentos, setLoadingProcessamentos] = useState(false)
+  const [processandoAcao, setProcessandoAcao] = useState(false)
   
   // Toast
   const [toast, setToast] = useState<{ show: boolean; message: string; type: 'success' | 'error' | 'warning' }>({
@@ -518,6 +544,7 @@ export default function ConciliacaoBancariaPage() {
         .select('*')
         .eq('banco_conta_id', contaId)
         .eq('status', 'CONCILIADO')
+        .eq('processado', false)  // Não mostrar processados
         .order('created_at', { ascending: false })
       
       if (error) throw error
@@ -1169,6 +1196,218 @@ export default function ConciliacaoBancariaPage() {
     }
   }
 
+  // Toggle para selecionar/deselecionar conciliação para processar
+  const toggleConciliacaoParaProcessar = (conciliacaoId: string) => {
+    setConciliacoesSelecionadasParaProcessar(prev => 
+      prev.includes(conciliacaoId) 
+        ? prev.filter(id => id !== conciliacaoId)
+        : [...prev, conciliacaoId]
+    )
+  }
+
+  // Selecionar/Deselecionar todas as conciliações para processar
+  const toggleTodasConciliacoesParaProcessar = () => {
+    if (conciliacoesSelecionadasParaProcessar.length === conciliacoes.length) {
+      // Se todas estão selecionadas, deseleciona todas
+      setConciliacoesSelecionadasParaProcessar([])
+    } else {
+      // Senão, seleciona todas
+      setConciliacoesSelecionadasParaProcessar(conciliacoes.map(c => c.id))
+    }
+  }
+
+  // Função para processar as conciliações selecionadas
+  const processarConciliacoes = async () => {
+    if (!contaSelecionada || conciliacoesSelecionadasParaProcessar.length === 0) return
+
+    setProcessandoAcao(true)
+    try {
+      // Pegar a data/hora atual no timezone do Brasil
+      const now = new Date()
+      const dataProcessamento = now.toISOString()
+
+      // Atualizar apenas as conciliações selecionadas
+      const { error } = await supabase
+        .from('conciliacoes')
+        .update({ 
+          processado: true, 
+          data_processamento: dataProcessamento 
+        })
+        .in('id', conciliacoesSelecionadasParaProcessar)
+
+      if (error) throw error
+
+      showToast(`${conciliacoesSelecionadasParaProcessar.length} conciliação(ões) processada(s) com sucesso!`, 'success')
+      setConciliacoesSelecionadasParaProcessar([]) // Limpar seleção
+      await fetchConciliacoes(contaSelecionada)
+    } catch (error: any) {
+      showError(`Erro ao processar: ${error.message}`)
+    } finally {
+      setProcessandoAcao(false)
+    }
+  }
+
+  // Função para buscar processamentos (para o modal de desprocessar)
+  const fetchProcessamentos = async (dataInicio?: string, dataFim?: string) => {
+    if (!contaSelecionada) return
+
+    setLoadingProcessamentos(true)
+    try {
+      let query = supabase
+        .from('conciliacoes')
+        .select('*')
+        .eq('banco_conta_id', contaSelecionada)
+        .eq('processado', true)
+        .not('data_processamento', 'is', null)
+        .order('data_processamento', { ascending: false })
+
+      // Aplicar filtro de data se fornecido
+      if (dataInicio) {
+        query = query.gte('data_processamento', `${dataInicio}T00:00:00`)
+      }
+      if (dataFim) {
+        query = query.lte('data_processamento', `${dataFim}T23:59:59`)
+      }
+
+      // Limitar a 100 registros para não sobrecarregar
+      query = query.limit(100)
+
+      const { data, error } = await query
+
+      if (error) throw error
+
+      // Guardar as conciliações processadas para exibição detalhada
+      setConciliacoesProcessadas(data || [])
+      setConciliacoesSelecionadasParaDesprocessar([]) // Limpar seleção anterior
+
+      // Agrupar por data_processamento (apenas a data, sem hora)
+      const agrupados: { [key: string]: Conciliacao[] } = {}
+      
+      ;(data || []).forEach((conc: Conciliacao) => {
+        if (conc.data_processamento) {
+          // Converter para data local do Brasil
+          const dataLocal = new Date(conc.data_processamento)
+          const dataKey = dataLocal.toLocaleDateString('pt-BR', { 
+            timeZone: 'America/Sao_Paulo',
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          })
+          
+          if (!agrupados[dataKey]) {
+            agrupados[dataKey] = []
+          }
+          agrupados[dataKey].push(conc)
+        }
+      })
+
+      // Converter para array e ordenar por data (mais recente primeiro)
+      const resultado: ProcessamentoAgrupado[] = Object.entries(agrupados)
+        .map(([data, conciliacoes]) => ({
+          data_processamento: data,
+          quantidade: conciliacoes.length,
+          conciliacoes
+        }))
+        .slice(0, dataInicio || dataFim ? 100 : 10) // Se tem filtro, mostra mais, senão só 10
+
+      setProcessamentosAgrupados(resultado)
+    } catch (error: any) {
+      showError(`Erro ao buscar processamentos: ${error.message}`)
+    } finally {
+      setLoadingProcessamentos(false)
+    }
+  }
+
+  // Toggle para selecionar/deselecionar conciliação para desprocessar
+  const toggleConciliacaoParaDesprocessar = (conciliacaoId: string) => {
+    setConciliacoesSelecionadasParaDesprocessar(prev => 
+      prev.includes(conciliacaoId) 
+        ? prev.filter(id => id !== conciliacaoId)
+        : [...prev, conciliacaoId]
+    )
+  }
+
+  // Selecionar/Deselecionar todas as conciliações para desprocessar
+  const toggleTodasConciliacoesParaDesprocessar = () => {
+    if (conciliacoesSelecionadasParaDesprocessar.length === conciliacoesProcessadas.length) {
+      setConciliacoesSelecionadasParaDesprocessar([])
+    } else {
+      setConciliacoesSelecionadasParaDesprocessar(conciliacoesProcessadas.map(c => c.id))
+    }
+  }
+
+  // Função para desprocessar as conciliações selecionadas
+  const desprocessarSelecionados = async () => {
+    if (conciliacoesSelecionadasParaDesprocessar.length === 0) return
+
+    setProcessandoAcao(true)
+    try {
+      const { error } = await supabase
+        .from('conciliacoes')
+        .update({ 
+          processado: false, 
+          data_processamento: null 
+        })
+        .in('id', conciliacoesSelecionadasParaDesprocessar)
+
+      if (error) throw error
+
+      showToast(`${conciliacoesSelecionadasParaDesprocessar.length} conciliação(ões) reaberta(s) com sucesso!`, 'success')
+      
+      // Atualizar lista de processamentos
+      await fetchProcessamentos(filtroDataInicio, filtroDataFim)
+      
+      // Atualizar conciliações na tela principal
+      await fetchConciliacoes(contaSelecionada)
+    } catch (error: any) {
+      showError(`Erro ao desprocessar: ${error.message}`)
+    } finally {
+      setProcessandoAcao(false)
+    }
+  }
+
+  // Função para desprocessar um grupo de conciliações (mantida para compatibilidade)
+  const desprocessarGrupo = async (conciliacoesParaDesprocessar: Conciliacao[]) => {
+    if (conciliacoesParaDesprocessar.length === 0) return
+
+    setProcessandoAcao(true)
+    try {
+      const ids = conciliacoesParaDesprocessar.map(c => c.id)
+
+      const { error } = await supabase
+        .from('conciliacoes')
+        .update({ 
+          processado: false, 
+          data_processamento: null 
+        })
+        .in('id', ids)
+
+      if (error) throw error
+
+      showToast(`${conciliacoesParaDesprocessar.length} conciliação(ões) reaberta(s) com sucesso!`, 'success')
+      
+      // Atualizar lista de processamentos
+      await fetchProcessamentos(filtroDataInicio, filtroDataFim)
+      
+      // Atualizar conciliações na tela principal
+      await fetchConciliacoes(contaSelecionada)
+    } catch (error: any) {
+      showError(`Erro ao desprocessar: ${error.message}`)
+    } finally {
+      setProcessandoAcao(false)
+    }
+  }
+
+  // Abrir modal de desprocessar
+  const abrirModalDesprocessar = () => {
+    setFiltroDataInicio('')
+    setFiltroDataFim('')
+    fetchProcessamentos()
+    setShowDesprocessarModal(true)
+  }
+
   // ==================== COMPUTED VALUES ====================
 
   const extratosFiltrados = extratos.filter(e => {
@@ -1252,6 +1491,45 @@ export default function ConciliacaoBancariaPage() {
       return acc + (mov?.valor || 0)
     }
   }, 0)
+
+  // Calcular datas dos lançamentos selecionados para sugestão
+  const datasLancamentosSelecionados = lancamentosSelecionados.map(chave => {
+    const [origem, id] = chave.split(':')
+    if (origem === 'LANCAMENTO') {
+      const lanc = lancamentos.find(l => l.id === id)
+      return lanc?.data_liquidacao || lanc?.data_vencimento || ''
+    } else {
+      const mov = movimentos.find(m => m.id === id)
+      return mov?.data_movimento || ''
+    }
+  }).filter(d => d)
+
+  // Função para verificar se um extrato é uma sugestão de match
+  const isExtratoSugerido = (extrato: ExtratoBancario): boolean => {
+    // Só sugere se há lançamentos selecionados na direita
+    if (lancamentosSelecionados.length === 0) return false
+    
+    // Não sugere se o extrato já está selecionado ou conciliado
+    if (extratosSelecionados.includes(extrato.id)) return false
+    if (extrato.conciliacao?.status === 'CONCILIADO') return false
+    
+    // Verificar se o valor do extrato bate com a soma dos lançamentos selecionados
+    // (considerando tolerância de centavos e valores absolutos)
+    const valorExtrato = Math.abs(extrato.valor)
+    const valorLancamentos = Math.abs(totalLancamentosSelecionados)
+    const valorBate = Math.abs(valorExtrato - valorLancamentos) < 0.01
+    
+    if (!valorBate) return false
+    
+    // Verificar se a data do extrato está entre as datas dos lançamentos selecionados
+    // Ou se é a mesma data de algum lançamento selecionado
+    const dataExtrato = extrato.data_lancamento
+    const dataBate = datasLancamentosSelecionados.some(dataLanc => dataLanc === dataExtrato)
+    
+    // Se valor bate E (data bate OU só temos um lançamento), sugere
+    // Se temos múltiplos lançamentos, aceita mesmo sem data igual (comum em pagamentos agrupados)
+    return valorBate && (dataBate || lancamentosSelecionados.length > 1 || datasLancamentosSelecionados.length === 0)
+  }
 
   const diferenca = Math.abs(totalExtratosSelecionados) - Math.abs(totalLancamentosSelecionados)
 
@@ -1525,6 +1803,57 @@ export default function ConciliacaoBancariaPage() {
                 <Lightbulb size={14} style={{ animation: processando ? 'spin 1s linear infinite' : 'none' }} />
                 {processando ? 'Processando...' : 'Sugestão'}
               </button>
+              
+              {/* Separador */}
+              <div style={{ width: '1px', height: '24px', backgroundColor: '#475569' }} />
+              
+              {/* Botão Processar */}
+              <button
+                onClick={processarConciliacoes}
+                disabled={conciliacoesSelecionadasParaProcessar.length === 0 || processandoAcao}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '6px 12px',
+                  backgroundColor: processandoAcao ? '#9ca3af' : '#0891b2',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  fontSize: '12px',
+                  fontWeight: '600',
+                  cursor: conciliacoesSelecionadasParaProcessar.length > 0 && !processandoAcao ? 'pointer' : 'not-allowed',
+                  opacity: conciliacoesSelecionadasParaProcessar.length > 0 && !processandoAcao ? 1 : 0.5
+                }}
+                title="Finalizar e arquivar as conciliações selecionadas"
+              >
+                <Archive size={14} />
+                {processandoAcao ? 'Processando...' : `Processar${conciliacoesSelecionadasParaProcessar.length > 0 ? ` (${conciliacoesSelecionadasParaProcessar.length})` : ''}`}
+              </button>
+              
+              {/* Botão Desprocessar */}
+              <button
+                onClick={abrirModalDesprocessar}
+                disabled={processandoAcao}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '6px 12px',
+                  backgroundColor: processandoAcao ? '#9ca3af' : '#7c3aed',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  fontSize: '12px',
+                  fontWeight: '600',
+                  cursor: processandoAcao ? 'not-allowed' : 'pointer',
+                  opacity: processandoAcao ? 0.7 : 1
+                }}
+                title="Reabrir conciliações já processadas"
+              >
+                <ArchiveRestore size={14} />
+                Desprocessar
+              </button>
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
@@ -1588,9 +1917,9 @@ export default function ConciliacaoBancariaPage() {
               {/* Lista de Extratos */}
               <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-                  <thead style={{ backgroundColor: '#f8fafc', position: 'sticky', top: 0 }}>
+                  <thead style={{ backgroundColor: '#f8fafc', position: 'sticky', top: 0, zIndex: 10 }}>
                     <tr>
-                      <th style={{ padding: '8px 6px', textAlign: 'center', borderBottom: '1px solid #e2e8f0', width: '30px' }}>
+                      <th style={{ padding: '8px 6px', textAlign: 'center', borderBottom: '1px solid #e2e8f0', width: '30px', backgroundColor: '#f8fafc' }}>
                         <input
                           type="checkbox"
                           checked={extratosSelecionados.length > 0 && extratosSelecionados.length === extratosFiltrados.filter(e => !e.conciliacao || e.conciliacao.status === 'PENDENTE').length}
@@ -1607,13 +1936,14 @@ export default function ConciliacaoBancariaPage() {
                           textAlign: 'left', 
                           borderBottom: '1px solid #e2e8f0',
                           cursor: 'pointer',
-                          userSelect: 'none'
+                          userSelect: 'none',
+                          backgroundColor: '#f8fafc'
                         }}
                       >
                         Data {ordenacaoExtrato.campo === 'data' && (ordenacaoExtrato.direcao === 'asc' ? '▲' : '▼')}
                       </th>
-                      <th style={{ padding: '8px 6px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Documento</th>
-                      <th style={{ padding: '8px 6px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Histórico</th>
+                      <th style={{ padding: '8px 6px', textAlign: 'left', borderBottom: '1px solid #e2e8f0', backgroundColor: '#f8fafc' }}>Documento</th>
+                      <th style={{ padding: '8px 6px', textAlign: 'left', borderBottom: '1px solid #e2e8f0', backgroundColor: '#f8fafc' }}>Histórico</th>
                       <th 
                         onClick={() => setOrdenacaoExtrato(prev => ({
                           campo: 'valor',
@@ -1624,7 +1954,8 @@ export default function ConciliacaoBancariaPage() {
                           textAlign: 'right', 
                           borderBottom: '1px solid #e2e8f0',
                           cursor: 'pointer',
-                          userSelect: 'none'
+                          userSelect: 'none',
+                          backgroundColor: '#f8fafc'
                         }}
                       >
                         Valor {ordenacaoExtrato.campo === 'valor' && (ordenacaoExtrato.direcao === 'asc' ? '▲' : '▼')}
@@ -1636,13 +1967,25 @@ export default function ConciliacaoBancariaPage() {
                       const status = extrato.conciliacao?.status || 'PENDENTE'
                       const isSelected = extratosSelecionados.includes(extrato.id)
                       const isConciliado = status === 'CONCILIADO'
+                      const isSugerido = isExtratoSugerido(extrato)
+                      
+                      // Definir cor de fundo: selecionado > sugerido > conciliado > branco
+                      let backgroundColor = 'white'
+                      if (isSelected) {
+                        backgroundColor = '#dbeafe' // azul claro (selecionado)
+                      } else if (isSugerido) {
+                        backgroundColor = '#dcfce7' // verde claro (sugestão)
+                      } else if (isConciliado) {
+                        backgroundColor = '#f0fdf4' // verde muito claro (conciliado)
+                      }
                       
                       return (
                         <tr
                           key={extrato.id}
                           style={{
-                            backgroundColor: isSelected ? '#dbeafe' : isConciliado ? '#f0fdf4' : 'white',
-                            cursor: isConciliado ? 'default' : 'pointer'
+                            backgroundColor,
+                            cursor: isConciliado ? 'default' : 'pointer',
+                            transition: 'background-color 0.2s ease'
                           }}
                           onClick={() => !isConciliado && toggleExtratoSelecionado(extrato.id)}
                         >
@@ -1736,9 +2079,9 @@ export default function ConciliacaoBancariaPage() {
               {/* Lista de Lançamentos e Movimentos */}
               <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-                  <thead style={{ backgroundColor: '#f8fafc', position: 'sticky', top: 0 }}>
+                  <thead style={{ backgroundColor: '#f8fafc', position: 'sticky', top: 0, zIndex: 10 }}>
                     <tr>
-                      <th style={{ padding: '8px 6px', textAlign: 'center', borderBottom: '1px solid #e2e8f0', width: '30px' }}>
+                      <th style={{ padding: '8px 6px', textAlign: 'center', borderBottom: '1px solid #e2e8f0', width: '30px', backgroundColor: '#f8fafc' }}>
                         <input
                           type="checkbox"
                           checked={lancamentosSelecionados.length > 0 && lancamentosSelecionados.length === lancamentosFiltrados.length}
@@ -1755,13 +2098,14 @@ export default function ConciliacaoBancariaPage() {
                           textAlign: 'left', 
                           borderBottom: '1px solid #e2e8f0',
                           cursor: 'pointer',
-                          userSelect: 'none'
+                          userSelect: 'none',
+                          backgroundColor: '#f8fafc'
                         }}
                       >
                         Data {ordenacaoLancamento.campo === 'data' && (ordenacaoLancamento.direcao === 'asc' ? '▲' : '▼')}
                       </th>
-                      <th style={{ padding: '8px 6px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Documento</th>
-                      <th style={{ padding: '8px 6px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Histórico</th>
+                      <th style={{ padding: '8px 6px', textAlign: 'left', borderBottom: '1px solid #e2e8f0', backgroundColor: '#f8fafc' }}>Documento</th>
+                      <th style={{ padding: '8px 6px', textAlign: 'left', borderBottom: '1px solid #e2e8f0', backgroundColor: '#f8fafc' }}>Histórico</th>
                       <th 
                         onClick={() => setOrdenacaoLancamento(prev => ({
                           campo: 'valor',
@@ -1772,12 +2116,13 @@ export default function ConciliacaoBancariaPage() {
                           textAlign: 'right', 
                           borderBottom: '1px solid #e2e8f0',
                           cursor: 'pointer',
-                          userSelect: 'none'
+                          userSelect: 'none',
+                          backgroundColor: '#f8fafc'
                         }}
                       >
                         Valor {ordenacaoLancamento.campo === 'valor' && (ordenacaoLancamento.direcao === 'asc' ? '▲' : '▼')}
                       </th>
-                      <th style={{ padding: '8px 6px', textAlign: 'center', borderBottom: '1px solid #e2e8f0' }}>Origem</th>
+                      <th style={{ padding: '8px 6px', textAlign: 'center', borderBottom: '1px solid #e2e8f0', backgroundColor: '#f8fafc' }}>Origem</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1929,17 +2274,73 @@ export default function ConciliacaoBancariaPage() {
             {conciliacoes.length > 0 ? (
               <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-                  <thead style={{ backgroundColor: '#f8fafc' }}>
+                  <thead style={{ backgroundColor: '#f8fafc', position: 'sticky', top: 0, zIndex: 10 }}>
                     <tr>
-                      <th style={{ padding: '8px 12px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Data Extrato</th>
-                      <th style={{ padding: '8px 12px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Histórico Extrato</th>
-                      <th style={{ padding: '8px 12px', textAlign: 'right', borderBottom: '1px solid #e2e8f0' }}>Valor</th>
-                      <th style={{ padding: '8px 12px', textAlign: 'center', borderBottom: '1px solid #e2e8f0' }}>Tipo</th>
-                      <th style={{ padding: '8px 12px', textAlign: 'center', borderBottom: '1px solid #e2e8f0', width: '80px' }}>Ação</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'center', borderBottom: '1px solid #e2e8f0', backgroundColor: '#f8fafc', width: '40px' }}>
+                        <input
+                          type="checkbox"
+                          checked={conciliacoes.length > 0 && conciliacoesSelecionadasParaProcessar.length === conciliacoes.length}
+                          onChange={toggleTodasConciliacoesParaProcessar}
+                          title="Selecionar/Deselecionar todas"
+                          style={{ cursor: 'pointer' }}
+                        />
+                      </th>
+                      <th 
+                        onClick={() => setOrdenacaoConciliacao(prev => ({
+                          campo: 'data',
+                          direcao: prev.campo === 'data' && prev.direcao === 'desc' ? 'asc' : 'desc'
+                        }))}
+                        style={{ 
+                          padding: '8px 12px', 
+                          textAlign: 'left', 
+                          borderBottom: '1px solid #e2e8f0',
+                          backgroundColor: '#f8fafc',
+                          cursor: 'pointer',
+                          userSelect: 'none'
+                        }}
+                      >
+                        Data Extrato {ordenacaoConciliacao.campo === 'data' && (ordenacaoConciliacao.direcao === 'asc' ? '▲' : '▼')}
+                      </th>
+                      <th style={{ padding: '8px 12px', textAlign: 'left', borderBottom: '1px solid #e2e8f0', backgroundColor: '#f8fafc' }}>Histórico Extrato</th>
+                      <th 
+                        onClick={() => setOrdenacaoConciliacao(prev => ({
+                          campo: 'valor',
+                          direcao: prev.campo === 'valor' && prev.direcao === 'desc' ? 'asc' : 'desc'
+                        }))}
+                        style={{ 
+                          padding: '8px 12px', 
+                          textAlign: 'right', 
+                          borderBottom: '1px solid #e2e8f0',
+                          backgroundColor: '#f8fafc',
+                          cursor: 'pointer',
+                          userSelect: 'none'
+                        }}
+                      >
+                        Valor {ordenacaoConciliacao.campo === 'valor' && (ordenacaoConciliacao.direcao === 'asc' ? '▲' : '▼')}
+                      </th>
+                      <th style={{ padding: '8px 12px', textAlign: 'center', borderBottom: '1px solid #e2e8f0', backgroundColor: '#f8fafc' }}>Tipo</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'center', borderBottom: '1px solid #e2e8f0', width: '80px', backgroundColor: '#f8fafc' }}>Ação</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {conciliacoes.map(conc => {
+                    {[...conciliacoes].sort((a, b) => {
+                      const extratoA = extratos.find(e => e.id === a.extrato_id)
+                      const extratoB = extratos.find(e => e.id === b.extrato_id)
+                      
+                      if (ordenacaoConciliacao.campo === 'data') {
+                        const dataA = extratoA?.data_lancamento || ''
+                        const dataB = extratoB?.data_lancamento || ''
+                        return ordenacaoConciliacao.direcao === 'asc' 
+                          ? dataA.localeCompare(dataB)
+                          : dataB.localeCompare(dataA)
+                      } else {
+                        const valorA = extratoA?.valor || 0
+                        const valorB = extratoB?.valor || 0
+                        return ordenacaoConciliacao.direcao === 'asc' 
+                          ? valorA - valorB
+                          : valorB - valorA
+                      }
+                    }).map(conc => {
                       const extrato = extratos.find(e => e.id === conc.extrato_id)
                       
                       // Contar quantos lançamentos/movimentos estão no mesmo grupo
@@ -1957,8 +2358,24 @@ export default function ConciliacaoBancariaPage() {
                       
                       const lancamentoRelacionado = conc.lancamento_id ? lancamentos.find(l => l.id === conc.lancamento_id) : null
                       
+                      const isSelecionadoParaProcessar = conciliacoesSelecionadasParaProcessar.includes(conc.id)
+                      
                       return (
-                        <tr key={conc.id}>
+                        <tr 
+                          key={conc.id}
+                          style={{
+                            backgroundColor: isSelecionadoParaProcessar ? '#f0fdf4' : 'white',
+                            transition: 'background-color 0.15s ease'
+                          }}
+                        >
+                          <td style={{ padding: '8px 12px', borderBottom: '1px solid #f1f5f9', textAlign: 'center' }}>
+                            <input
+                              type="checkbox"
+                              checked={isSelecionadoParaProcessar}
+                              onChange={() => toggleConciliacaoParaProcessar(conc.id)}
+                              style={{ cursor: 'pointer' }}
+                            />
+                          </td>
                           <td style={{ padding: '8px 12px', borderBottom: '1px solid #f1f5f9' }}>
                             {formatDateBR(extrato?.data_lancamento || null)}
                           </td>
@@ -2101,6 +2518,290 @@ export default function ConciliacaoBancariaPage() {
             >
               Fechar
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Desprocessar */}
+      {showDesprocessarModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }}>
+          <div style={{
+            backgroundColor: 'white',
+            borderRadius: '12px',
+            padding: '24px',
+            maxWidth: '900px',
+            width: '95%',
+            maxHeight: '80vh',
+            display: 'flex',
+            flexDirection: 'column'
+          }}>
+            {/* Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <div style={{
+                  width: '40px',
+                  height: '40px',
+                  borderRadius: '50%',
+                  backgroundColor: '#ede9fe',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  <ArchiveRestore size={24} color="#7c3aed" />
+                </div>
+                <h3 style={{ fontSize: '18px', fontWeight: '600', color: '#1e293b' }}>Desprocessar Conciliações</h3>
+              </div>
+              <button
+                onClick={() => setShowDesprocessarModal(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: '4px'
+                }}
+              >
+                <X size={20} color="#64748b" />
+              </button>
+            </div>
+
+            {/* Filtro de Data */}
+            <div style={{ 
+              display: 'flex', 
+              gap: '12px', 
+              alignItems: 'flex-end',
+              padding: '12px',
+              backgroundColor: '#f8fafc',
+              borderRadius: '8px',
+              marginBottom: '16px'
+            }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#64748b', marginBottom: '4px' }}>
+                  Data Inicial
+                </label>
+                <input
+                  type="date"
+                  value={filtroDataInicio}
+                  onChange={(e) => setFiltroDataInicio(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '6px',
+                    fontSize: '14px'
+                  }}
+                />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#64748b', marginBottom: '4px' }}>
+                  Data Final
+                </label>
+                <input
+                  type="date"
+                  value={filtroDataFim}
+                  onChange={(e) => setFiltroDataFim(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '6px',
+                    fontSize: '14px'
+                  }}
+                />
+              </div>
+              <button
+                onClick={() => fetchProcessamentos(filtroDataInicio, filtroDataFim)}
+                disabled={loadingProcessamentos}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '8px 16px',
+                  backgroundColor: '#1555D6',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '6px',
+                  fontSize: '13px',
+                  fontWeight: '600',
+                  cursor: loadingProcessamentos ? 'not-allowed' : 'pointer',
+                  opacity: loadingProcessamentos ? 0.7 : 1
+                }}
+              >
+                <RefreshCw size={14} style={{ animation: loadingProcessamentos ? 'spin 1s linear infinite' : 'none' }} />
+                Atualizar
+              </button>
+            </div>
+
+            {/* Lista de Processamentos Detalhada */}
+            <div style={{ 
+              flex: 1, 
+              overflowY: 'auto',
+              border: '1px solid #e2e8f0',
+              borderRadius: '8px'
+            }}>
+              {loadingProcessamentos ? (
+                <div style={{ padding: '40px', textAlign: 'center', color: '#64748b' }}>
+                  <RefreshCw size={24} style={{ animation: 'spin 1s linear infinite', marginBottom: '8px' }} />
+                  <p>Carregando processamentos...</p>
+                </div>
+              ) : conciliacoesProcessadas.length === 0 ? (
+                <div style={{ padding: '40px', textAlign: 'center', color: '#64748b' }}>
+                  <Archive size={32} style={{ marginBottom: '8px', opacity: 0.5 }} />
+                  <p>Nenhum processamento encontrado</p>
+                </div>
+              ) : (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                  <thead style={{ backgroundColor: '#f8fafc', position: 'sticky', top: 0, zIndex: 10 }}>
+                    <tr>
+                      <th style={{ padding: '10px 8px', textAlign: 'center', borderBottom: '1px solid #e2e8f0', backgroundColor: '#f8fafc', width: '40px' }}>
+                        <input
+                          type="checkbox"
+                          checked={conciliacoesProcessadas.length > 0 && conciliacoesSelecionadasParaDesprocessar.length === conciliacoesProcessadas.length}
+                          onChange={toggleTodasConciliacoesParaDesprocessar}
+                          title="Selecionar/Deselecionar todas"
+                          style={{ cursor: 'pointer' }}
+                        />
+                      </th>
+                      <th style={{ padding: '10px 8px', textAlign: 'left', borderBottom: '1px solid #e2e8f0', backgroundColor: '#f8fafc' }}>
+                        Data Extrato
+                      </th>
+                      <th style={{ padding: '10px 8px', textAlign: 'left', borderBottom: '1px solid #e2e8f0', backgroundColor: '#f8fafc' }}>
+                        Histórico
+                      </th>
+                      <th style={{ padding: '10px 8px', textAlign: 'right', borderBottom: '1px solid #e2e8f0', backgroundColor: '#f8fafc' }}>
+                        Valor
+                      </th>
+                      <th style={{ padding: '10px 8px', textAlign: 'center', borderBottom: '1px solid #e2e8f0', backgroundColor: '#f8fafc' }}>
+                        Processado em
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {conciliacoesProcessadas.map((conc, index) => {
+                      // Buscar o extrato relacionado
+                      const extrato = extratos.find(e => e.id === conc.extrato_id)
+                      const isSelecionado = conciliacoesSelecionadasParaDesprocessar.includes(conc.id)
+                      
+                      // Formatar data de processamento
+                      const dataProc = conc.data_processamento 
+                        ? new Date(conc.data_processamento).toLocaleDateString('pt-BR', {
+                            timeZone: 'America/Sao_Paulo',
+                            day: '2-digit',
+                            month: '2-digit',
+                            year: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })
+                        : '-'
+                      
+                      return (
+                        <tr 
+                          key={conc.id}
+                          style={{ 
+                            backgroundColor: isSelecionado ? '#f0fdf4' : (index % 2 === 0 ? 'white' : '#f9fafb'),
+                            transition: 'background-color 0.15s ease',
+                            cursor: 'pointer'
+                          }}
+                          onClick={() => toggleConciliacaoParaDesprocessar(conc.id)}
+                        >
+                          <td style={{ padding: '8px', borderBottom: '1px solid #f1f5f9', textAlign: 'center' }}>
+                            <input
+                              type="checkbox"
+                              checked={isSelecionado}
+                              onChange={() => toggleConciliacaoParaDesprocessar(conc.id)}
+                              onClick={(e) => e.stopPropagation()}
+                              style={{ cursor: 'pointer' }}
+                            />
+                          </td>
+                          <td style={{ padding: '8px', borderBottom: '1px solid #f1f5f9' }}>
+                            {formatDateBR(extrato?.data_lancamento || null)}
+                          </td>
+                          <td style={{ padding: '8px', borderBottom: '1px solid #f1f5f9', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {extrato?.historico || '-'}
+                          </td>
+                          <td style={{
+                            padding: '8px',
+                            borderBottom: '1px solid #f1f5f9',
+                            textAlign: 'right',
+                            fontWeight: '600',
+                            color: (extrato?.valor || 0) >= 0 ? '#16a34a' : '#dc2626'
+                          }}>
+                            {formatCurrency(extrato?.valor || 0)}
+                          </td>
+                          <td style={{ padding: '8px', borderBottom: '1px solid #f1f5f9', textAlign: 'center', fontSize: '11px', color: '#64748b' }}>
+                            {dataProc}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            {/* Footer com botão de Reabrir */}
+            <div style={{ 
+              display: 'flex', 
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginTop: '16px',
+              paddingTop: '16px',
+              borderTop: '1px solid #e2e8f0'
+            }}>
+              <div style={{ fontSize: '13px', color: '#64748b' }}>
+                {conciliacoesSelecionadasParaDesprocessar.length > 0 
+                  ? `${conciliacoesSelecionadasParaDesprocessar.length} item(s) selecionado(s)`
+                  : `${conciliacoesProcessadas.length} item(s) encontrado(s)`
+                }
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  onClick={desprocessarSelecionados}
+                  disabled={conciliacoesSelecionadasParaDesprocessar.length === 0 || processandoAcao}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '10px 16px',
+                    backgroundColor: conciliacoesSelecionadasParaDesprocessar.length > 0 && !processandoAcao ? '#7c3aed' : '#e2e8f0',
+                    color: conciliacoesSelecionadasParaDesprocessar.length > 0 && !processandoAcao ? 'white' : '#94a3b8',
+                    border: 'none',
+                    borderRadius: '8px',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    cursor: conciliacoesSelecionadasParaDesprocessar.length > 0 && !processandoAcao ? 'pointer' : 'not-allowed'
+                  }}
+                >
+                  <ArchiveRestore size={16} />
+                  {processandoAcao ? 'Reabrindo...' : `Reabrir${conciliacoesSelecionadasParaDesprocessar.length > 0 ? ` (${conciliacoesSelecionadasParaDesprocessar.length})` : ''}`}
+                </button>
+                <button
+                  onClick={() => setShowDesprocessarModal(false)}
+                  style={{
+                    padding: '10px 20px',
+                    backgroundColor: '#f1f5f9',
+                    color: '#475569',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '8px',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Fechar
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

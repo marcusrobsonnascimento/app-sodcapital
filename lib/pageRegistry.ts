@@ -54,10 +54,6 @@ export const pageRegistry: Record<string, PageInfo> = {
     title: 'Baixar Pagamentos',
     component: dynamic(() => import('@/app/financeiro/baixarpgtos/page'))
   },
-  '/financeiro/conciliacao': {
-    title: 'Conciliação',
-    component: dynamic(() => import('@/app/financeiro/conciliacao/page'))
-  },
   '/financeiro/movimentos': {
     title: 'Movimentos',
     component: dynamic(() => import('@/app/financeiro/movimentos/page'))
@@ -73,6 +69,10 @@ export const pageRegistry: Record<string, PageInfo> = {
   '/financeiro/extrato': {
     title: 'Extrato de Conta',
     component: dynamic(() => import('@/app/financeiro/extrato/page'))
+  },
+  '/financeiro/movimentos/conciliacao': {
+    title: 'Conciliação',
+    component: dynamic(() => import('@/app/financeiro/movimentos/conciliacao/page'))
   },
 
   // Relatórios Financeiros

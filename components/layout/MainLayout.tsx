@@ -109,18 +109,23 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           display: 'flex',
           height: '100vh',
           overflow: 'hidden',
-          backgroundColor: '#f9fafb'
+          backgroundColor: '#f9fafb',
+          position: 'relative'
         }}
       >
+        {/* SideBar com z-index alto para submenus aparecerem na frente */}
         <SideBar />
         
+        {/* Conteúdo principal com z-index menor */}
         <div 
           style={{
             flex: '1',
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
-            backgroundColor: '#f9fafb'
+            backgroundColor: '#f9fafb',
+            position: 'relative',
+            zIndex: 1
           }}
         >
           <TopBar />
@@ -130,7 +135,9 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
               flex: '1',
               overflow: 'hidden',
               backgroundColor: '#f9fafb',
-              transition: 'all 0.3s ease'
+              transition: 'all 0.3s ease',
+              position: 'relative',
+              zIndex: 1
             }}
           >
             <PanelContainer />

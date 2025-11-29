@@ -1,9 +1,28 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 import { formatDate } from '@/lib/utils'
-import { Plus, Pencil, Trash2, Search, CheckCircle, AlertTriangle, XCircle, X, RefreshCw, ChevronDown, CreditCard } from 'lucide-react'
+import { 
+  Plus, 
+  Pencil, 
+  Trash2, 
+  Search, 
+  CheckCircle, 
+  AlertTriangle, 
+  XCircle, 
+  X, 
+  RefreshCw, 
+  ChevronDown, 
+  CreditCard,
+  Paperclip,
+  Upload,
+  FileText,
+  File,
+  Download,
+  Eye,
+  Loader2
+} from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
@@ -115,7 +134,32 @@ interface Lancamento {
   empresa_pagadora_nome?: string
   plano_conta?: PlanoContaFluxo
   retencoes?: Retencao[]
+  documentos_count?: number
 }
+
+// Interface para documentos anexados
+interface LancamentoDocumento {
+  id: string
+  lancamento_id: string
+  tipo_documento: 'NOTA_FISCAL' | 'BOLETO' | 'COMPROVANTE_PAGAMENTO' | 'CONTRATO' | 'OUTRO'
+  nome_arquivo: string
+  nome_original: string
+  extensao: string
+  tamanho_bytes: number
+  mime_type: string
+  sharepoint_web_url: string
+  sharepoint_download_url: string | null
+  created_at: string
+}
+
+// Tipos de documento disponíveis
+const TIPOS_DOCUMENTO = [
+  { value: 'NOTA_FISCAL', label: 'Nota Fiscal', icon: '📄' },
+  { value: 'BOLETO', label: 'Boleto', icon: '🧾' },
+  { value: 'COMPROVANTE_PAGAMENTO', label: 'Comprovante de Pagamento', icon: '✅' },
+  { value: 'CONTRATO', label: 'Contrato', icon: '📝' },
+  { value: 'OUTRO', label: 'Outro', icon: '📁' }
+]
 
 // Helpers de formatação
 const formatCurrencyBRL = (value: number): string => {
@@ -460,6 +504,29 @@ export default function LancamentosPage() {
     show: false,
     message: ''
   })
+
+  // Estados para modal de documentos
+  const [documentosModal, setDocumentosModal] = useState<{ show: boolean; lancamento: Lancamento | null }>({
+    show: false,
+    lancamento: null
+  })
+  const [documentos, setDocumentos] = useState<LancamentoDocumento[]>([])
+  const [loadingDocumentos, setLoadingDocumentos] = useState(false)
+  const [uploadingDocumento, setUploadingDocumento] = useState(false)
+  const [tipoDocumentoSelecionado, setTipoDocumentoSelecionado] = useState<string>('NOTA_FISCAL')
+  const [documentosCount, setDocumentosCount] = useState<{ [key: string]: number }>({})
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Estado para documentos pendentes (antes de salvar o lançamento)
+  interface DocumentoPendente {
+    id: string
+    file: File
+    tipo_documento: string
+    nome_original: string
+    tamanho_bytes: number
+  }
+  const [documentosPendentes, setDocumentosPendentes] = useState<DocumentoPendente[]>([])
+  const [uploadingPendentes, setUploadingPendentes] = useState(false)
 
   const { register, handleSubmit, reset, formState: { errors }, setValue, watch } = useForm<LancamentoForm>({
     defaultValues: {
@@ -1014,8 +1081,14 @@ export default function LancamentosPage() {
 
       if (reset || pageNum === 0) {
         setLancamentos(lancamentosComRetencoes)
+        // Buscar contagem de documentos para os lançamentos carregados
+        const ids = lancamentosComRetencoes.map((l: Lancamento) => l.id)
+        fetchDocumentosCount(ids)
       } else {
         setLancamentos(prev => [...prev, ...lancamentosComRetencoes])
+        // Buscar contagem de documentos para os novos lançamentos
+        const ids = lancamentosComRetencoes.map((l: Lancamento) => l.id)
+        fetchDocumentosCount(ids)
       }
 
       setHasMore(lancamentosComRetencoes.length === ITEMS_PER_PAGE)
@@ -1133,6 +1206,29 @@ export default function LancamentosPage() {
       } else {
         setContraparteNomeExibicao('')
       }
+
+      // Carregar documentos do lançamento
+      setDocumentos([])
+      setLoadingDocumentos(true)
+      try {
+        const formData = new FormData()
+        formData.append('action', 'list')
+        formData.append('lancamento_id', lancamento.id)
+
+        const response = await fetch('/api/sharepoint', {
+          method: 'POST',
+          body: formData
+        })
+
+        const result = await response.json()
+        if (response.ok) {
+          setDocumentos(result.documentos || [])
+        }
+      } catch (error) {
+        console.error('Erro ao carregar documentos:', error)
+      } finally {
+        setLoadingDocumentos(false)
+      }
     } else {
       setEditingId(null)
       setIsLancamentoPago(false)
@@ -1155,6 +1251,9 @@ export default function LancamentosPage() {
       setBeneficiarioContaDv('')
       setBoletoLinhaDigitavel('')
       setBoletoCodigoBarras('')
+      // Limpar documentos
+      setDocumentos([])
+      setLoadingDocumentos(false)
     }
     setShowModal(true)
   }
@@ -1182,6 +1281,11 @@ export default function LancamentosPage() {
     setBeneficiarioContaDv('')
     setBoletoLinhaDigitavel('')
     setBoletoCodigoBarras('')
+    // Limpar documentos
+    setDocumentos([])
+    setLoadingDocumentos(false)
+    // Limpar documentos pendentes (descartar ao cancelar)
+    setDocumentosPendentes([])
   }
 
   const onSubmit = async (formData: LancamentoForm) => {
@@ -1295,7 +1399,17 @@ export default function LancamentosPage() {
           if (retencoesError) throw retencoesError
         }
 
-        showToast('Lançamento criado com sucesso!')
+        // Upload de documentos pendentes
+        if (documentosPendentes.length > 0) {
+          // Buscar nome da empresa
+          const empresa = empresas.find(e => e.id === formData.empresa_id)
+          const empresaNome = empresa?.nome || 'Sem Empresa'
+          
+          await uploadDocumentosPendentes(data.id, empresaNome, formData.data_vencimento)
+          showToast(`Lançamento criado com sucesso! ${documentosPendentes.length} documento(s) anexado(s).`)
+        } else {
+          showToast('Lançamento criado com sucesso!')
+        }
       }
 
       closeModal()
@@ -1352,6 +1466,335 @@ export default function LancamentosPage() {
     } catch (error) {
       console.error('Erro ao liquidar lançamento:', error)
       showToast('Erro ao liquidar lançamento', 'error', true)
+    }
+  }
+
+  // ==================== FUNÇÕES DE DOCUMENTOS ====================
+
+  // Buscar contagem de documentos para todos os lançamentos visíveis
+  const fetchDocumentosCount = async (lancamentoIds: string[]) => {
+    if (lancamentoIds.length === 0) return
+
+    try {
+      const { data, error } = await supabase
+        .from('lancamento_documentos')
+        .select('lancamento_id')
+        .in('lancamento_id', lancamentoIds)
+
+      if (error) throw error
+
+      const counts: { [key: string]: number } = {}
+      data?.forEach(doc => {
+        counts[doc.lancamento_id] = (counts[doc.lancamento_id] || 0) + 1
+      })
+      setDocumentosCount(counts)
+    } catch (error) {
+      console.error('Erro ao buscar contagem de documentos:', error)
+    }
+  }
+
+  // Abrir modal de documentos
+  const openDocumentosModal = async (lancamento: Lancamento) => {
+    setDocumentosModal({ show: true, lancamento })
+    setDocumentos([])
+    setLoadingDocumentos(true)
+
+    try {
+      const formData = new FormData()
+      formData.append('action', 'list')
+      formData.append('lancamento_id', lancamento.id)
+
+      const response = await fetch('/api/sharepoint', {
+        method: 'POST',
+        body: formData
+      })
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Erro ao buscar documentos')
+      }
+
+      setDocumentos(result.documentos || [])
+    } catch (error: any) {
+      console.error('Erro ao buscar documentos:', error)
+      showToast('Erro ao carregar documentos: ' + error.message, 'error')
+    } finally {
+      setLoadingDocumentos(false)
+    }
+  }
+
+  // Upload de documento
+  const handleUploadDocumento = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    // Determinar o lançamento: do modal de documentos ou do modal de edição
+    let lancamentoId: string | null = null
+    let empresaNome: string = 'Sem Empresa'
+    let dataVencimento: string = ''
+
+    if (documentosModal.lancamento) {
+      // Veio do modal de documentos separado
+      lancamentoId = documentosModal.lancamento.id
+      empresaNome = documentosModal.lancamento.empresa_nome || 'Sem Empresa'
+      dataVencimento = documentosModal.lancamento.data_vencimento
+    } else if (editingId) {
+      // Veio do modal de edição de lançamento
+      lancamentoId = editingId
+      // Buscar dados do lançamento
+      const lancamentoAtual = lancamentos.find(l => l.id === editingId)
+      if (lancamentoAtual) {
+        empresaNome = lancamentoAtual.empresa_nome || 'Sem Empresa'
+        dataVencimento = lancamentoAtual.data_vencimento
+      }
+    }
+
+    if (!lancamentoId) {
+      showToast('Erro: ID do lançamento não encontrado', 'error')
+      return
+    }
+
+    setUploadingDocumento(true)
+
+    try {
+      const formData = new FormData()
+      formData.append('action', 'upload')
+      formData.append('file', file)
+      formData.append('lancamento_id', lancamentoId)
+      formData.append('tipo_documento', tipoDocumentoSelecionado)
+      formData.append('empresa_nome', empresaNome)
+      formData.append('data_vencimento', dataVencimento)
+      
+      // Buscar org_id da sessão ou usar default
+      const { data: orgData } = await supabase
+        .from('lancamentos')
+        .select('empresa_id, empresas!inner(org_id)')
+        .eq('id', lancamentoId)
+        .single()
+
+      if (orgData?.empresas) {
+        formData.append('org_id', (orgData.empresas as any).org_id)
+      }
+
+      const response = await fetch('/api/sharepoint', {
+        method: 'POST',
+        body: formData
+      })
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Erro ao fazer upload')
+      }
+
+      showToast('Documento enviado com sucesso!')
+      
+      // Atualizar lista de documentos
+      setDocumentos(prev => [result.documento, ...prev])
+      
+      // Atualizar contagem
+      setDocumentosCount(prev => ({
+        ...prev,
+        [lancamentoId!]: (prev[lancamentoId!] || 0) + 1
+      }))
+
+    } catch (error: any) {
+      console.error('Erro ao fazer upload:', error)
+      showToast('Erro ao enviar documento: ' + error.message, 'error')
+    } finally {
+      setUploadingDocumento(false)
+      // Limpar input
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
+    }
+  }
+
+  // Deletar documento
+  const handleDeleteDocumento = async (documentoId: string) => {
+    if (!confirm('Tem certeza que deseja excluir este documento?')) return
+
+    try {
+      const formData = new FormData()
+      formData.append('action', 'delete')
+      formData.append('documento_id', documentoId)
+
+      const response = await fetch('/api/sharepoint', {
+        method: 'POST',
+        body: formData
+      })
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Erro ao excluir')
+      }
+
+      showToast('Documento excluído com sucesso!')
+      
+      // Remover da lista
+      setDocumentos(prev => prev.filter(d => d.id !== documentoId))
+      
+      // Atualizar contagem
+      const lancamentoId = documentosModal.lancamento?.id || editingId
+      if (lancamentoId) {
+        setDocumentosCount(prev => ({
+          ...prev,
+          [lancamentoId]: Math.max(0, (prev[lancamentoId] || 0) - 1)
+        }))
+      }
+
+    } catch (error: any) {
+      console.error('Erro ao excluir documento:', error)
+      showToast('Erro ao excluir documento: ' + error.message, 'error')
+    }
+  }
+
+  // Visualizar documento
+  const handleViewDocumento = async (documento: LancamentoDocumento) => {
+    try {
+      const response = await fetch(`/api/sharepoint?id=${documento.id}&action=view`)
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Erro ao obter URL')
+      }
+
+      // Abrir em nova aba
+      window.open(result.url, '_blank')
+    } catch (error: any) {
+      console.error('Erro ao visualizar documento:', error)
+      showToast('Erro ao abrir documento: ' + error.message, 'error')
+    }
+  }
+
+  // Download de documento
+  const handleDownloadDocumento = async (documento: LancamentoDocumento) => {
+    try {
+      const response = await fetch(`/api/sharepoint?id=${documento.id}&action=download`)
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Erro ao obter URL')
+      }
+
+      // Criar link temporário para download
+      const link = document.createElement('a')
+      link.href = result.url
+      link.download = result.nome
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+    } catch (error: any) {
+      console.error('Erro ao baixar documento:', error)
+      showToast('Erro ao baixar documento: ' + error.message, 'error')
+    }
+  }
+
+  // Formatar tamanho do arquivo
+  const formatFileSize = (bytes: number): string => {
+    if (bytes === 0) return '0 Bytes'
+    const k = 1024
+    const sizes = ['Bytes', 'KB', 'MB', 'GB']
+    const i = Math.floor(Math.log(bytes) / Math.log(k))
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+  }
+
+  // Obter ícone do tipo de documento
+  const getTipoDocumentoIcon = (tipo: string): string => {
+    const tipoDoc = TIPOS_DOCUMENTO.find(t => t.value === tipo)
+    return tipoDoc?.icon || '📁'
+  }
+
+  // Obter label do tipo de documento
+  const getTipoDocumentoLabel = (tipo: string): string => {
+    const tipoDoc = TIPOS_DOCUMENTO.find(t => t.value === tipo)
+    return tipoDoc?.label || tipo
+  }
+
+  // Adicionar documento pendente (antes de salvar o lançamento)
+  const handleAddDocumentoPendente = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    const novoPendente = {
+      id: `pending_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      file: file,
+      tipo_documento: tipoDocumentoSelecionado,
+      nome_original: file.name,
+      tamanho_bytes: file.size
+    }
+
+    setDocumentosPendentes(prev => [...prev, novoPendente])
+
+    // Limpar input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }
+
+  // Remover documento pendente
+  const handleRemoveDocumentoPendente = (id: string) => {
+    setDocumentosPendentes(prev => prev.filter(d => d.id !== id))
+  }
+
+  // Fazer upload de todos os documentos pendentes após salvar o lançamento
+  const uploadDocumentosPendentes = async (lancamentoId: string, empresaNome: string, dataVencimento: string) => {
+    if (documentosPendentes.length === 0) return
+
+    setUploadingPendentes(true)
+
+    try {
+      // Buscar org_id
+      const { data: orgData } = await supabase
+        .from('lancamentos')
+        .select('empresa_id, empresas!inner(org_id)')
+        .eq('id', lancamentoId)
+        .single()
+
+      const orgId = orgData?.empresas ? (orgData.empresas as any).org_id : null
+
+      for (const doc of documentosPendentes) {
+        try {
+          const formData = new FormData()
+          formData.append('action', 'upload')
+          formData.append('file', doc.file)
+          formData.append('lancamento_id', lancamentoId)
+          formData.append('tipo_documento', doc.tipo_documento)
+          formData.append('empresa_nome', empresaNome)
+          formData.append('data_vencimento', dataVencimento)
+          if (orgId) {
+            formData.append('org_id', orgId)
+          }
+
+          const response = await fetch('/api/sharepoint', {
+            method: 'POST',
+            body: formData
+          })
+
+          if (!response.ok) {
+            const result = await response.json()
+            console.error('Erro ao fazer upload:', result.error)
+          }
+        } catch (error) {
+          console.error('Erro ao fazer upload do documento:', doc.nome_original, error)
+        }
+      }
+
+      // Atualizar contagem
+      setDocumentosCount(prev => ({
+        ...prev,
+        [lancamentoId]: (prev[lancamentoId] || 0) + documentosPendentes.length
+      }))
+
+      // Limpar pendentes
+      setDocumentosPendentes([])
+
+    } catch (error) {
+      console.error('Erro ao fazer upload dos documentos pendentes:', error)
+    } finally {
+      setUploadingPendentes(false)
     }
   }
 
@@ -2654,6 +3097,47 @@ export default function LancamentosPage() {
                             onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#e0e7ff'}
                           >
                             <Pencil size={13} />
+                          </button>
+                        </div>
+                        <div style={{ position: 'relative', display: 'inline-block' }}>
+                          <button
+                            onClick={() => openDocumentosModal(lancamento)}
+                            className="tooltip-btn"
+                            data-tooltip="Documentos"
+                            style={{
+                              padding: '4px',
+                              backgroundColor: '#fef3c7',
+                              color: '#d97706',
+                              border: 'none',
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              transition: 'all 0.2s',
+                              position: 'relative'
+                            }}
+                            onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#fde68a'}
+                            onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#fef3c7'}
+                          >
+                            <Paperclip size={13} />
+                            {documentosCount[lancamento.id] > 0 && (
+                              <span style={{
+                                position: 'absolute',
+                                top: '-4px',
+                                right: '-4px',
+                                backgroundColor: '#d97706',
+                                color: 'white',
+                                fontSize: '8px',
+                                fontWeight: '700',
+                                padding: '1px 4px',
+                                borderRadius: '10px',
+                                minWidth: '14px',
+                                textAlign: 'center'
+                              }}>
+                                {documentosCount[lancamento.id]}
+                              </span>
+                            )}
                           </button>
                         </div>
                         <div style={{ position: 'relative', display: 'inline-block' }}>
@@ -4258,6 +4742,301 @@ export default function LancamentosPage() {
                 />
               </div>
 
+              {/* Seção de Documentos Anexados */}
+              <div style={{
+                borderTop: '1px solid #e5e7eb',
+                marginTop: '16px',
+                paddingTop: '16px'
+              }}>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  marginBottom: '12px'
+                }}>
+                  <h3 style={{
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    color: '#1f2937',
+                    margin: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}>
+                    <Paperclip size={16} />
+                    Documentos Anexados
+                    {(editingId ? documentos.length > 0 : documentosPendentes.length > 0) && (
+                      <span style={{
+                        backgroundColor: editingId ? '#dbeafe' : '#fef3c7',
+                        color: editingId ? '#1d4ed8' : '#d97706',
+                        fontSize: '11px',
+                        fontWeight: '600',
+                        padding: '2px 8px',
+                        borderRadius: '10px'
+                      }}>
+                        {editingId ? documentos.length : documentosPendentes.length}
+                        {!editingId && ' pendente(s)'}
+                      </span>
+                    )}
+                  </h3>
+                </div>
+
+                {/* Área de Upload - sempre visível */}
+                <div style={{
+                  backgroundColor: '#f9fafb',
+                  borderRadius: '8px',
+                  padding: '12px',
+                  marginBottom: '12px',
+                  border: '2px dashed #e5e7eb'
+                }}>
+                  <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <select
+                      value={tipoDocumentoSelecionado}
+                      onChange={(e) => setTipoDocumentoSelecionado(e.target.value)}
+                      style={{
+                        padding: '8px 12px',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        backgroundColor: 'white',
+                        minWidth: '160px'
+                      }}
+                    >
+                      {TIPOS_DOCUMENTO.map(tipo => (
+                        <option key={tipo.value} value={tipo.value}>
+                          {tipo.icon} {tipo.label}
+                        </option>
+                      ))}
+                    </select>
+                    
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      onChange={editingId ? handleUploadDocumento : handleAddDocumentoPendente}
+                      style={{ display: 'none' }}
+                      accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx"
+                    />
+                    
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploadingDocumento}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '8px 14px',
+                        backgroundColor: uploadingDocumento ? '#9ca3af' : '#1555D6',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        fontWeight: '600',
+                        cursor: uploadingDocumento ? 'not-allowed' : 'pointer'
+                      }}
+                    >
+                      {uploadingDocumento ? (
+                        <>
+                          <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                          Enviando...
+                        </>
+                      ) : (
+                        <>
+                          <Upload size={14} />
+                          Anexar Documento
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  <p style={{ fontSize: '10px', color: '#9ca3af', marginTop: '8px', marginBottom: 0 }}>
+                    PDF, JPG, PNG, DOC, DOCX, XLS, XLSX (máx. 10MB)
+                    {!editingId && documentosPendentes.length > 0 && (
+                      <span style={{ color: '#f59e0b', fontWeight: '500' }}>
+                        {' '}• Os documentos serão enviados ao salvar o lançamento
+                      </span>
+                    )}
+                  </p>
+                </div>
+
+                {/* Lista de Documentos */}
+                {!editingId ? (
+                  // Novo lançamento - mostrar documentos pendentes
+                  documentosPendentes.length === 0 ? (
+                    <div style={{
+                      textAlign: 'center',
+                      padding: '16px',
+                      color: '#9ca3af',
+                      fontSize: '12px'
+                    }}>
+                      <FileText size={24} style={{ marginBottom: '4px', opacity: 0.5 }} />
+                      <p style={{ margin: 0 }}>Nenhum documento anexado</p>
+                      <p style={{ fontSize: '11px', marginTop: '4px', color: '#9ca3af' }}>
+                        Anexe documentos usando o botão acima
+                      </p>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '200px', overflowY: 'auto' }}>
+                      {documentosPendentes.map(doc => (
+                        <div
+                          key={doc.id}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px',
+                            padding: '8px 10px',
+                            backgroundColor: '#fffbeb',
+                            borderRadius: '6px',
+                            border: '1px solid #fcd34d'
+                          }}
+                        >
+                          <span style={{ fontSize: '16px' }}>
+                            {getTipoDocumentoIcon(doc.tipo_documento)}
+                          </span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <p style={{
+                              fontSize: '12px',
+                              fontWeight: '500',
+                              color: '#1f2937',
+                              margin: 0,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap'
+                            }}>
+                              {doc.nome_original}
+                            </p>
+                            <p style={{ fontSize: '10px', color: '#6b7280', margin: 0 }}>
+                              {getTipoDocumentoLabel(doc.tipo_documento)} • {formatFileSize(doc.tamanho_bytes)}
+                              <span style={{ color: '#f59e0b', fontWeight: '500' }}> • Pendente</span>
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveDocumentoPendente(doc.id)}
+                            title="Remover"
+                            style={{
+                              padding: '4px',
+                              backgroundColor: '#fee2e2',
+                              color: '#dc2626',
+                              border: 'none',
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                              display: 'flex'
+                            }}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                ) : (
+                  // Editando lançamento - mostrar documentos já salvos
+                  loadingDocumentos ? (
+                    <div style={{ textAlign: 'center', padding: '20px', color: '#6b7280' }}>
+                      <Loader2 size={24} style={{ animation: 'spin 1s linear infinite' }} />
+                      <p style={{ fontSize: '12px', marginTop: '8px' }}>Carregando documentos...</p>
+                    </div>
+                  ) : documentos.length === 0 ? (
+                    <div style={{
+                      textAlign: 'center',
+                      padding: '16px',
+                      color: '#9ca3af',
+                      fontSize: '12px'
+                    }}>
+                      <FileText size={24} style={{ marginBottom: '4px', opacity: 0.5 }} />
+                      <p style={{ margin: 0 }}>Nenhum documento anexado</p>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '200px', overflowY: 'auto' }}>
+                      {documentos.map(doc => (
+                        <div
+                          key={doc.id}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px',
+                            padding: '8px 10px',
+                            backgroundColor: '#f9fafb',
+                            borderRadius: '6px',
+                            border: '1px solid #e5e7eb'
+                          }}
+                        >
+                          <span style={{ fontSize: '16px' }}>
+                            {getTipoDocumentoIcon(doc.tipo_documento)}
+                          </span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <p style={{
+                              fontSize: '12px',
+                              fontWeight: '500',
+                              color: '#1f2937',
+                              margin: 0,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap'
+                            }}>
+                              {doc.nome_original}
+                            </p>
+                            <p style={{ fontSize: '10px', color: '#6b7280', margin: 0 }}>
+                              {getTipoDocumentoLabel(doc.tipo_documento)} • {formatFileSize(doc.tamanho_bytes)}
+                            </p>
+                          </div>
+                          <div style={{ display: 'flex', gap: '4px' }}>
+                            <button
+                              type="button"
+                              onClick={() => handleViewDocumento(doc)}
+                              title="Visualizar"
+                              style={{
+                                padding: '4px',
+                                backgroundColor: '#dbeafe',
+                                color: '#2563eb',
+                                border: 'none',
+                                borderRadius: '4px',
+                                cursor: 'pointer',
+                                display: 'flex'
+                              }}
+                            >
+                              <Eye size={12} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadDocumento(doc)}
+                              title="Baixar"
+                              style={{
+                                padding: '4px',
+                                backgroundColor: '#d1fae5',
+                                color: '#059669',
+                                border: 'none',
+                                borderRadius: '4px',
+                                cursor: 'pointer',
+                                display: 'flex'
+                              }}
+                            >
+                              <Download size={12} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteDocumento(doc.id)}
+                              title="Excluir"
+                              style={{
+                                padding: '4px',
+                                backgroundColor: '#fee2e2',
+                                color: '#dc2626',
+                                border: 'none',
+                                borderRadius: '4px',
+                                cursor: 'pointer',
+                                display: 'flex'
+                              }}
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                )}
+              </div>
+
               {/* Modal Footer */}
               <div style={{
                 position: 'sticky',
@@ -4664,6 +5443,294 @@ export default function LancamentosPage() {
             onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#f59e0b'}
           >
             OK
+          </button>
+        </div>
+      </div>
+    </div>
+  )}
+
+  {/* Modal de Documentos */}
+  {documentosModal.show && documentosModal.lancamento && (
+    <div
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 1000,
+        backdropFilter: 'blur(4px)'
+      }}
+      onClick={() => setDocumentosModal({ show: false, lancamento: null })}
+    >
+      <div
+        style={{
+          backgroundColor: 'white',
+          borderRadius: '12px',
+          boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+          padding: '24px',
+          width: '95%',
+          maxWidth: '700px',
+          maxHeight: '85vh',
+          display: 'flex',
+          flexDirection: 'column',
+          animation: 'scaleIn 0.2s ease-out'
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: '20px',
+          paddingBottom: '16px',
+          borderBottom: '1px solid #e5e7eb'
+        }}>
+          <div>
+            <h2 style={{ fontSize: '18px', fontWeight: '600', color: '#1f2937', margin: 0 }}>
+              📎 Documentos do Lançamento
+            </h2>
+            <p style={{ fontSize: '12px', color: '#6b7280', margin: '4px 0 0 0' }}>
+              {documentosModal.lancamento.contraparte_nome || 'Sem contraparte'} • {formatCurrencyBRL(documentosModal.lancamento.valor_bruto)}
+            </p>
+          </div>
+          <button
+            onClick={() => setDocumentosModal({ show: false, lancamento: null })}
+            style={{
+              padding: '8px',
+              backgroundColor: 'transparent',
+              border: 'none',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              color: '#6b7280'
+            }}
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        {/* Upload Section */}
+        <div style={{
+          backgroundColor: '#f9fafb',
+          borderRadius: '8px',
+          padding: '16px',
+          marginBottom: '20px',
+          border: '2px dashed #e5e7eb'
+        }}>
+          <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <select
+              value={tipoDocumentoSelecionado}
+              onChange={(e) => setTipoDocumentoSelecionado(e.target.value)}
+              style={{
+                padding: '8px 12px',
+                border: '1px solid #e5e7eb',
+                borderRadius: '6px',
+                fontSize: '13px',
+                backgroundColor: 'white',
+                minWidth: '180px'
+              }}
+            >
+              {TIPOS_DOCUMENTO.map(tipo => (
+                <option key={tipo.value} value={tipo.value}>
+                  {tipo.icon} {tipo.label}
+                </option>
+              ))}
+            </select>
+            
+            <input
+              ref={fileInputRef}
+              type="file"
+              onChange={handleUploadDocumento}
+              style={{ display: 'none' }}
+              accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx"
+            />
+            
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploadingDocumento}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '8px 16px',
+                backgroundColor: uploadingDocumento ? '#9ca3af' : '#1555D6',
+                color: 'white',
+                border: 'none',
+                borderRadius: '6px',
+                fontSize: '13px',
+                fontWeight: '600',
+                cursor: uploadingDocumento ? 'not-allowed' : 'pointer'
+              }}
+            >
+              {uploadingDocumento ? (
+                <>
+                  <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />
+                  Enviando...
+                </>
+              ) : (
+                <>
+                  <Upload size={16} />
+                  Enviar Documento
+                </>
+              )}
+            </button>
+          </div>
+          <p style={{ fontSize: '11px', color: '#9ca3af', marginTop: '8px', margin: '8px 0 0 0' }}>
+            Formatos aceitos: PDF, JPG, PNG, DOC, DOCX, XLS, XLSX (máx. 10MB)
+          </p>
+        </div>
+
+        {/* Lista de Documentos */}
+        <div style={{ flex: 1, overflowY: 'auto' }}>
+          {loadingDocumentos ? (
+            <div style={{ textAlign: 'center', padding: '40px', color: '#6b7280' }}>
+              <Loader2 size={32} style={{ animation: 'spin 1s linear infinite', marginBottom: '12px' }} />
+              <p>Carregando documentos...</p>
+            </div>
+          ) : documentos.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '40px', color: '#9ca3af' }}>
+              <FileText size={48} style={{ marginBottom: '12px', opacity: 0.5 }} />
+              <p style={{ margin: 0 }}>Nenhum documento anexado</p>
+              <p style={{ fontSize: '12px', marginTop: '4px' }}>Envie o primeiro documento usando o botão acima</p>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {documentos.map(doc => (
+                <div
+                  key={doc.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px',
+                    padding: '12px',
+                    backgroundColor: '#f9fafb',
+                    borderRadius: '8px',
+                    border: '1px solid #e5e7eb'
+                  }}
+                >
+                  {/* Ícone do tipo */}
+                  <div style={{
+                    width: '40px',
+                    height: '40px',
+                    borderRadius: '8px',
+                    backgroundColor: '#e0e7ff',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '20px'
+                  }}>
+                    {getTipoDocumentoIcon(doc.tipo_documento)}
+                  </div>
+
+                  {/* Info do arquivo */}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <p style={{
+                      fontSize: '13px',
+                      fontWeight: '500',
+                      color: '#1f2937',
+                      margin: 0,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
+                    }}>
+                      {doc.nome_original}
+                    </p>
+                    <p style={{ fontSize: '11px', color: '#6b7280', margin: '2px 0 0 0' }}>
+                      {getTipoDocumentoLabel(doc.tipo_documento)} • {formatFileSize(doc.tamanho_bytes)} • {new Date(doc.created_at).toLocaleDateString('pt-BR')}
+                    </p>
+                  </div>
+
+                  {/* Ações */}
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button
+                      onClick={() => handleViewDocumento(doc)}
+                      title="Visualizar"
+                      style={{
+                        padding: '6px',
+                        backgroundColor: '#dbeafe',
+                        color: '#2563eb',
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                      }}
+                    >
+                      <Eye size={14} />
+                    </button>
+                    <button
+                      onClick={() => handleDownloadDocumento(doc)}
+                      title="Baixar"
+                      style={{
+                        padding: '6px',
+                        backgroundColor: '#d1fae5',
+                        color: '#059669',
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                      }}
+                    >
+                      <Download size={14} />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteDocumento(doc.id)}
+                      title="Excluir"
+                      style={{
+                        padding: '6px',
+                        backgroundColor: '#fee2e2',
+                        color: '#dc2626',
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                      }}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div style={{
+          marginTop: '20px',
+          paddingTop: '16px',
+          borderTop: '1px solid #e5e7eb',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center'
+        }}>
+          <span style={{ fontSize: '12px', color: '#6b7280' }}>
+            {documentos.length} documento(s) anexado(s)
+          </span>
+          <button
+            onClick={() => setDocumentosModal({ show: false, lancamento: null })}
+            style={{
+              padding: '8px 20px',
+              backgroundColor: '#f3f4f6',
+              color: '#374151',
+              border: '1px solid #e5e7eb',
+              borderRadius: '6px',
+              fontSize: '13px',
+              fontWeight: '500',
+              cursor: 'pointer'
+            }}
+          >
+            Fechar
           </button>
         </div>
       </div>
