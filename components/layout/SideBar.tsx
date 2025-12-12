@@ -26,7 +26,16 @@ import {
   ListTree,
   Receipt,
   LogOut,
-  User
+  User,
+  Home,
+  Calendar,
+  Bell,
+  Percent,
+  FilePlus,
+  List,
+  RefreshCw,
+  AlertCircle,
+  Calculator
 } from 'lucide-react'
 
 type MenuItem = {
@@ -106,7 +115,19 @@ const menuItems: MenuItem[] = [
     icon: FileSignature,
     children: [
       { title: 'Mútuos', icon: FileSignature, href: '/contratos/mutuos' },
-      { title: 'CRI', icon: FileSignature, href: '/contratos/cri' }
+      { title: 'CRI', icon: FileSignature, href: '/contratos/cri' },
+      { 
+        title: 'Locação Imobiliária', 
+        icon: Home,
+        children: [
+          { title: 'Contratos', icon: List, href: '/contratos/locacao' },
+          { title: 'Novo Contrato', icon: FilePlus, href: '/contratos/locacao/novo' },
+          { title: 'Parcelas', icon: Calendar, href: '/contratos/locacao/parcelas' },
+          { title: 'Reajustes', icon: Percent, href: '/contratos/locacao/reajustes' },
+          { title: 'Alertas', icon: Bell, href: '/contratos/locacao/alertas' },
+          { title: 'Índices Econômicos', icon: Calculator, href: '/contratos/locacao/indices' }
+        ]
+      }
     ]
   }
 ]
@@ -124,20 +145,47 @@ function SubmenuPortal({
   onMouseLeave: () => void
 }) {
   const [mounted, setMounted] = useState(false)
+  const [adjustedPosition, setAdjustedPosition] = useState(position)
+  const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     setMounted(true)
     return () => setMounted(false)
   }, [])
 
+  useEffect(() => {
+    if (mounted && menuRef.current) {
+      const menuRect = menuRef.current.getBoundingClientRect()
+      const windowHeight = window.innerHeight
+      const windowWidth = window.innerWidth
+      
+      let newTop = position.top
+      let newLeft = position.left
+      
+      // Verificar se estoura embaixo
+      if (position.top + menuRect.height > windowHeight - 20) {
+        // Posicionar para cima
+        newTop = Math.max(20, windowHeight - menuRect.height - 20)
+      }
+      
+      // Verificar se estoura à direita
+      if (position.left + menuRect.width > windowWidth - 20) {
+        newLeft = position.left - menuRect.width - 8
+      }
+      
+      setAdjustedPosition({ top: newTop, left: newLeft })
+    }
+  }, [mounted, position])
+
   if (!mounted) return null
 
   return createPortal(
     <div
+      ref={menuRef}
       style={{
         position: 'fixed',
-        top: position.top,
-        left: position.left,
+        top: adjustedPosition.top,
+        left: adjustedPosition.left,
         zIndex: 9999,
         animation: 'slideRight 0.15s ease-out'
       }}
@@ -270,37 +318,33 @@ export default function SideBar() {
         return (
           <div
             key={child.title}
-            onMouseEnter={(e) => handleSubSubmenuEnter(child.title, e.currentTarget)}
-            onMouseLeave={handleSubmenuLeave}
             style={{ position: 'relative' }}
+            onMouseEnter={(e) => handleSubSubmenuEnter(child.title, e.currentTarget)}
           >
             <div
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                padding: '10px 12px',
+                padding: '8px 10px',
                 borderRadius: '6px',
-                backgroundColor: isSubOpen ? '#f3f4f6' : 'transparent',
                 cursor: 'pointer',
+                backgroundColor: isSubOpen ? '#f3f4f6' : 'transparent',
                 transition: 'background-color 0.15s ease'
               }}
-              onMouseOver={(e) => {
-                e.currentTarget.style.backgroundColor = '#f3f4f6'
-              }}
-              onMouseOut={(e) => {
-                if (!isSubOpen) e.currentTarget.style.backgroundColor = 'transparent'
-              }}
+              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f3f4f6'}
+              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = isSubOpen ? '#f3f4f6' : 'transparent'}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <ChildIcon size={16} style={{ color: '#6b7280' }} />
-                <span style={{ fontSize: '13px', fontWeight: '500', color: '#374151' }}>
+                <span style={{ fontSize: '13px', color: '#374151', fontWeight: '500' }}>
                   {child.title}
                 </span>
               </div>
               <ChevronRight size={14} style={{ color: '#9ca3af' }} />
             </div>
-            
+
+            {/* Sub-submenu Portal */}
             {isSubOpen && child.children && (
               <SubmenuPortal
                 position={subSubmenuPosition}
@@ -316,38 +360,39 @@ export default function SideBar() {
 
       return (
         <a
-          key={child.href}
-          href={child.href!}
+          key={child.title}
+          href={child.href}
           onClick={(e) => handleMenuClick(child.href!, child.title, e)}
-          onMouseDown={(e) => {
-            if (e.button === 1) {
-              e.preventDefault()
-              handleMenuClick(child.href!, child.title, e)
-            }
-          }}
           style={{
             display: 'flex',
             alignItems: 'center',
             gap: '10px',
-            padding: '10px 12px',
+            padding: '8px 10px',
             borderRadius: '6px',
-            backgroundColor: isActive ? '#1555D6' : 'transparent',
             textDecoration: 'none',
+            backgroundColor: isActive ? '#eff6ff' : 'transparent',
             transition: 'background-color 0.15s ease'
           }}
-          onMouseOver={(e) => {
+          onMouseEnter={(e) => {
             if (!isActive) e.currentTarget.style.backgroundColor = '#f3f4f6'
           }}
-          onMouseOut={(e) => {
+          onMouseLeave={(e) => {
             if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'
           }}
         >
-          <ChildIcon size={16} style={{ color: isActive ? '#ffffff' : '#6b7280' }} />
-          <span style={{ 
-            fontSize: '13px', 
-            fontWeight: '500', 
-            color: isActive ? '#ffffff' : '#374151' 
-          }}>
+          <ChildIcon 
+            size={16} 
+            style={{ 
+              color: isActive ? '#2563eb' : '#6b7280'
+            }} 
+          />
+          <span 
+            style={{ 
+              fontSize: '13px',
+              color: isActive ? '#2563eb' : '#374151',
+              fontWeight: isActive ? '600' : '500'
+            }}
+          >
             {child.title}
           </span>
         </a>
@@ -355,20 +400,27 @@ export default function SideBar() {
     })
   }
 
+  // Renderizar item do menu principal
   const renderMenuItem = (item: MenuItem) => {
     const Icon = item.icon
-    const isActive = item.href ? isRouteActive(item.href) : false
     const hasChildren = item.children && item.children.length > 0
-    const isOpen = openSubmenu === item.title
+    const isActive = item.href ? isRouteActive(item.href) : false
     const isHovered = hoveredItem === item.title
+    const isSubmenuOpen = openSubmenu === item.title
 
     if (hasChildren) {
       return (
-        <div 
-          key={item.title} 
-          style={{ position: 'relative', marginBottom: '2px' }}
-          onMouseEnter={(e) => handleSubmenuEnter(item.title, e.currentTarget)}
-          onMouseLeave={handleSubmenuLeave}
+        <div
+          key={item.title}
+          style={{ marginBottom: '4px' }}
+          onMouseEnter={(e) => {
+            setHoveredItem(item.title)
+            handleSubmenuEnter(item.title, e.currentTarget)
+          }}
+          onMouseLeave={() => {
+            setHoveredItem(null)
+            handleSubmenuLeave()
+          }}
         >
           <div
             style={{
@@ -377,19 +429,15 @@ export default function SideBar() {
               justifyContent: 'space-between',
               padding: '10px 12px',
               borderRadius: '8px',
-              backgroundColor: isOpen ? '#f3f4f6' : 'transparent',
               cursor: 'pointer',
+              backgroundColor: isSubmenuOpen ? '#f3f4f6' : 'transparent',
               transition: 'background-color 0.15s ease'
             }}
-            onMouseOver={(e) => {
-              e.currentTarget.style.backgroundColor = '#f3f4f6'
-            }}
-            onMouseOut={(e) => {
-              if (!isOpen) e.currentTarget.style.backgroundColor = 'transparent'
-            }}
+            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f3f4f6'}
+            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = isSubmenuOpen ? '#f3f4f6' : 'transparent'}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <Icon size={20} style={{ color: isOpen ? '#1555D6' : '#6b7280' }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <Icon size={18} style={{ color: '#6b7280' }} />
               <span style={{ fontSize: '14px', fontWeight: '500', color: '#374151' }}>
                 {item.title}
               </span>
@@ -397,13 +445,15 @@ export default function SideBar() {
             <ChevronRight 
               size={16} 
               style={{ 
-                color: isOpen ? '#1555D6' : '#9ca3af',
-                transition: 'color 0.15s ease'
+                color: '#9ca3af',
+                transition: 'transform 0.2s ease',
+                transform: isSubmenuOpen ? 'rotate(90deg)' : 'rotate(0deg)'
               }} 
             />
           </div>
-          
-          {isOpen && item.children && (
+
+          {/* Submenu Portal */}
+          {isSubmenuOpen && item.children && (
             <SubmenuPortal
               position={submenuPosition}
               onMouseEnter={handleSubmenuStay}
@@ -418,36 +468,42 @@ export default function SideBar() {
 
     return (
       <a
-        key={item.href}
-        href={item.href!}
+        key={item.title}
+        href={item.href}
         onClick={(e) => handleMenuClick(item.href!, item.title, e)}
-        onMouseDown={(e) => {
-          if (e.button === 1) {
-            e.preventDefault()
-            handleMenuClick(item.href!, item.title, e)
-          }
-        }}
-        onMouseEnter={() => setHoveredItem(item.title)}
-        onMouseLeave={() => setHoveredItem(null)}
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: '10px',
+          gap: '12px',
           padding: '10px 12px',
+          marginBottom: '4px',
           borderRadius: '8px',
-          backgroundColor: isActive ? '#1555D6' : isHovered ? '#f3f4f6' : 'transparent',
           textDecoration: 'none',
-          transition: 'all 0.15s ease',
-          marginBottom: '2px'
+          backgroundColor: isActive ? '#eff6ff' : 'transparent',
+          transition: 'background-color 0.15s ease'
         }}
-        title="Clique para abrir • Ctrl+Clique para novo painel"
+        onMouseEnter={(e) => {
+          setHoveredItem(item.title)
+          if (!isActive) e.currentTarget.style.backgroundColor = '#f3f4f6'
+        }}
+        onMouseLeave={(e) => {
+          setHoveredItem(null)
+          if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'
+        }}
       >
-        <Icon size={20} style={{ color: isActive ? '#ffffff' : '#6b7280' }} />
-        <span style={{ 
-          fontSize: '14px', 
-          fontWeight: '500', 
-          color: isActive ? '#ffffff' : '#374151' 
-        }}>
+        <Icon 
+          size={18} 
+          style={{ 
+            color: isActive ? '#2563eb' : '#6b7280'
+          }} 
+        />
+        <span 
+          style={{ 
+            fontSize: '14px',
+            fontWeight: isActive ? '600' : '500',
+            color: isActive ? '#2563eb' : '#374151'
+          }}
+        >
           {item.title}
         </span>
       </a>
@@ -456,6 +512,7 @@ export default function SideBar() {
 
   return (
     <>
+      {/* Estilos de animação */}
       <style>{`
         @keyframes slideRight {
           from {
@@ -467,68 +524,47 @@ export default function SideBar() {
             transform: translateX(0);
           }
         }
-
-        #sidebar-nav::-webkit-scrollbar {
-          width: 5px;
-        }
-
-        #sidebar-nav::-webkit-scrollbar-track {
-          background: transparent;
-        }
-
-        #sidebar-nav::-webkit-scrollbar-thumb {
-          background: #e5e7eb;
-          border-radius: 3px;
-        }
-
-        #sidebar-nav::-webkit-scrollbar-thumb:hover {
-          background: #d1d5db;
-        }
       `}</style>
-      
-      <aside 
+
+      <aside
         style={{
           width: '260px',
           height: '100vh',
           backgroundColor: '#ffffff',
-          borderRight: '1px solid #e5e7eb',
+          borderRight: '1px solid #f3f4f6',
           display: 'flex',
           flexDirection: 'column',
-          flexShrink: 0
+          flexShrink: 0,
+          position: 'sticky',
+          top: 0,
+          overflow: 'hidden'
         }}
       >
-        {/* Logo/Header */}
-        <div 
+        {/* Logo */}
+        <div
           style={{
-            padding: '1.25rem',
-            borderBottom: '1px solid #f3f4f6'
+            padding: '16px 20px',
+            borderBottom: '1px solid #f3f4f6',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
           }}
         >
-          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '0.25rem' }}>
-            <Image
-              src="/sodcapital-logo.png"
-              alt="SodCapital"
-              width={140}
-              height={42}
-              style={{ width: 'auto', height: 'auto' }}
-              priority
-            />
-          </div>
-          <p 
-            style={{ 
-              fontSize: '0.7rem',
-              color: '#6b7280',
-              fontWeight: '500',
-              textAlign: 'center'
-            }}
-          >
-            ERP Financeiro
-          </p>
+          <Image
+            src="/logo.png"
+            alt="SOD Capital"
+            width={140}
+            height={50}
+            style={{ objectFit: 'contain' }}
+            priority
+          />
         </div>
 
-        {/* Dica de uso */}
+        {/* Tip Bar */}
         <div style={{
-          padding: '8px 14px',
+          padding: '8px 12px',
+          margin: '8px 12px 0',
+          borderRadius: '6px',
           backgroundColor: '#f0f9ff',
           borderBottom: '1px solid #e0f2fe',
           fontSize: '11px',

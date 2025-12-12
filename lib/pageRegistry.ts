@@ -103,6 +103,32 @@ export const pageRegistry: Record<string, PageInfo> = {
   '/contratos/cri': {
     title: 'CRI',
     component: dynamic(() => import('@/app/contratos/cri/page'))
+  },
+
+  // Contratos de Locação Imobiliária
+  '/contratos/locacao': {
+    title: 'Contratos de Locação',
+    component: dynamic(() => import('@/app/contratos/locacao/page'))
+  },
+  '/contratos/locacao/novo': {
+    title: 'Novo Contrato de Locação',
+    component: dynamic(() => import('@/app/contratos/locacao/novo/page'))
+  },
+  '/contratos/locacao/parcelas': {
+    title: 'Parcelas de Locação',
+    component: dynamic(() => import('@/app/contratos/locacao/parcelas/page'))
+  },
+  '/contratos/locacao/reajustes': {
+    title: 'Reajustes de Locação',
+    component: dynamic(() => import('@/app/contratos/locacao/reajustes/page'))
+  },
+  '/contratos/locacao/alertas': {
+    title: 'Alertas de Contratos',
+    component: dynamic(() => import('@/app/contratos/locacao/alertas/page'))
+  },
+  '/contratos/locacao/indices': {
+    title: 'Índices Econômicos',
+    component: dynamic(() => import('@/app/contratos/locacao/indices/page'))
   }
 }
 
